@@ -121,8 +121,13 @@ check. The current helper produces camelCase paths (for example
 if encountered rather than changing endpoint contracts as part of this cutover.
 A no-auth health response cannot prove popup sign-in or authenticated reads.
 
-On 2026-11-15 at 14:56 UTC, certificate-valid HTTPS GETs to `/` and `/api/health`
-returned HTTP 200; health returned JSON `status: "OK"`. This supersedes the earlier
-certificate-pending observation at issue authoring time, but does not establish
-Firebase's management-plane ownership/certificate state, Google popup success,
-or an authenticated API read. Record those separately when executed.
+On 2026-11-15 at 14:56 UTC, HTTPS GETs through the configured environment proxy
+to `/` and `/api/health` returned HTTP 200; health returned JSON `status: "OK"`.
+TLS verification was enabled, but the observed certificate issuer was the
+environment proxy (OpenAI), not Firebase's public certificate chain. These results
+establish proxied availability only; they do not establish that the earlier
+Firebase certificate-pending state is resolved. Chromium rejected the environment
+proxy certificate with `ERR_CERT_AUTHORITY_INVALID`, so browser root/deep-link,
+Google popup, and authenticated API verification remain uncompleted. Verify the
+Firebase management-plane ownership/certificate state and a normal browser's
+public TLS chain separately before declaring the cutover ready.
