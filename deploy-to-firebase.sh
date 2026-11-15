@@ -27,4 +27,4 @@ echo "4. Deploying Firebase Functions and Hosting..."
 scripts/firebase-cli.sh deploy
 
 echo "Deployment completed!"
-echo "Hosting URL: https://outliner-d57b0.web.app"
+echo "Hosting URL: https://outliner-online.com"

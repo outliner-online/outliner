@@ -14,4 +14,4 @@ echo 3. Deploying Firebase Functions and Hosting...
 scripts\firebase-cli.cmd deploy
 
 echo Deployment completed!
-echo Hosting URL: https://outliner-d57b0.web.app
+echo Hosting URL: https://outliner-online.com
