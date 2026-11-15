@@ -25,6 +25,9 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Checkout artifact verifier
+        uses: actions/checkout@v7
+
       - name: Create representative E2E evidence
         shell: bash
         run: |
@@ -33,7 +36,12 @@ jobs:
           printf '%s\n' '{"status":"passed","executed":2}' > artifact-roundtrip/source/execution.json
           printf '%s\n' 'firefox evidence retained' > artifact-roundtrip/source/runtime.log
 
+          mkdir -p artifact-roundtrip/wrong
+          printf '%s\n' '{"status":"wrong-artifact","executed":0}' > artifact-roundtrip/wrong/execution.json
+          printf '%s\n' 'unrelated evidence' > artifact-roundtrip/wrong/runtime.log
+
       - name: Upload representative E2E evidence
+        id: representative-upload
         uses: actions/upload-artifact@v7
         with:
           name: e2e-artifacts-firefox-artifact-roundtrip-${{ github.run_id }}-${{ github.run_attempt }}
@@ -43,18 +51,87 @@ jobs:
           archive: true
           retention-days: 1
 
+      - name: Upload wrong-artifact control
+        id: wrong-upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-artifacts-firefox-artifact-roundtrip-wrong-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifact-roundtrip/wrong/execution.json
+            artifact-roundtrip/wrong/runtime.log
+          archive: true
+          retention-days: 1
+
+      - name: Record and validate artifact identities
+        shell: bash
+        env:
+          EXPECTED_ARTIFACT_ID: ${{ steps.representative-upload.outputs.artifact-id }}
+          WRONG_ARTIFACT_ID: ${{ steps.wrong-upload.outputs.artifact-id }}
+        run: |
+          set -euo pipefail
+          test -n "$EXPECTED_ARTIFACT_ID"
+          test -n "$WRONG_ARTIFACT_ID"
+          test "$EXPECTED_ARTIFACT_ID" != "$WRONG_ARTIFACT_ID"
+          printf 'run=%s attempt=%s expected-artifact=%s wrong-artifact=%s sha=%s\n' \
+            "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$EXPECTED_ARTIFACT_ID" "$WRONG_ARTIFACT_ID" "$GITHUB_SHA"
+
       - name: Download representative E2E evidence
         uses: actions/download-artifact@v8
         with:
-          name: e2e-artifacts-firefox-artifact-roundtrip-${{ github.run_id }}-${{ github.run_attempt }}
+          artifact-ids: ${{ steps.representative-upload.outputs.artifact-id }}
           path: artifact-roundtrip/downloaded
 
       - name: Verify downloaded E2E evidence
         shell: bash
         run: |
           set -euo pipefail
-          cmp artifact-roundtrip/source/execution.json artifact-roundtrip/downloaded/execution.json
-          cmp artifact-roundtrip/source/runtime.log artifact-roundtrip/downloaded/runtime.log
+          scripts/ci/verify-artifact-roundtrip.sh artifact-roundtrip/source artifact-roundtrip/downloaded
+
+      - name: Reject an unavailable artifact
+        id: unavailable-download
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: '0'
+          path: artifact-roundtrip/unavailable
+
+      - name: Confirm unavailable artifact is non-success
+        if: always()
+        shell: bash
+        env:
+          DOWNLOAD_OUTCOME: ${{ steps.unavailable-download.outcome }}
+        run: |
+          set -euo pipefail
+          test "$DOWNLOAD_OUTCOME" = failure
+
+      - name: Download wrong-artifact control
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ steps.wrong-upload.outputs.artifact-id }}
+          path: artifact-roundtrip/wrong-downloaded
+
+      - name: Confirm wrong, missing, and corrupted evidence are non-success
+        shell: bash
+        run: |
+          set -euo pipefail
+          if scripts/ci/verify-artifact-roundtrip.sh artifact-roundtrip/source artifact-roundtrip/wrong-downloaded; then
+            echo 'wrong artifact unexpectedly passed verification' >&2
+            exit 1
+          fi
+
+          cp -R artifact-roundtrip/downloaded artifact-roundtrip/missing-file
+          rm artifact-roundtrip/missing-file/runtime.log
+          if scripts/ci/verify-artifact-roundtrip.sh artifact-roundtrip/source artifact-roundtrip/missing-file; then
+            echo 'missing file unexpectedly passed verification' >&2
+            exit 1
+          fi
+
+          cp -R artifact-roundtrip/downloaded artifact-roundtrip/corrupted-file
+          printf '%s\n' 'corrupted evidence' > artifact-roundtrip/corrupted-file/execution.json
+          if scripts/ci/verify-artifact-roundtrip.sh artifact-roundtrip/source artifact-roundtrip/corrupted-file; then
+            echo 'corrupted file unexpectedly passed verification' >&2
+            exit 1
+          fi
 
   selection-coverage:
     name: Guard Chromium and Firefox selection coverage
