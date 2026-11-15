@@ -68,7 +68,9 @@ function checkProductionHealth() {
 function checkFirebaseProject() {
     return new Promise((resolve, reject) => {
         const options = {
-            hostname: "outliner-d57b0.web.app",
+            // Node's default TLS verification intentionally makes an unissued or
+            // invalid custom-domain certificate fail this readiness check.
+            hostname: "outliner-online.com",
             path: "/",
             method: "GET",
             timeout: 10000,

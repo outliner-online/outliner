@@ -6,6 +6,7 @@
     "scripts": {
         "build": "npm run paraglide:compile && vite build",
         "build:production": "npm run paraglide:compile && dotenvx run --overload --env-file=.env.production -- vite build",
+        "verify:production-build": "node scripts/verify-production-build.mjs",
         "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json && tsc -p tsconfig.worker.json --noEmit",
         "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
         "ci:test:e2e": "env PATH=\"./node_modules/.bin:$PATH\" bash -lc 'npx playwright test' --",
