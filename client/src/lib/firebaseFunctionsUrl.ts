@@ -15,19 +15,7 @@ import { getEnv } from "./env";
  */
 export function getFirebaseFunctionUrl(functionName: string): string {
     const apiBaseUrl = getEnv("VITE_FIREBASE_FUNCTIONS_URL", import.meta.env.DEV ? "http://localhost:57070" : "");
-    return resolveFirebaseFunctionUrl(functionName, apiBaseUrl, {
-        isTest: import.meta.env.MODE === "test",
-        isDev: import.meta.env.DEV,
-    });
-}
-
-/** Pure URL resolution used by the runtime helper and configuration regression checks. */
-export function resolveFirebaseFunctionUrl(
-    functionName: string,
-    apiBaseUrl: string,
-    environment: { isTest: boolean; isDev: boolean; },
-): string {
-    const { isTest, isDev } = environment;
+    const isTest = import.meta.env.MODE === "test";
 
     // Access via Firebase Hosting Emulator in test environment
     if (isTest) {
@@ -37,7 +25,7 @@ export function resolveFirebaseFunctionUrl(
     }
 
     // When using Firebase Hosting Emulator (localhost:57000)
-    if (isDev && apiBaseUrl === "http://localhost:57000") {
+    if (import.meta.env.DEV && apiBaseUrl === "http://localhost:57000") {
         // Access via Firebase Hosting Emulator rewrite rules
         return `${apiBaseUrl}/api/${functionName}`;
     }
