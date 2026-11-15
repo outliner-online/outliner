@@ -1,0 +1,13 @@
+id: ENV-d6a20b8f
+title: Bound new-2 execution to retain timeout evidence
+title-ja: new-2 の実行を有界にしタイムアウト証跡を保持する
+description: Keep the 30-minute job limit and existing test cases, assertions and retries. Supervise only the primary new-2 command for at most 20 minutes, capped at 22 minutes from execution-context initialization, reserving the remaining job time for termination and artifact upload. Linux subreaper cleanup includes detached descendants. Preserve nonzero test exits, report timeout as 124 even after a zero-exit TERM handler, and reject missing, stale, empty, skipped or incomplete passing reports and missing referenced attachments. Record command status and retain logs directly in job_logs without an inherited tee pipe blocking termination. Use nonblocking console copies and record dropped console bytes while retaining the complete file, so console backpressure cannot stall deadline checks. Existing separate follow-up output/report paths remain unchanged. This preserves diagnostics and does not diagnose or fix the Grid flakes, runner resources or missing historical log blobs.
+category: environment
+status: implemented
+components:
+- scripts/ci/run-bounded-e2e.py
+- .github/workflows/ci-test-e2e.yml
+tests:
+- scripts/tests/test_bounded_e2e.py
+- scripts/tests/test_bounded_e2e_playwright.py
+- scripts/tests/env-firefox-ci-promotion-934d0f2a.spec.ts

@@ -53,6 +53,8 @@ acceptance:
 - 'The Grid export never truncates silently: a result past the row cap, or a chart image past the size cap, carries a notice in the copied content.'
 - The private in-app payload still names the Grid, so pasting back into Outliner behaves exactly as before.
 tests:
+- client/e2e/new/clp-destination-failure-capture-4584c0de.spec.ts
+- client/e2e/new/clp-project-home-reentry-4584c0de.spec.ts
 - client/e2e/deployed/clp-demo-grid-real-clipboard-4688c0de.spec.ts
 - client/e2e/new/clp-calendar-owned-history-4584c0de.spec.ts
 - client/e2e/new/clp-calendar-paste-rollback-4584c0de.spec.ts

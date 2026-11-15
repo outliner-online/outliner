@@ -11,7 +11,6 @@ export default defineConfig({
         ...devices["Desktop Chrome"],
         baseURL: process.env.DEPLOYED_DEMO_URL ?? "https://outliner-online.com",
         headless: true,
-        // A deployed smoke check must fail while the custom-domain certificate is invalid.
         ignoreHTTPSErrors: false,
         permissions: ["clipboard-read", "clipboard-write"],
         screenshot: "only-on-failure",

@@ -79,3 +79,55 @@ Or you can check logs in the "Functions" section of the Firebase Console.
 1. Verify that the Azure Fluid Relay key matches GitHub Secrets
 2. Verify that the Tenant ID is correct
 3. Verify that the Azure Fluid Relay service is enabled
+
+## Canonical Hosting origin and cutover verification (#5932)
+
+The application and Firebase Hosting API origin is `https://outliner-online.com`.
+The supported deployment build is `cd client && npm run build:production`, which
+loads `.env.production` with overload semantics. `.env.firebase` selects the same
+origin for explicit Firebase-mode builds. Only `VITE_FIREBASE_FUNCTIONS_URL`
+selects the API origin; the unused `VITE_API_BASE_URL` / `VITE_API_SERVER_URL`
+production aliases have been removed.
+
+Keep Firebase project `outliner-d57b0`, Auth handler
+`outliner-d57b0.firebaseapp.com`, and Google popup sign-in. The browser origin must
+be authorized in Firebase Authentication. Yjs remains on the separate
+`wss://outliner-yjs-ws.outliner-online.com` host; its server Origin policy is
+tracked separately in #5933.
+
+Run these checks sequentially from `client/`:
+
+```bash
+npm run build:production
+node scripts/check-production-build.mjs
+npx playwright test --config playwright.deployed.config.ts env-production-firebase-origin-4ad259e1.spec.ts
+```
+
+The first check executes the emitted production Functions resolver and inspects
+emitted browser configuration, independently of source env values. It rejects a
+legacy API origin, changed project/Auth handler, or changed Yjs endpoint. It makes
+no live request. The deployed test checks root, a representative deep link, and
+read-only `/api/health` with normal certificate validation and no redirect accepted
+as success. A TLS error, redirect, HTML fallback at the API endpoint, or an
+unexecuted test is not deployed API success. Do not bypass certificates.
+
+After HTTPS succeeds, use an authorized test account in a normal browser on the
+canonical origin to complete Google popup sign-in. Inspect a read-only API request
+in the Network panel: confirm its canonical origin, existing method/path, JSON
+payload and Firebase ID token, and successful JSON response. Do not log or copy
+tokens into reports. Do not create/delete production users or projects for this
+check. The current helper produces camelCase paths (for example
+`/api/listSchedules`) while some Hosting rewrites use kebab-case; report a mismatch
+if encountered rather than changing endpoint contracts as part of this cutover.
+A no-auth health response cannot prove popup sign-in or authenticated reads.
+
+On 2026-11-15 at 14:56 UTC, HTTPS GETs through the configured environment proxy
+to `/` and `/api/health` returned HTTP 200; health returned JSON `status: "OK"`.
+TLS verification was enabled, but the observed certificate issuer was the
+environment proxy (OpenAI), not Firebase's public certificate chain. These results
+establish proxied availability only; they do not establish that the earlier
+Firebase certificate-pending state is resolved. Chromium rejected the environment
+proxy certificate with `ERR_CERT_AUTHORITY_INVALID`, so browser root/deep-link,
+Google popup, and authenticated API verification remain uncompleted. Verify the
+Firebase management-plane ownership/certificate state and a normal browser's
+public TLS chain separately before declaring the cutover ready.

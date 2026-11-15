@@ -84,6 +84,9 @@ export async function seedCrossProjectFixture(page: Page, testInfo: TestInfo): P
  * than it used to be.
  */
 export async function goHome(page: Page): Promise<void> {
+    // A failed project-selector attempt already leaves us on Home. Home has
+    // neither the page toolbar project link nor a breadcrumb to click.
+    if (await page.getByTestId("home-page").isVisible()) return;
     const homeLink = page.locator('nav a:has-text("Home")');
     if (await homeLink.count() === 0) {
         const projectLink = page.getByTestId("toolbar-project-name");

@@ -1,0 +1,11 @@
+id: ENV-78c4e1a9
+title: Capture Grid failure state on the destination page before close
+title-ja: 閉じる前の貼り付け先ページで Grid 失敗状態を記録する
+description: The unloaded-source redo test captures the actual failing destination before its finally block closes the page. Retain labeled URL, focus, connection and durable Grid/Table IDs, DOM Grid IDs, accessibility snapshot and render traces independently of source-page teardown. Diagnostic reads are bounded, capture errors remain explicit, and the original failure object is rethrown. Passing operations add no captures. Test assertions, retries and time limits remain unchanged; this diagnoses an unknown paste failure without claiming to fix it.
+category: environment
+status: implemented
+components:
+- client/e2e/fixtures/grid-render-trace.ts
+- client/e2e/new/clp-fresh-paste-unloaded-redo-4584c0de.spec.ts
+tests:
+- client/e2e/new/clp-destination-failure-capture-4584c0de.spec.ts
