@@ -379,7 +379,8 @@ jobs:
           NODE
 
       - name: Upload Logs & Artifacts
-        if: failure() || startsWith(matrix.project, 'firefox-')
+        # Keep failed-attempt diagnostics when new-2 eventually succeeds on retry.
+        if: failure() || startsWith(matrix.project, 'firefox-') || matrix.project == 'new-2'
         uses: actions/upload-artifact@v7
         with:
           name: e2e-artifacts-${{ env.E2E_BROWSER }}-${{ matrix.project }}-${{ github.run_id }}-${{ github.run_attempt }}

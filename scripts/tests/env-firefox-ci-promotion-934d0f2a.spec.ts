@@ -75,7 +75,7 @@ describe("ENV-934d0f2a: Firefox promotion to ordinary E2E CI", () => {
         const upload = job.steps.find((value: { uses?: string; }) =>
             value.uses?.startsWith("actions/upload-artifact@")
         );
-        expect(upload.if).toBe("failure() || startsWith(matrix.project, 'firefox-')");
+        expect(upload.if).toBe("failure() || startsWith(matrix.project, 'firefox-') || matrix.project == 'new-2'");
         for (const identity of ["env.E2E_BROWSER", "matrix.project", "github.run_id", "github.run_attempt"]) {
             expect(upload.with.name).toContain(`\${{ ${identity} }}`);
         }

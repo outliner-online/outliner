@@ -66,8 +66,9 @@ export async function collectGridRenderTraces(page: Page): Promise<GridRenderTra
  *
  * Written to real files under `testInfo.outputPath()` (inside
  * `client/test-results/<test-id>/`) rather than passed as an in-memory
- * `body`: `client/test-results/` is uploaded as a CI artifact unconditionally
- * (see `.github/workflows/ci-test-e2e.yml`), while a `body` attachment is
+ * `body`: `client/test-results/` is archived for failing jobs, and for `new-2` even
+ * when retries make the job succeed (see `.github/workflows/ci-test-e2e.yml`).
+ * A `body` attachment is
  * only recoverable from the JSON reporter's own output file, which is not
  * always enabled.
  *

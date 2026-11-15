@@ -93,7 +93,7 @@ test("representative PR CI retains its trigger, permissions, guards, and failure
 test("artifact and Pages deployment producers retain their consumer-facing contracts", () => {
     const e2e = parseWorkflow("ci-test-e2e.yml");
     const artifact = findStep(e2e, "e2e-test", "Upload Logs & Artifacts");
-    expect(artifact.if).toBe("failure() || startsWith(matrix.project, 'firefox-')");
+    expect(artifact.if).toBe("failure() || startsWith(matrix.project, 'firefox-') || matrix.project == 'new-2'");
     expect(artifact.with.name).toBe(
         "e2e-artifacts-${{ env.E2E_BROWSER }}-${{ matrix.project }}-${{ github.run_id }}-${{ github.run_attempt }}",
     );
