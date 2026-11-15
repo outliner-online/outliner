@@ -23,6 +23,15 @@ export interface GridRenderTraceSnapshot {
 interface GridRenderTraceGlobal {
     __outlinerGridRenderTraces?: { collect: () => GridRenderTraceSnapshot[]; };
     __gridClipboardDiagnostic?: unknown;
+    __YJS_STORE__?: {
+        currentProjectId?: string;
+        isConnected?: boolean;
+        yjsClient?: {
+            getProject: () => {
+                ydoc?: { guid: string; share: Map<string, { keys?: () => IterableIterator<string>; }>; };
+            };
+        };
+    };
 }
 
 export async function recordGridClipboardDiagnostic(page: Page, patch: Record<string, unknown>): Promise<void> {
@@ -79,7 +88,7 @@ export async function collectGridRenderTraces(page: Page): Promise<GridRenderTra
 export async function attachGridRenderTraces(
     testInfo: TestInfo,
     traces: readonly GridRenderTraceSnapshot[],
-    context: { url?: string; } = {},
+    context: { url?: string; label?: string; } = {},
 ): Promise<void> {
     if (traces.length === 0) return;
 
@@ -89,12 +98,14 @@ export async function attachGridRenderTraces(
         project: testInfo.project.name,
         retry: testInfo.retry,
         url: context.url,
+        label: context.label,
         gridIds: traces.map(trace => trace.gridId),
     };
-    await writeJsonAttachment(testInfo, "grid-render-trace-index.json", index);
+    const prefix = context.label ? `${context.label}-` : "";
+    await writeJsonAttachment(testInfo, `${prefix}grid-render-trace-index.json`, index);
 
     for (const trace of traces) {
-        await writeJsonAttachment(testInfo, `grid-render-trace-${trace.gridId}.json`, trace);
+        await writeJsonAttachment(testInfo, `${prefix}grid-render-trace-${trace.gridId}.json`, trace);
     }
 }
 
@@ -102,6 +113,100 @@ async function writeJsonAttachment(testInfo: TestInfo, name: string, content: un
     const path = testInfo.outputPath(name);
     await fs.writeFile(path, JSON.stringify(content, null, 2), "utf8");
     await testInfo.attach(name, { path, contentType: "application/json" });
+}
+
+async function boundedDiagnostic<T>(read: () => Promise<T>, deadline: number): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) throw new Error("Diagnostic read budget exhausted");
+        return await Promise.race([
+            read(),
+            new Promise<never>((_, reject) => {
+                timer = setTimeout(() => reject(new Error("Diagnostic read budget exhausted")), remaining);
+            }),
+        ]);
+    } finally {
+        if (timer) clearTimeout(timer);
+    }
+}
+
+/** Capture the page that actually failed, before its caller's finally closes it. */
+export async function withGridFailureCapture<T>(
+    page: Page,
+    testInfo: TestInfo,
+    label: string,
+    operation: () => Promise<T>,
+): Promise<T> {
+    try {
+        return await operation();
+    } catch (originalFailure) {
+        // One six-second budget for all reads, rather than three independent
+        // two-second caps that can reject a late read despite unused time.
+        const deadline = Date.now() + 6000;
+        const errors: { stage: string; message: string; }[] = [];
+        const capture = async (stage: string, read: () => Promise<unknown>) => {
+            try {
+                await read();
+            } catch (error) {
+                errors.push({ stage, message: String(error) });
+            }
+        };
+        await capture("page-state", async () => {
+            const state = await boundedDiagnostic(() => page.evaluate(() => {
+                const dom = globalThis.document;
+                const store = (globalThis as unknown as GridRenderTraceGlobal).__YJS_STORE__;
+                const project = store?.yjsClient?.getProject();
+                // share.get reads existing types; getMap could create a missing map.
+                const ids = (name: string) => {
+                    const registry = project?.ydoc?.share.get(name);
+                    return registry?.keys ? Array.from(registry.keys()) : undefined;
+                };
+                const gridIds = ids("yjsGrids");
+                const tableIds = ids("yjsTables");
+                return {
+                    url: globalThis.location.href,
+                    readyState: dom.readyState,
+                    hasFocus: dom.hasFocus(),
+                    activeElement: {
+                        tag: dom.activeElement?.tagName,
+                        testId: dom.activeElement?.getAttribute("data-testid"),
+                        className: dom.activeElement?.getAttribute("class"),
+                    },
+                    projectId: store?.currentProjectId,
+                    connected: store?.isConnected,
+                    projectDocumentId: project?.ydoc?.guid,
+                    registryAvailable: { grids: gridIds !== undefined, tables: tableIds !== undefined },
+                    gridIds,
+                    tableIds,
+                    domGridIds: Array.from(dom.querySelectorAll('[data-testid="yjs-table-view"]'),
+                        element => element.getAttribute("data-grid-id")),
+                };
+            }), deadline);
+            await writeJsonAttachment(testInfo, `${label}-page-state.json`, { label, retry: testInfo.retry, ...state });
+        });
+        await capture("page-snapshot", async () => {
+            const snapshot = await boundedDiagnostic(
+                () => page.locator("body").ariaSnapshot({ timeout: Math.max(1, deadline - Date.now()) }),
+                deadline,
+            );
+            const path = testInfo.outputPath(`${label}-page-snapshot.yaml`);
+            await fs.writeFile(path, snapshot, "utf8");
+            await testInfo.attach(`${label}-page-snapshot.yaml`, { path, contentType: "text/yaml" });
+        });
+        await capture("grid-traces", async () => {
+            const traces = await boundedDiagnostic(() => collectGridRenderTraces(page), deadline);
+            await attachGridRenderTraces(testInfo, traces, { url: page.url(), label });
+        });
+        if (errors.length) {
+            try {
+                await writeJsonAttachment(testInfo, `${label}-capture-errors.json`, { label, url: page.url(), errors });
+            } catch (error) {
+                console.warn("[grid-render-trace] failed to retain capture errors:", error);
+            }
+        }
+        throw originalFailure;
+    }
 }
 
 /**

@@ -30,6 +30,17 @@ Grid E2E specs opt in by importing `test`/`expect` from
 `client/e2e/fixtures/grid-render-trace.ts` instead of `@playwright/test`
 directly (see `client/e2e/tables/*.spec.ts`).
 
+Multi-page tests can wrap the owned destination operation with
+`withGridFailureCapture(destination, testInfo, "destination", operation)`
+inside their existing `try`/`finally`. On failure, it captures that page before
+the caller closes it, then rethrows the identical original error. Labeled
+attachments record the URL, focus, connection, durable Grid/Table IDs, DOM
+Grid IDs, accessibility snapshot and render traces without overwriting the
+source page's teardown evidence. Browser reads share a six-second diagnostic
+budget; unavailable stages are retained in `destination-capture-errors.json`.
+Missing registries are marked unavailable rather than represented as empty ID lists.
+Passing operations add no diagnostic reads or attachments.
+
 For the primary `new-2` CI command, `scripts/ci/run-bounded-e2e.py` reserves
 time for evidence upload within the unchanged 30-minute job limit. It caps
 the command at 20 minutes, or 22 minutes from execution-context initialization,
@@ -93,7 +104,8 @@ mounted:
 
 If no Grid was mounted when the test failed, no `grid-render-trace-*` files
 are attached — existing screenshots, videos, and logs are unaffected either
-way, and successful runs never build or attach a trace at all.
+way. Automatic page teardown only captures failed tests; explicit regression
+tests may attach controlled-failure snapshots while their own assertions pass.
 
 ## Validating the mechanism
 
