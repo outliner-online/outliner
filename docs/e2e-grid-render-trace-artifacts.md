@@ -42,7 +42,9 @@ passing cases. Existing retry outcomes are retained in that report rather
 than described as first-attempt success.
 
 The log is written directly to `job_logs`, so an orphan holding a console
-pipe cannot block the supervisor's exit. Subsequent checks retain their
+pipe cannot block the supervisor's exit. Console copies use nonblocking writes;
+backpressure drops only console copies, counted in `console_dropped_bytes`,
+while the complete file remains available for upload. Subsequent checks retain their
 separate output paths. Missing archive inputs fail the upload step. This
 does not guarantee evidence survives an external runner loss or outer job
 cancellation, and does not establish any Grid failure's cause. The Linux

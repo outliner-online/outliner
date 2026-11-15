@@ -123,6 +123,24 @@ class BoundedE2ETest(unittest.TestCase):
         self.assertLessEqual(self.status['budget_seconds'], 2)
         self.assertEqual(self.status['remaining_processes'], [])
 
+    def test_blocked_console_cannot_block_timeout_or_lose_file_output(self):
+        command = [sys.executable, str(RUNNER), '--context', str(self.context),
+                   '--status', str(self.root / 'status.json'), '--log', str(self.root / 'command.log'),
+                   '--report', str(self.report), '--timeout-seconds', '0.4',
+                   '--job-budget-seconds', '60', '--grace-seconds', '0.15', '--', sys.executable,
+                   '-u', '-c', "import time;print('x'*524288,flush=True);time.sleep(60)"]
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            # Deliberately do not drain stdout until the supervisor has exited.
+            self.assertEqual(process.wait(timeout=3), 124)
+        finally:
+            process.communicate(timeout=10)
+        status = json.loads((self.root / 'status.json').read_text())
+        self.assertEqual(status['status'], 'timed_out')
+        self.assertGreater(status['console_dropped_bytes'], 0)
+        self.assertEqual(status['remaining_processes'], [])
+        self.assertEqual((self.root / 'command.log').stat().st_size, 524289)
+
     def test_missing_empty_skipped_and_expected_failure_reports_cannot_pass(self):
         for kind in ['missing', 'empty', 'skipped', 'expected failure', 'stale', 'missing attachment']:
             with self.subTest(kind=kind):

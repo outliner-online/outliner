@@ -75,10 +75,18 @@ def main():
     args = parser.parse_args()
     status_path = Path(args.status)
     status_path.parent.mkdir(parents=True, exist_ok=True)
-    record = {'status': 'not_started', 'command_started': False, 'child_exit_code': None}
+    record = {'status': 'not_started', 'command_started': False, 'child_exit_code': None,
+              'console_dropped_bytes': 0}
+    log_path = None
+    log_start = 0
+    console_written = 0
+    console = None
+    console_was_blocking = None
 
     def save(**patch):
         record.update(patch)
+        if record.get('exit_code') is not None and log_path is not None and log_path.exists():
+            record['console_dropped_bytes'] = max(0, log_path.stat().st_size - log_start - console_written)
         record['updated_at'] = datetime.now(timezone.utc).isoformat()
         temporary = status_path.with_suffix('.tmp')
         temporary.write_text(json.dumps(record, indent=2) + '\n')
@@ -105,8 +113,12 @@ def main():
             raise OSError(ctypes.get_errno(), 'Cannot enable child subreaper')
         log_path = Path(args.log)
         log_path.parent.mkdir(parents=True, exist_ok=True)
+        console = sys.stdout.fileno()
+        console_was_blocking = os.get_blocking(console)
+        os.set_blocking(console, False)
         with log_path.open('ab') as output, log_path.open('rb') as reader:
             reader.seek(0, os.SEEK_END)
+            log_start = reader.tell()
             started_ns = time.time_ns()
             child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=output,
                                      stderr=subprocess.STDOUT, start_new_session=True)
@@ -119,12 +131,20 @@ def main():
                 signal.signal(sig, lambda signum, _frame: interrupted.__setitem__(0, signum))
 
             def pump():
+                nonlocal console_written
                 # A bounded read prevents an excessively noisy child from
                 # keeping the supervisor away from its deadline checks.
                 data = reader.read(262144)
                 if data:
-                    sys.stdout.buffer.write(data)
-                    sys.stdout.buffer.flush()
+                    try:
+                        written = os.write(console, data)
+                    except (BlockingIOError, BrokenPipeError):
+                        written = 0
+                    # The complete command log stays on disk even if the CI
+                    # console stops reading. Console backpressure cannot stop
+                    # deadline checks or child cleanup.
+                    record['console_dropped_bytes'] += len(data) - written
+                    console_written += written
 
             while True:
                 pump()
@@ -199,6 +219,11 @@ def main():
                     except (ProcessLookupError, ChildProcessError, PermissionError):
                         pass
                 time.sleep(0.05)
+        try:
+            save()
+        finally:
+            if console is not None and console_was_blocking is not None:
+                os.set_blocking(console, console_was_blocking)
 
 
 if __name__ == '__main__':
