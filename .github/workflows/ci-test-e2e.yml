@@ -247,6 +247,14 @@ jobs:
                 --report="${PLAYWRIGHT_JSON_OUTPUT_NAME}" \
                 --timeout-seconds=1200 --job-budget-seconds=1320 --grace-seconds=10 \
                 -- npm run github:test:e2e -- --project="$project"
+            elif [ "$project" = "tables-1" ]; then
+              python3 ../scripts/ci/run-bounded-e2e.py \
+                --context=../job_logs/execution-context.json \
+                --status=../job_logs/tables-1-command-status.json \
+                --log="../job_logs/e2e-${E2E_BROWSER}-${project}-${E2E_EXECUTION_ID}.log" \
+                --report="${PLAYWRIGHT_JSON_OUTPUT_NAME}" \
+                --timeout-seconds=1200 --job-budget-seconds=1320 --grace-seconds=10 \
+                -- npm run github:test:e2e -- --project=tables --shard=1/2
             elif [[ "$project" =~ ^tables-([12])$ ]]; then
               npm run github:test:e2e -- --project=tables --shard="${BASH_REMATCH[1]}/2" 2>&1 | tee -a "../job_logs/e2e-${E2E_BROWSER}-${project}-${E2E_EXECUTION_ID}.log"
             else
@@ -394,8 +402,8 @@ jobs:
           NODE
 
       - name: Upload Logs & Artifacts
-        # Keep failed-attempt diagnostics when new-2 eventually succeeds on retry.
-        if: failure() || startsWith(matrix.project, 'firefox-') || matrix.project == 'new-2'
+        # Keep bounded-command evidence even after successful/retried execution.
+        if: failure() || startsWith(matrix.project, 'firefox-') || matrix.project == 'new-2' || matrix.project == 'tables-1'
         uses: actions/upload-artifact@v7
         with:
           name: e2e-artifacts-${{ env.E2E_BROWSER }}-${{ matrix.project }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -408,5 +416,5 @@ jobs:
             logs/
             firebase-debug.log
           archive: true
-          if-no-files-found: ${{ matrix.project == 'new-2' && 'error' || 'warn' }}
+          if-no-files-found: ${{ (matrix.project == 'new-2' || matrix.project == 'tables-1') && 'error' || 'warn' }}
           retention-days: 2

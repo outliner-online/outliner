@@ -41,11 +41,12 @@ budget; unavailable stages are retained in `destination-capture-errors.json`.
 Missing registries are marked unavailable rather than represented as empty ID lists.
 Passing operations add no diagnostic reads or attachments.
 
-For the primary `new-2` CI command, `scripts/ci/run-bounded-e2e.py` reserves
+For the primary `new-2` and `tables-1` CI commands, `scripts/ci/run-bounded-e2e.py` reserves
 time for evidence upload within the unchanged 30-minute job limit. It caps
 the command at 20 minutes, or 22 minutes from execution-context initialization,
 whichever comes first, then terminates and reaps its descendants (including
-detached browser processes). `job_logs/new-2-command-status.json` distinguishes
+detached browser processes). `job_logs/new-2-command-status.json` and
+`job_logs/tables-1-command-status.json` distinguish
 normal completion, timeout (exit 124), interruption, leftover children and
 supervisor/report validation failure. Existing nonzero command exits remain
 nonzero; a zero exit requires a fresh Playwright JSON report with executed,
@@ -62,13 +63,18 @@ cancellation, and does not establish any Grid failure's cause. The Linux
 subreaper mechanism is documented in the
 [Linux manual](https://man7.org/linux/man-pages/man2/PR_SET_CHILD_SUBREAPER.2const.html).
 
+The `tables-1` boundary retains the original `--project=tables --shard=1/2`
+selection. It was added after that shard reached the outer job limit before
+diagnostic upload, leaving its actual failing/stalled spec unknown. Other
+shards are not brought under this boundary automatically.
+
 ## Artifact format and location
 
 Each file is written directly under `client/test-results/<test-id>/` (via
 `testInfo.outputPath()`) and then registered as a `path`-based
 `testInfo.attach()`, so it is a real, independently-openable file — not only
 recoverable by decoding a reporter's JSON output. `client/test-results/` is
-uploaded as a CI artifact whenever a job fails, and for `new-2` even when
+uploaded as a CI artifact whenever a job fails, and for `new-2` and `tables-1` even when
 retries make the job succeed (see
 `.github/workflows/ci-test-e2e.yml`), with no dependency on which reporters
 are enabled. The two subsequent retry-free Grid checks use separate output
