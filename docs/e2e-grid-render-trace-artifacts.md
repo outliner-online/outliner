@@ -30,6 +30,25 @@ Grid E2E specs opt in by importing `test`/`expect` from
 `client/e2e/fixtures/grid-render-trace.ts` instead of `@playwright/test`
 directly (see `client/e2e/tables/*.spec.ts`).
 
+For the primary `new-2` CI command, `scripts/ci/run-bounded-e2e.py` reserves
+time for evidence upload within the unchanged 30-minute job limit. It caps
+the command at 20 minutes, or 22 minutes from execution-context initialization,
+whichever comes first, then terminates and reaps its descendants (including
+detached browser processes). `job_logs/new-2-command-status.json` distinguishes
+normal completion, timeout (exit 124), interruption, leftover children and
+supervisor/report validation failure. Existing nonzero command exits remain
+nonzero; a zero exit requires a fresh Playwright JSON report with executed,
+passing cases. Existing retry outcomes are retained in that report rather
+than described as first-attempt success.
+
+The log is written directly to `job_logs`, so an orphan holding a console
+pipe cannot block the supervisor's exit. Subsequent checks retain their
+separate output paths. Missing archive inputs fail the upload step. This
+does not guarantee evidence survives an external runner loss or outer job
+cancellation, and does not establish any Grid failure's cause. The Linux
+subreaper mechanism is documented in the
+[Linux manual](https://man7.org/linux/man-pages/man2/PR_SET_CHILD_SUBREAPER.2const.html).
+
 ## Artifact format and location
 
 Each file is written directly under `client/test-results/<test-id>/` (via

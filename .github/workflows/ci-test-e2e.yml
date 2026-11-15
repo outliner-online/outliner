@@ -92,6 +92,7 @@ jobs:
           set -euo pipefail
           cd scripts/tests
           npx vitest run env-playwright-collects-every-spec-7d41ae62.spec.ts env-firefox-selection-coverage-78ad2b91.spec.ts env-firefox-ci-promotion-934d0f2a.spec.ts 2>&1 | tee ../../job_logs/selection-coverage.log
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s . -p 'test_bounded_e2e*.py' -v 2>&1 | tee ../../job_logs/bounded-e2e-contract.log
 
       - name: Upload collection guard logs
         if: always()
@@ -238,7 +239,15 @@ jobs:
               2>&1 | tee "job_logs/e2e-${E2E_BROWSER}-${project}-${E2E_EXECUTION_ID}.log"
           else
             cd client
-            if [[ "$project" =~ ^tables-([12])$ ]]; then
+            if [ "$project" = "new-2" ]; then
+              python3 ../scripts/ci/run-bounded-e2e.py \
+                --context=../job_logs/execution-context.json \
+                --status=../job_logs/new-2-command-status.json \
+                --log="../job_logs/e2e-${E2E_BROWSER}-${project}-${E2E_EXECUTION_ID}.log" \
+                --report="${PLAYWRIGHT_JSON_OUTPUT_NAME}" \
+                --timeout-seconds=1200 --job-budget-seconds=1320 --grace-seconds=10 \
+                -- npm run github:test:e2e -- --project="$project"
+            elif [[ "$project" =~ ^tables-([12])$ ]]; then
               npm run github:test:e2e -- --project=tables --shard="${BASH_REMATCH[1]}/2" 2>&1 | tee -a "../job_logs/e2e-${E2E_BROWSER}-${project}-${E2E_EXECUTION_ID}.log"
             else
               npm run github:test:e2e -- --project="$project" 2>&1 | tee -a "../job_logs/e2e-${E2E_BROWSER}-${project}-${E2E_EXECUTION_ID}.log"
@@ -399,4 +408,5 @@ jobs:
             logs/
             firebase-debug.log
           archive: true
+          if-no-files-found: ${{ matrix.project == 'new-2' && 'error' || 'warn' }}
           retention-days: 2

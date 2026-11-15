@@ -86,6 +86,20 @@ describe("ENV-934d0f2a: Firefox promotion to ordinary E2E CI", () => {
         expect(job.env.E2E_EXPECTED_COLLECTION).toContain("${{ github.workspace }}/job_logs/");
     });
 
+    it("bounds new-2 inside the unchanged job deadline and requires its archive", () => {
+        const job = workflow("ci-test-e2e.yml").jobs["e2e-test"];
+        expect(job["timeout-minutes"]).toBe(30);
+        const step = job.steps.find((value: { id?: string; }) => value.id === "tests");
+        expect(step.run).toContain('if [ "$project" = "new-2" ]; then');
+        expect(step.run).toContain("python3 ../scripts/ci/run-bounded-e2e.py");
+        expect(step.run).toContain("--timeout-seconds=1200 --job-budget-seconds=1320 --grace-seconds=10");
+        expect(step.run).toContain('--report="${PLAYWRIGHT_JSON_OUTPUT_NAME}"');
+        const upload = job.steps.find((value: { uses?: string; }) =>
+            value.uses?.startsWith("actions/upload-artifact@")
+        );
+        expect(upload.with["if-no-files-found"]).toBe("${{ matrix.project == 'new-2' && 'error' || 'warn' }}");
+    });
+
     it("preserves the optional manual diagnostic without using it as ordinary execution", () => {
         const diagnostic = workflow("firefox-selection-diagnostic.yml");
         expect(Object.keys(diagnostic.on)).toEqual(["workflow_dispatch"]);
