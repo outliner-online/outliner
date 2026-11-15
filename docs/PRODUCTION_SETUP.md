@@ -100,7 +100,7 @@ Run these checks sequentially from `client/`:
 ```bash
 npm run build:production
 node scripts/check-production-build.mjs
-npx playwright test --config playwright.deployed.config.ts firebase-hosting-origin.spec.ts
+npx playwright test --config playwright.deployed.config.ts env-production-firebase-origin-4ad259e1.spec.ts
 ```
 
 The first check executes the emitted production Functions resolver and inspects
