@@ -292,14 +292,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          scripts/test.sh client/e2e/new/clp-copy-paste-component-blocks-4584c0de.spec.ts -- \
+          # Playwright clears output/report directories at the start of each run.
+          # Keep the primary suite's failed-attempt attachments intact.
+          PLAYWRIGHT_HTML_OUTPUT_DIR=../job_logs/grid-clipboard-repeat-10-report \
+            scripts/test.sh client/e2e/new/clp-copy-paste-component-blocks-4584c0de.spec.ts -- \
             --project=new-2 \
+            --output=../job_logs/grid-clipboard-repeat-10-results \
             --grep='copy and paste creates a second live view of the same Grid' \
             --repeat-each=10 \
             --retries=0 \
             2>&1 | tee job_logs/grid-clipboard-repeat-10.log
-          scripts/test.sh client/e2e/new/clp-copy-paste-component-blocks-4584c0de.spec.ts -- \
+          PLAYWRIGHT_HTML_OUTPUT_DIR=../job_logs/grid-clipboard-full-spec-report \
+            scripts/test.sh client/e2e/new/clp-copy-paste-component-blocks-4584c0de.spec.ts -- \
             --project=new-2 \
+            --output=../job_logs/grid-clipboard-full-spec-results \
             --retries=0 \
             2>&1 | tee job_logs/grid-clipboard-full-spec.log
         env:

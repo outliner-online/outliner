@@ -36,9 +36,16 @@ Each file is written directly under `client/test-results/<test-id>/` (via
 `testInfo.outputPath()`) and then registered as a `path`-based
 `testInfo.attach()`, so it is a real, independently-openable file — not only
 recoverable by decoding a reporter's JSON output. `client/test-results/` is
-uploaded as a CI artifact whenever a job fails (see
+uploaded as a CI artifact whenever a job fails, and for `new-2` even when
+retries make the job succeed (see
 `.github/workflows/ci-test-e2e.yml`), with no dependency on which reporters
-are enabled. Two kinds of file are written per failing test that had a Grid
+are enabled. The two subsequent retry-free Grid checks use separate output
+and HTML report directories under `job_logs/`; Playwright clears these
+directories at each invocation, so sharing the primary suite paths would
+erase its failed-attempt attachments and report before upload. This
+preserves existing captures; it does not enable Playwright trace ZIP
+recording for Chromium or establish a flaky test's cause. Two kinds of file
+are written per failing test that had a Grid
 mounted:
 
 - `grid-render-trace-index.json` — one per test, correlating the trace(s)
