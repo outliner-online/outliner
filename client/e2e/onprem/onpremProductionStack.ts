@@ -28,6 +28,7 @@ export interface TransportEvent {
         | "ws-upstream-data"
         | "ws-client-close"
         | "ws-client-reset-request"
+        | "ws-upstream-reset-request"
         | "ws-upstream-close"
         | "ws-client-close-held"
         | "ws-upstream-close-held"
@@ -204,6 +205,13 @@ export class OnPremProductionStack {
         }
         this.recordTransport({ id, kind: "ws-client-reset-request", url: tunnel.url });
         tunnel.client.resetAndDestroy();
+    }
+
+    interruptTunnelUpstream(id: number) {
+        const tunnel = [...this.tunnels].find(candidate => candidate.id === id);
+        if (!tunnel) throw new Error(`No active TCP upstream tunnel ${id}`);
+        this.recordTransport({ id, kind: "ws-upstream-reset-request", url: tunnel.url });
+        tunnel.upstream.resetAndDestroy();
     }
 
     interruptUpstreamResponse(id: number) {
@@ -424,7 +432,13 @@ export class OnPremProductionStack {
             if (!upstream.destroyed && !upstream.writableEnded) upstream.end();
             this.deliverTunnelClose(tunnel, "ws-client-close");
         };
-        const upstreamClose = () => this.deliverTunnelClose(tunnel, "ws-upstream-close");
+        const upstreamClose = () => {
+            if (this.stopping || !this.tunnels.has(tunnel)) return;
+            // A backend reset also lacks readable EOF. Forward its terminal
+            // state to the actual browser before holding observer delivery.
+            if (!socket.destroyed && !socket.writableEnded) socket.end();
+            this.deliverTunnelClose(tunnel, "ws-upstream-close");
+        };
         // Preserve the actual initiating socket event independently of callback
         // delivery and fixture cleanup. Never record headers or socket payloads.
         const observeSocket = (
@@ -517,10 +531,10 @@ export class OnPremProductionStack {
             tunnel.observed.add(kind);
             this.recordTransport({ id: tunnel.id, kind, url: tunnel.url });
         }
-        // The controlled-order oracle requires both independent real callbacks.
+        // Every terminal order requires both independent real callbacks.
         // A single event-loop turn is not a barrier: cleanup can otherwise
         // destroy the peer before its delayed callback becomes observable.
-        if (tunnel.controlledFirstTerminal && tunnel.observed.size < 2) return;
+        if (tunnel.observed.size < 2) return;
         if (!tunnel.cleanupScheduled && this.tunnels.has(tunnel)) {
             tunnel.cleanupScheduled = true;
             // A browser close and the resulting backend close can be queued in

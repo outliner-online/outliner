@@ -7,11 +7,11 @@ status: implemented
 acceptance:
 - Cloud builds continue to use Firebase authentication and cloud project services
 - Controlled WebSocket terminal-order checks observe both real socket callbacks before cleanup, retaining the existing timeout and unrelated live connection checks
-- Interrupted real browser tunnels forward transport termination before controlled callback delivery, without counting cleanup destruction as a backend terminal observation
 - Local authentication uses the server-issued HTTP-only session cookie and restores the session after reload
 - On-premises builds verify the deployment descriptor before local authentication or directory operations
 - Project and Table rooms use same-origin WebSocket connections without Firebase tokens
 - Project creation, listing, resolution, and rename use canonical server descriptors
+- Real browser and backend tunnels forward terminal state before held callback delivery, and cleanup waits for both independent terminal observations in every order
 tests:
 - client/e2e/onprem/onp-http-lifecycle-5672.spec.ts
 - client/e2e/onprem/onp-local-boundaries-5586c10d.spec.ts
@@ -22,4 +22,5 @@ tests:
 - client/e2e/onprem/onp-websocket-cancellation-5586c10d.spec.ts
 - client/e2e/onprem/onp-websocket-reset-forwarding-5586c10d.spec.ts
 - client/e2e/onprem/onp-websocket-terminal-stop-5586c10d.spec.ts
+- client/e2e/onprem/onp-websocket-uncontrolled-terminal-5586c10d.spec.ts
 - client/src/lib/deployment.test.ts
