@@ -10,7 +10,10 @@ const cli = join(client, "node_modules/playwright/cli.js");
 const testModule = pathToFileURL(join(client, "node_modules/@playwright/test/index.mjs")).href;
 const workflow = readFileSync(join(client, "../.github/workflows/ci-test-e2e.yml"), "utf8");
 
-test("later Grid verification retains primary-suite failed-attempt attachments and HTML report", () => {
+test.each([
+    { step: "Record retry-free Grid clipboard verification", count: 2 },
+    { step: "Record retry-free Grid resize wheel verification", count: 1 },
+])("$step retains primary-suite failed-attempt attachments and HTML report", ({ step, count }) => {
     const root = mkdtempSync(join(tmpdir(), "new2-retention-"));
     const cwd = join(root, "client");
     mkdirSync(join(cwd, "cases"), { recursive: true });
@@ -50,15 +53,15 @@ test("later Grid verification retains primary-suite failed-attempt attachments a
         const bytes = readFileSync(attachment);
         const htmlPath = join(cwd, "playwright-report/index.html");
         const html = readFileSync(htmlPath);
-        const verification = workflow.split("- name: Record retry-free Grid clipboard verification")[1]
+        const verification = workflow.split(`- name: ${step}`)[1]
             .split("- name:")[0];
         const outputs = [...verification.matchAll(/--output=(\S+)/g)].map(match => match[1]);
         const reports = [...verification.matchAll(/PLAYWRIGHT_HTML_OUTPUT_DIR=(\S+)/g)].map(match => match[1]);
-        expect(outputs).toHaveLength(2);
-        expect(reports).toHaveLength(2);
-        expect(new Set(outputs).size).toBe(2);
-        expect(new Set(reports).size).toBe(2);
-        for (let index = 0; index < 2; index++) {
+        expect(outputs).toHaveLength(count);
+        expect(reports).toHaveLength(count);
+        expect(new Set(outputs).size).toBe(count);
+        expect(new Set(reports).size).toBe(count);
+        for (let index = 0; index < count; index++) {
             // Run the real CLI with exactly the output/report paths selected by CI.
             // No browser or application mock: this isolates Playwright's cleanup boundary.
             run([`--output=${outputs[index]}`, "--retries=0"], {

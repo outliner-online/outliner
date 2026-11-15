@@ -77,7 +77,7 @@ recoverable by decoding a reporter's JSON output. `client/test-results/` is
 uploaded as a CI artifact whenever a job fails, and for `new-2` and `tables-1` even when
 retries make the job succeed (see
 `.github/workflows/ci-test-e2e.yml`), with no dependency on which reporters
-are enabled. The two subsequent retry-free Grid checks use separate output
+are enabled. The subsequent retry-free Grid checks use separate output
 and HTML report directories under `job_logs/`; Playwright clears these
 directories at each invocation, so sharing the primary suite paths would
 erase its failed-attempt attachments and report before upload. This

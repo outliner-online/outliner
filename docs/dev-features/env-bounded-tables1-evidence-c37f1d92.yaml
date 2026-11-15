@@ -1,7 +1,7 @@
 id: ENV-c37f1d92
 title: Retain tables-1 diagnostics before the job deadline
 title-ja: job 上限前に tables-1 の診断を保持する
-description: Reuse the existing Linux E2E supervisor only for the primary tables-1 command after its observed outer-job timeout left no downloadable logs or artifact. Preserve project tables and shard 1/2, cases, assertions, retries and the 30-minute job limit. Bound the command to 20 minutes and 22 minutes from context initialization, reserving time for descendant termination and archive upload. Original failures remain nonzero; timeout, incomplete execution, missing reports and missing referenced attachments cannot pass. Retain successful and failed tables-1 evidence with required archive inputs. Other shards and existing new-2 output separation remain unchanged. Real Playwright subprocess regressions exercise the workflow's shard arguments, failure, timeout and retained attachments; this diagnostic change does not establish the unknown Tables timeout root cause.
+description: Reuse the existing Linux E2E supervisor only for the primary tables-1 command after its observed outer-job timeout left no downloadable logs or artifact. Preserve project tables and shard 1/2, cases, assertions, retries and the 30-minute job limit. Bound the command to 20 minutes and 22 minutes from context initialization, reserving time for descendant termination and archive upload. Original failures remain nonzero; timeout, incomplete execution, missing reports and missing referenced attachments cannot pass. Retain successful and failed tables-1 evidence with required archive inputs. Give the subsequent resize verification separate output and HTML report paths so its cleanup cannot erase primary failed-attempt evidence. Other shards and existing new-2 output separation remain unchanged. Real Playwright subprocess regressions exercise the workflow's shard arguments, failure, timeout and retained attachments; this diagnostic change does not establish the unknown Tables timeout root cause.
 category: environment
 status: implemented
 components:
@@ -11,3 +11,4 @@ tests:
 - scripts/tests/test_bounded_e2e.py
 - scripts/tests/test_bounded_e2e_playwright.py
 - scripts/tests/env-firefox-ci-promotion-934d0f2a.spec.ts
+- client/src/tests/new2-diagnostics-retention.test.ts
