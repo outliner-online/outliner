@@ -73,6 +73,27 @@ jobs:
     uses: ./.github/workflows/ci-checks.yml
     secrets: inherit
 
+  production-build:
+    name: Production API origin regression
+    needs: [pr-guards, format, mcp-dependency-compat]
+    if: needs.format.outputs.changes_pushed != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm ci --prefix client
+      - name: Check emitted production API configuration
+        working-directory: client
+        run: |
+          npm run build:production
+          node scripts/check-production-build.mjs
+
   unit-test:
     needs: [pr-guards, format, eslint-client, mcp-dependency-compat]
     if: needs.format.outputs.changes_pushed != 'true'

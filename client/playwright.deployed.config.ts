@@ -9,9 +9,9 @@ export default defineConfig({
     expect: { timeout: 30000 },
     use: {
         ...devices["Desktop Chrome"],
-        baseURL: process.env.DEPLOYED_DEMO_URL ?? "https://outliner-d57b0.web.app",
+        baseURL: process.env.DEPLOYED_DEMO_URL ?? "https://outliner-online.com",
         headless: true,
-        ignoreHTTPSErrors: true,
+        ignoreHTTPSErrors: false,
         permissions: ["clipboard-read", "clipboard-write"],
         screenshot: "only-on-failure",
         trace: "retain-on-failure",

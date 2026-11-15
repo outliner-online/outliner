@@ -28,8 +28,8 @@ function log(message, color = "reset") {
 function checkProductionHealth() {
     return new Promise((resolve, reject) => {
         const options = {
-            hostname: "us-central1-outliner-d57b0.cloudfunctions.net",
-            path: "/health",
+            hostname: "outliner-online.com",
+            path: "/api/health",
             method: "GET",
             timeout: 10000,
         };
@@ -68,7 +68,7 @@ function checkProductionHealth() {
 function checkFirebaseProject() {
     return new Promise((resolve, reject) => {
         const options = {
-            hostname: "outliner-d57b0.web.app",
+            hostname: "outliner-online.com",
             path: "/",
             method: "GET",
             timeout: 10000,

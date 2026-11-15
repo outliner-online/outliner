@@ -6,10 +6,10 @@ feature** without creating an account.
 
 The demo ships one project per language:
 
-| URL                                      | Slug      | Room               | Locale | Content pack                    |
-| ---------------------------------------- | --------- | ------------------ | ------ | ------------------------------- |
-| <https://outliner-d57b0.web.app/demo>    | `demo`    | `projects/demo`    | `en`   | `server/src/demo-content.en.ts` |
-| <https://outliner-d57b0.web.app/demo-ja> | `demo-ja` | `projects/demo-ja` | `ja`   | `server/src/demo-content.ja.ts` |
+| URL                                   | Slug      | Room               | Locale | Content pack                    |
+| ------------------------------------- | --------- | ------------------ | ------ | ------------------------------- |
+| <https://outliner-online.com/demo>    | `demo`    | `projects/demo`    | `en`   | `server/src/demo-content.en.ts` |
+| <https://outliner-online.com/demo-ja> | `demo-ja` | `projects/demo-ja` | `ja`   | `server/src/demo-content.ja.ts` |
 
 Each locale is a separate Yjs document, not a translation layer over a shared
 one: the demo content _is_ user data — visitors edit it, and they navigate by
