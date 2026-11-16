@@ -1,0 +1,13 @@
+id: ENV-9d2e67a4
+title: Preserve new-2 diagnostics after a successful retry
+title-ja: 再試行で成功した new-2 の診断証跡を保持する
+description: Archive existing new-2 job logs, per-attempt JSON results and test attachments even when a flaky test succeeds on retry. Give the two later retry-free Grid verifications distinct output and HTML report directories under job_logs so Playwright cleanup cannot erase the primary suite attachments. Keep failure and Firefox retention, archive format, test execution, assertions, retries and time limits unchanged. This improves evidence retention without declaring the underlying flaky test fixed or recovering logs lost from a cancelled runner.
+category: environment
+status: implemented
+components:
+- .github/workflows/ci-test-e2e.yml
+- client/e2e/fixtures/grid-render-trace.ts
+tests:
+- client/src/tests/new2-diagnostics-retention.test.ts
+- scripts/tests/env-firefox-ci-promotion-934d0f2a.spec.ts
+- scripts/tests/env-github-actions-supported-majors-a4c29f1e.spec.ts

@@ -1,0 +1,11 @@
+id: ENV-9b61f2a8
+title: Pre-bundle lazy diagram dependencies before E2E sessions
+title-ja: E2E セッション開始前に遅延 Diagram 依存を事前最適化する
+description: Vite dev selects vite.config.js before vite.config.ts. Include the real diagram renderer's dompurify and mermaid dependencies in initial optimization so first use does not invalidate shared chunks and reload in-flight browser sessions. A cold-cache real Vite optimizer regression observes emitted dependency metadata through default config selection. This addresses the demonstrated optimizer reload, not every historical UI failure or live production authentication.
+category: environment
+status: implemented
+components:
+- client/vite.config.js
+- client/vite.config.ts
+tests:
+- scripts/tests/env-lazy-diagram-optimization-9b61f2a8.spec.ts

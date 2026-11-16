@@ -27,6 +27,8 @@ export interface TransportEvent {
         | "ws-open"
         | "ws-upstream-data"
         | "ws-client-close"
+        | "ws-client-reset-request"
+        | "ws-upstream-reset-request"
         | "ws-upstream-close"
         | "ws-client-close-held"
         | "ws-upstream-close-held"
@@ -52,6 +54,16 @@ interface Tunnel {
     upstreamDestroyedByCleanup: boolean;
     observed: Set<"ws-client-close" | "ws-upstream-close">;
     cleanupScheduled: boolean;
+    socketObservations: {
+        side: "client" | "upstream";
+        event: "end" | "error" | "close";
+        errorCode?: string;
+        hadError?: boolean;
+        clientDestroyed: boolean;
+        upstreamDestroyed: boolean;
+        clientDestroyedByCleanup: boolean;
+        upstreamDestroyedByCleanup: boolean;
+    }[];
     controlledFirstTerminal?: "ws-client-close" | "ws-upstream-close";
     deliveredTerminals: Set<"ws-client-close" | "ws-upstream-close">;
     heldTerminalCallback?: "ws-client-close" | "ws-upstream-close";
@@ -112,6 +124,17 @@ export class OnPremProductionStack {
                     id: tunnel.id,
                     url: tunnel.url,
                     observed: [...tunnel.observed],
+                    clientDestroyed: tunnel.client.destroyed,
+                    upstreamDestroyed: tunnel.upstream.destroyed,
+                    clientReadableEnded: tunnel.client.readableEnded,
+                    upstreamReadableEnded: tunnel.upstream.readableEnded,
+                    clientWritableEnded: tunnel.client.writableEnded,
+                    upstreamWritableEnded: tunnel.upstream.writableEnded,
+                    controlledFirstTerminal: tunnel.controlledFirstTerminal,
+                    heldTerminalCallback: tunnel.heldTerminalCallback,
+                    explicitCallbackHold: tunnel.callbackHold?.kind,
+                    deliveredTerminals: [...tunnel.deliveredTerminals],
+                    socketObservations: tunnel.socketObservations,
                     clientDestroyedByCleanup: tunnel.clientDestroyedByCleanup,
                     upstreamDestroyedByCleanup: tunnel.upstreamDestroyedByCleanup,
                 }));
@@ -127,6 +150,11 @@ export class OnPremProductionStack {
             }, timeoutMs);
             this.transportWaiters.add(waiter);
         });
+    }
+
+    tunnelSocketSnapshot(id: number) {
+        const tunnel = [...this.tunnels].find(candidate => candidate.id === id);
+        return tunnel?.socketObservations.map(observation => ({ ...observation }));
     }
 
     isTunnelOpen(id: number) {
@@ -168,6 +196,22 @@ export class OnPremProductionStack {
                 hold.deliver();
             },
         };
+    }
+
+    interruptTunnelClient(id: number) {
+        const tunnel = [...this.tunnels].find(candidate => candidate.id === id);
+        if (!tunnel || !(tunnel.client instanceof net.Socket)) {
+            throw new Error(`No active TCP browser tunnel ${id}`);
+        }
+        this.recordTransport({ id, kind: "ws-client-reset-request", url: tunnel.url });
+        tunnel.client.resetAndDestroy();
+    }
+
+    interruptTunnelUpstream(id: number) {
+        const tunnel = [...this.tunnels].find(candidate => candidate.id === id);
+        if (!tunnel) throw new Error(`No active TCP upstream tunnel ${id}`);
+        this.recordTransport({ id, kind: "ws-upstream-reset-request", url: tunnel.url });
+        tunnel.upstream.resetAndDestroy();
     }
 
     interruptUpstreamResponse(id: number) {
@@ -375,15 +419,62 @@ export class OnPremProductionStack {
             upstreamDestroyedByCleanup: false,
             observed: new Set(),
             cleanupScheduled: false,
+            socketObservations: [],
             deliveredTerminals: new Set(),
         };
         this.tunnels.add(tunnel);
-        const clientClose = () => this.deliverTunnelClose(tunnel, "ws-client-close");
-        const upstreamClose = () => this.deliverTunnelClose(tunnel, "ws-upstream-close");
-        socket.once("error", clientClose);
-        socket.once("close", clientClose);
-        upstream.once("error", upstreamClose);
-        upstream.once("close", upstreamClose);
+        const clientClose = () => {
+            if (this.stopping || !this.tunnels.has(tunnel)) return;
+            // pipe() forwards readable EOF, but not a reset/close without EOF.
+            // Forward that transport termination before a callback barrier can
+            // hold observer delivery. Keep reading the real backend's response;
+            // destroying upstream here would make its terminal signal cleanup-induced.
+            if (!upstream.destroyed && !upstream.writableEnded) upstream.end();
+            this.deliverTunnelClose(tunnel, "ws-client-close");
+        };
+        const upstreamClose = () => {
+            if (this.stopping || !this.tunnels.has(tunnel)) return;
+            // A backend reset also lacks readable EOF. Forward its terminal
+            // state to the actual browser before holding observer delivery.
+            if (!socket.destroyed && !socket.writableEnded) socket.end();
+            this.deliverTunnelClose(tunnel, "ws-upstream-close");
+        };
+        // Preserve the actual initiating socket event independently of callback
+        // delivery and fixture cleanup. Never record headers or socket payloads.
+        const observeSocket = (
+            side: "client" | "upstream",
+            event: "end" | "error" | "close",
+            details: { errorCode?: string; hadError?: boolean; } = {},
+        ) => {
+            if (this.stopping || !this.tunnels.has(tunnel)) return;
+            tunnel.socketObservations.push({
+                side,
+                event,
+                ...details,
+                clientDestroyed: socket.destroyed,
+                upstreamDestroyed: upstream.destroyed,
+                clientDestroyedByCleanup: tunnel.clientDestroyedByCleanup,
+                upstreamDestroyedByCleanup: tunnel.upstreamDestroyedByCleanup,
+            });
+        };
+        socket.once("end", () => observeSocket("client", "end"));
+        upstream.once("end", () => observeSocket("upstream", "end"));
+        socket.once("error", error => {
+            observeSocket("client", "error", { errorCode: (error as NodeJS.ErrnoException).code });
+            clientClose();
+        });
+        socket.once("close", hadError => {
+            observeSocket("client", "close", { hadError });
+            clientClose();
+        });
+        upstream.once("error", error => {
+            observeSocket("upstream", "error", { errorCode: (error as NodeJS.ErrnoException).code });
+            upstreamClose();
+        });
+        upstream.once("close", hadError => {
+            observeSocket("upstream", "close", { hadError });
+            upstreamClose();
+        });
         upstream.once("connect", () => {
             if (!this.tunnels.has(tunnel) || this.stopping) return this.closeTunnel(tunnel);
             upstream.write(`${request.method} ${request.url} HTTP/${request.httpVersion}\r\n`);
@@ -440,10 +531,10 @@ export class OnPremProductionStack {
             tunnel.observed.add(kind);
             this.recordTransport({ id: tunnel.id, kind, url: tunnel.url });
         }
-        // The controlled-order oracle requires both independent real callbacks.
+        // Every terminal order requires both independent real callbacks.
         // A single event-loop turn is not a barrier: cleanup can otherwise
         // destroy the peer before its delayed callback becomes observable.
-        if (tunnel.controlledFirstTerminal && tunnel.observed.size < 2) return;
+        if (tunnel.observed.size < 2) return;
         if (!tunnel.cleanupScheduled && this.tunnels.has(tunnel)) {
             tunnel.cleanupScheduled = true;
             // A browser close and the resulting backend close can be queued in

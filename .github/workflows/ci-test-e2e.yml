@@ -121,6 +121,7 @@ jobs:
           set -euo pipefail
           cd scripts/tests
           npx vitest run env-playwright-collects-every-spec-7d41ae62.spec.ts env-firefox-selection-coverage-78ad2b91.spec.ts env-firefox-ci-promotion-934d0f2a.spec.ts 2>&1 | tee ../../job_logs/selection-coverage.log
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s . -p 'test_bounded_e2e*.py' -v 2>&1 | tee ../../job_logs/bounded-e2e-contract.log
 
       - name: Upload collection guard logs
         if: always()
@@ -267,7 +268,23 @@ jobs:
               2>&1 | tee "job_logs/e2e-${E2E_BROWSER}-${project}-${E2E_EXECUTION_ID}.log"
           else
             cd client
-            if [[ "$project" =~ ^tables-([12])$ ]]; then
+            if [ "$project" = "new-2" ]; then
+              python3 ../scripts/ci/run-bounded-e2e.py \
+                --context=../job_logs/execution-context.json \
+                --status=../job_logs/new-2-command-status.json \
+                --log="../job_logs/e2e-${E2E_BROWSER}-${project}-${E2E_EXECUTION_ID}.log" \
+                --report="${PLAYWRIGHT_JSON_OUTPUT_NAME}" \
+                --timeout-seconds=1200 --job-budget-seconds=1320 --grace-seconds=10 \
+                -- npm run github:test:e2e -- --project="$project"
+            elif [ "$project" = "tables-1" ]; then
+              python3 ../scripts/ci/run-bounded-e2e.py \
+                --context=../job_logs/execution-context.json \
+                --status=../job_logs/tables-1-command-status.json \
+                --log="../job_logs/e2e-${E2E_BROWSER}-${project}-${E2E_EXECUTION_ID}.log" \
+                --report="${PLAYWRIGHT_JSON_OUTPUT_NAME}" \
+                --timeout-seconds=1200 --job-budget-seconds=1320 --grace-seconds=10 \
+                -- npm run github:test:e2e -- --project=tables --shard=1/2
+            elif [[ "$project" =~ ^tables-([12])$ ]]; then
               npm run github:test:e2e -- --project=tables --shard="${BASH_REMATCH[1]}/2" 2>&1 | tee -a "../job_logs/e2e-${E2E_BROWSER}-${project}-${E2E_EXECUTION_ID}.log"
             else
               npm run github:test:e2e -- --project="$project" 2>&1 | tee -a "../job_logs/e2e-${E2E_BROWSER}-${project}-${E2E_EXECUTION_ID}.log"
@@ -321,14 +338,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          scripts/test.sh client/e2e/new/clp-copy-paste-component-blocks-4584c0de.spec.ts -- \
+          # Playwright clears output/report directories at the start of each run.
+          # Keep the primary suite's failed-attempt attachments intact.
+          PLAYWRIGHT_HTML_OUTPUT_DIR=../job_logs/grid-clipboard-repeat-10-report \
+            scripts/test.sh client/e2e/new/clp-copy-paste-component-blocks-4584c0de.spec.ts -- \
             --project=new-2 \
+            --output=../job_logs/grid-clipboard-repeat-10-results \
             --grep='copy and paste creates a second live view of the same Grid' \
             --repeat-each=10 \
             --retries=0 \
             2>&1 | tee job_logs/grid-clipboard-repeat-10.log
-          scripts/test.sh client/e2e/new/clp-copy-paste-component-blocks-4584c0de.spec.ts -- \
+          PLAYWRIGHT_HTML_OUTPUT_DIR=../job_logs/grid-clipboard-full-spec-report \
+            scripts/test.sh client/e2e/new/clp-copy-paste-component-blocks-4584c0de.spec.ts -- \
             --project=new-2 \
+            --output=../job_logs/grid-clipboard-full-spec-results \
             --retries=0 \
             2>&1 | tee job_logs/grid-clipboard-full-spec.log
         env:
@@ -345,8 +368,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          scripts/test.sh client/e2e/tables/grd-grid-width-drag-bounds-5c1d8e2a.spec.ts -- \
+          PLAYWRIGHT_HTML_OUTPUT_DIR=../job_logs/grid-resize-wheel-report \
+            scripts/test.sh client/e2e/tables/grd-grid-width-drag-bounds-5c1d8e2a.spec.ts -- \
             --project=tables \
+            --output=../job_logs/grid-resize-wheel-results \
             --retries=0 \
             2>&1 | tee job_logs/grid-resize-wheel-retry-free.log
         env:
@@ -408,7 +433,8 @@ jobs:
           NODE
 
       - name: Upload Logs & Artifacts
-        if: failure() || startsWith(matrix.project, 'firefox-')
+        # Keep bounded-command evidence even after successful/retried execution.
+        if: failure() || startsWith(matrix.project, 'firefox-') || matrix.project == 'new-2' || matrix.project == 'tables-1'
         uses: actions/upload-artifact@v7
         with:
           name: e2e-artifacts-${{ env.E2E_BROWSER }}-${{ matrix.project }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -421,4 +447,5 @@ jobs:
             logs/
             firebase-debug.log
           archive: true
+          if-no-files-found: ${{ (matrix.project == 'new-2' || matrix.project == 'tables-1') && 'error' || 'warn' }}
           retention-days: 2

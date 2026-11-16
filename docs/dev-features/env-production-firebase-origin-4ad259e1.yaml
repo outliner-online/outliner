@@ -1,0 +1,15 @@
+id: ENV-4ad259e1
+title: Canonical production Firebase Hosting API origin
+title-ja: 本番 Firebase Hosting API の正規オリジン
+description: Production builds select outliner-online.com while preserving Firebase project and popup Auth configuration, the separate Yjs endpoint, API request contracts, and emulator destinations. Emitted-code regression checks are distinct from strict deployed HTTPS availability and authenticated browser verification.
+category: environment
+status: implemented
+components:
+- .github/workflows/ci.yml
+- client/.env.firebase
+- client/.env.production
+- client/playwright.deployed.config.ts
+- client/scripts/check-production-build.mjs
+tests:
+- client/e2e/deployed/env-production-firebase-origin-4ad259e1.spec.ts
+- client/src/tests/firebase-functions-production.test.ts

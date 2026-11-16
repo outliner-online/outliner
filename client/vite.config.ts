@@ -161,7 +161,7 @@ export default defineConfig(async ({ mode }) => {
             // after the editor is mounted can restart every open dev page and
             // destroy an in-flight keyboard/clipboard session (#5735). Include
             // its lazy renderer graph in the initial optimization as well.
-            include: ["yjs", "yjs-orderedtree", "uuid", "mermaid"],
+            include: ["yjs", "yjs-orderedtree", "uuid", "dompurify", "mermaid"],
         },
         define: {
             global: "globalThis",

@@ -5,7 +5,7 @@ const axe = require("axe-core");
     const browser = await chromium.launch();
     const page = await browser.newPage();
 
-    await page.goto("https://outliner-d57b0.web.app/demo", { waitUntil: "networkidle" });
+    await page.goto("https://outliner-online.com/demo", { waitUntil: "networkidle" });
     await page.waitForTimeout(2000);
 
     const axeSource = require("fs").readFileSync(require.resolve("axe-core/axe.min.js"), "utf8");

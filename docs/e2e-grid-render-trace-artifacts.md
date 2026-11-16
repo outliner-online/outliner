@@ -30,15 +30,60 @@ Grid E2E specs opt in by importing `test`/`expect` from
 `client/e2e/fixtures/grid-render-trace.ts` instead of `@playwright/test`
 directly (see `client/e2e/tables/*.spec.ts`).
 
+Multi-page tests can wrap the owned destination operation with
+`withGridFailureCapture(destination, testInfo, "destination", operation)`
+inside their existing `try`/`finally`. On failure, it captures that page before
+the caller closes it, then rethrows the identical original error. Labeled
+attachments record the URL, focus, connection, durable Grid/Table IDs, DOM
+Grid IDs, accessibility snapshot and render traces without overwriting the
+source page's teardown evidence. Browser reads share a six-second diagnostic
+budget; unavailable stages are retained in `destination-capture-errors.json`.
+Missing registries are marked unavailable rather than represented as empty ID lists.
+Passing operations add no diagnostic reads or attachments.
+
+For the primary `new-2` and `tables-1` CI commands, `scripts/ci/run-bounded-e2e.py` reserves
+time for evidence upload within the unchanged 30-minute job limit. It caps
+the command at 20 minutes, or 22 minutes from execution-context initialization,
+whichever comes first, then terminates and reaps its descendants (including
+detached browser processes). `job_logs/new-2-command-status.json` and
+`job_logs/tables-1-command-status.json` distinguish
+normal completion, timeout (exit 124), interruption, leftover children and
+supervisor/report validation failure. Existing nonzero command exits remain
+nonzero; a zero exit requires a fresh Playwright JSON report with executed,
+passing cases. Existing retry outcomes are retained in that report rather
+than described as first-attempt success.
+
+The log is written directly to `job_logs`, so an orphan holding a console
+pipe cannot block the supervisor's exit. Console copies use nonblocking writes;
+backpressure drops only console copies, counted in `console_dropped_bytes`,
+while the complete file remains available for upload. Subsequent checks retain their
+separate output paths. Missing archive inputs fail the upload step. This
+does not guarantee evidence survives an external runner loss or outer job
+cancellation, and does not establish any Grid failure's cause. The Linux
+subreaper mechanism is documented in the
+[Linux manual](https://man7.org/linux/man-pages/man2/PR_SET_CHILD_SUBREAPER.2const.html).
+
+The `tables-1` boundary retains the original `--project=tables --shard=1/2`
+selection. It was added after that shard reached the outer job limit before
+diagnostic upload, leaving its actual failing/stalled spec unknown. Other
+shards are not brought under this boundary automatically.
+
 ## Artifact format and location
 
 Each file is written directly under `client/test-results/<test-id>/` (via
 `testInfo.outputPath()`) and then registered as a `path`-based
 `testInfo.attach()`, so it is a real, independently-openable file — not only
 recoverable by decoding a reporter's JSON output. `client/test-results/` is
-uploaded as a CI artifact whenever a job fails (see
+uploaded as a CI artifact whenever a job fails, and for `new-2` and `tables-1` even when
+retries make the job succeed (see
 `.github/workflows/ci-test-e2e.yml`), with no dependency on which reporters
-are enabled. Two kinds of file are written per failing test that had a Grid
+are enabled. The subsequent retry-free Grid checks use separate output
+and HTML report directories under `job_logs/`; Playwright clears these
+directories at each invocation, so sharing the primary suite paths would
+erase its failed-attempt attachments and report before upload. This
+preserves existing captures; it does not enable Playwright trace ZIP
+recording for Chromium or establish a flaky test's cause. Two kinds of file
+are written per failing test that had a Grid
 mounted:
 
 - `grid-render-trace-index.json` — one per test, correlating the trace(s)
@@ -65,7 +110,8 @@ mounted:
 
 If no Grid was mounted when the test failed, no `grid-render-trace-*` files
 are attached — existing screenshots, videos, and logs are unaffected either
-way, and successful runs never build or attach a trace at all.
+way. Automatic page teardown only captures failed tests; explicit regression
+tests may attach controlled-failure snapshots while their own assertions pass.
 
 ## Validating the mechanism
 

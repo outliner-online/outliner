@@ -16,7 +16,7 @@ const { chromium } = require("playwright");
         console.error(`Page error: ${err.message}`);
     });
 
-    await page.goto("https://outliner-d57b0.web.app/demo", { waitUntil: "networkidle" });
+    await page.goto("https://outliner-online.com/demo", { waitUntil: "networkidle" });
 
     // Try to interact with the outline
     console.log("Page loaded");
