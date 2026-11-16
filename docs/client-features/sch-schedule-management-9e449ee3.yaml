@@ -10,3 +10,6 @@ components:
 - functions/index.js
 tests:
 - client/e2e/core/sch-schedule-management-9e449ee3.spec.ts
+- client/e2e/hosting-schedule/sch-standalone-hosting-contract-a43ce270.spec.ts
+acceptance:
+- SDK-restored sessions send body and bearer credentials through Hosting and render verified read-only results
