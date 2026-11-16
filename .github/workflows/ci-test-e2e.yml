@@ -206,17 +206,39 @@ jobs:
           # transient runner-level bring-up failure into a pass without
           # weakening any test. A systematic breakage still fails after the
           # second attempt with its original exit status.
-          attempt=1
-          max_attempts=2
-          until bash scripts/ci-e2e-start.sh 2>&1 | tee "job_logs/setup-services-${attempt}.log"; do
-            status=$?
-            if [ "$attempt" -ge "$max_attempts" ]; then
-              echo "E2E startup failed after ${attempt} attempt(s) (exit ${status})."
-              exit "$status"
-            fi
-            echo "E2E startup attempt ${attempt} failed (exit ${status}); retrying once..."
-            attempt=$((attempt + 1))
-          done
+          run_startup_attempts() {
+            attempt=1
+            max_attempts=2
+            until bash scripts/ci-e2e-start.sh 2>&1 | tee "job_logs/setup-services-${attempt}.log"; do
+              status=$?
+              if [ "$attempt" -ge "$max_attempts" ]; then
+                echo "E2E startup failed after ${attempt} attempt(s) (exit ${status})."
+                exit "$status"
+              fi
+              echo "E2E startup attempt ${attempt} failed (exit ${status}); retrying once..."
+              attempt=$((attempt + 1))
+            done
+          }
+          if [ "$E2E_PROJECT" = "utils" ]; then
+            # Capture the entire startup, including preparation before the
+            # existing per-attempt 180s readiness gate and initialization after it.
+            # Keep the existing two attempts within a single 2 * 180s budget.
+            utils_startup() {
+              run_startup_attempts
+              printf '%s\n' '{"status":"completed"}' > job_logs/utils-startup-completed.json
+            }
+            export -f run_startup_attempts utils_startup
+            rm -f job_logs/utils-startup-completed.json
+            python3 scripts/ci/run-bounded-e2e.py \
+              --context=job_logs/execution-context.json \
+              --status=job_logs/utils-startup-status.json \
+              --log=job_logs/setup-services-utils.log \
+              --startup-completion=job_logs/utils-startup-completed.json \
+              --timeout-seconds=360 --job-budget-seconds=1320 --grace-seconds=10 \
+              -- bash -euo pipefail -c utils_startup
+          else
+            run_startup_attempts
+          fi
         env:
           CI: true
           NODE_ENV: test
@@ -362,6 +384,12 @@ jobs:
             grep -E -A1 -B0 "FAIL|FAILED" "job_logs/e2e-${E2E_BROWSER}-${E2E_PROJECT}-${E2E_EXECUTION_ID}.log" >> $GITHUB_STEP_SUMMARY || true
           fi
 
+      - name: Verify utils startup evidence
+        if: always() && matrix.project == 'utils'
+        shell: bash
+        run: |
+          python3 scripts/ci/verify-utils-startup-evidence.py
+
       - name: Record setup and execution status
         if: always()
         shell: bash
@@ -405,7 +433,7 @@ jobs:
 
       - name: Upload Logs & Artifacts
         # Keep bounded-command evidence even after successful/retried execution.
-        if: failure() || startsWith(matrix.project, 'firefox-') || matrix.project == 'new-2' || matrix.project == 'tables-1'
+        if: failure() || startsWith(matrix.project, 'firefox-') || matrix.project == 'new-2' || matrix.project == 'tables-1' || matrix.project == 'utils'
         uses: actions/upload-artifact@v7
         with:
           name: e2e-artifacts-${{ env.E2E_BROWSER }}-${{ matrix.project }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -418,5 +446,5 @@ jobs:
             logs/
             firebase-debug.log
           archive: true
-          if-no-files-found: ${{ (matrix.project == 'new-2' || matrix.project == 'tables-1') && 'error' || 'warn' }}
+          if-no-files-found: ${{ (matrix.project == 'new-2' || matrix.project == 'tables-1' || matrix.project == 'utils') && 'error' || 'warn' }}
           retention-days: 2
