@@ -20,7 +20,12 @@ test("a held real socket callback cannot act on a replacement stack", async ({ b
         const held = stack.holdTunnelTerminalCallback(tunnel.id, "ws-client-close");
         const first = stack.waitForTransportEvent("ws-upstream-close", tunnel.url, { id: tunnel.id });
         await target.close();
-        await Promise.all([held.observed, first]);
+        await Promise.all([held.observed, first]).finally(async () => {
+            await testInfo.attach("exact-held-tunnel-socket-provenance", {
+                contentType: "application/json",
+                body: JSON.stringify({ id: tunnel.id, observations: stack.tunnelSocketSnapshot(tunnel.id) }),
+            });
+        });
         expect(stack.isTunnelOpen(tunnel.id)).toBe(true);
         await stack.stop();
         expect(stack.isTunnelOpen(tunnel.id)).toBe(false);
