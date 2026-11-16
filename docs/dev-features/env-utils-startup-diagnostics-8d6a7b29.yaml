@@ -9,8 +9,8 @@ components:
 - scripts/ci/run-bounded-e2e.py
 - scripts/ci/verify-utils-startup-evidence.py
 tests:
-- scripts/tests/test_bounded_e2e_startup.py
-- scripts/tests/test_bounded_e2e_startup_workflow.py
-- scripts/tests/test_bounded_e2e_startup_evidence.py
-- scripts/tests/test_bounded_e2e.py
 - scripts/tests/env-firefox-ci-promotion-934d0f2a.spec.ts
+- scripts/tests/test_bounded_e2e.py
+- scripts/tests/test_bounded_e2e_startup.py
+- scripts/tests/test_bounded_e2e_startup_evidence.py
+- scripts/tests/test_bounded_e2e_startup_workflow.py
