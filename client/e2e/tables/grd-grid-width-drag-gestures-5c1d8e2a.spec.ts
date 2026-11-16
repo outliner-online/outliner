@@ -1,6 +1,7 @@
 /** @feature GRD-5c1d8e2a */
 import "../utils/registerAfterEachSnapshot";
-import { expect, type Page, test } from "@playwright/test";
+import type { Page } from "@playwright/test";
+import { expect, test } from "../fixtures/grid-render-trace";
 import {
     addSourceRecord,
     configureGrid,
@@ -18,7 +19,7 @@ import {
 } from "../utils/gridResizeHelpers";
 import { readWidthGridRegistry, singleGridId } from "../utils/gridWidthHelpers";
 import { registerCoverageHooks } from "../utils/registerCoverageHooks";
-import { dragColumnHeader, gridHeaderOrder } from "../utils/tableColumnDragHelpers";
+import { dragColumnHeader, gridHeaderOrder, waitForGridColumns } from "../utils/tableColumnDragHelpers";
 import { TestHelpers } from "../utils/testHelpers";
 registerCoverageHooks();
 
@@ -160,7 +161,13 @@ test.describe("Grid header drag resize coexists with other gestures", () => {
         await page.mouse.move(press.x + 33, press.y, { steps: 2 });
         await page.mouse.up();
         await expect.poll(() => saved(page, "title")).toBe(afterTouch + 33);
+        const gridId = await singleGridId(page);
         await page.reload();
+        // A document load does not mean the project and its Grid placement
+        // have hydrated. Fence the same saved Grid before measuring layout.
+        await waitForGridColumns(page);
+        expect(await view.getAttribute("data-grid-id")).toBe(gridId);
+        expect(await saved(page, "title")).toBe(afterTouch + 33);
         await expectColumnGeometry(page, 0, "title", afterTouch + 33);
     });
 });
