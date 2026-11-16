@@ -99,13 +99,6 @@ jobs:
           echo '${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}' > "$GOOGLE_APPLICATION_CREDENTIALS"
           echo "GOOGLE_APPLICATION_CREDENTIALS=$GOOGLE_APPLICATION_CREDENTIALS" >> "$GITHUB_ENV"
 
-      - name: Clean up old Firebase Functions config
-        if: github.actor != 'dependabot[bot]'
-        run: |
-          # Remove existing Firebase Functions environment variables
-          echo "Cleaning up old Firebase Functions config..."
-          scripts/firebase-cli.sh functions:config:unset azure --project outliner-d57b0 || echo "No azure config to remove"
-
       - name: Lint functions
         run: |
           cd functions
