@@ -384,6 +384,12 @@ jobs:
             grep -E -A1 -B0 "FAIL|FAILED" "job_logs/e2e-${E2E_BROWSER}-${E2E_PROJECT}-${E2E_EXECUTION_ID}.log" >> $GITHUB_STEP_SUMMARY || true
           fi
 
+      - name: Verify utils startup evidence
+        if: always() && matrix.project == 'utils'
+        shell: bash
+        run: |
+          python3 scripts/ci/verify-utils-startup-evidence.py
+
       - name: Record setup and execution status
         if: always()
         shell: bash
