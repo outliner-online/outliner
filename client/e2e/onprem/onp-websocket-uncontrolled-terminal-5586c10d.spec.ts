@@ -21,8 +21,12 @@ test("uncontrolled cleanup waits for the real browser terminal callback", async 
         // exact real client callback so upstream-first cleanup cannot race it.
         const held = stack.holdTunnelTerminalCallback(tunnel.id, "ws-client-close");
         const upstream = stack.waitForTransportEvent("ws-upstream-close", tunnel.url, { id: tunnel.id });
+        // held.observed also accepts a real error callback; it does not prove
+        // either native close callback has reached the independent recorder.
+        const rawClientClose = stack.waitForTransportEvent("ws-client-socket-close", tunnel.url, { id: tunnel.id });
+        const rawUpstreamClose = stack.waitForTransportEvent("ws-upstream-socket-close", tunnel.url, { id: tunnel.id });
         await target.close();
-        await Promise.all([held.observed, upstream]).finally(async () => {
+        await Promise.all([held.observed, upstream, rawClientClose, rawUpstreamClose]).finally(async () => {
             await testInfo.attach("uncontrolled-terminal-provenance", {
                 contentType: "application/json",
                 body: JSON.stringify({ id: tunnel.id, observations: stack.tunnelSocketSnapshot(tunnel.id) }),

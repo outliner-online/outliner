@@ -12,6 +12,7 @@ acceptance:
 - Project and Table rooms use same-origin WebSocket connections without Firebase tokens
 - Project creation, listing, resolution, and rename use canonical server descriptors
 - Real browser and backend tunnels forward terminal state before held callback delivery, and cleanup waits for both independent terminal observations in every order
+- Uncontrolled terminal checks await identity-bound native socket close observations before asserting raw close provenance, including when an error reaches the callback hold first
 tests:
 - client/e2e/onprem/onp-http-lifecycle-5672.spec.ts
 - client/e2e/onprem/onp-local-boundaries-5586c10d.spec.ts
