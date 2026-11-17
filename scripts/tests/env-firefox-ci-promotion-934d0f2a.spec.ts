@@ -28,8 +28,10 @@ const chromiumProjects = [
     "core-7",
     "core-8",
     "new-1",
-    "new-2",
-    "new-3",
+    "new-2-1",
+    "new-2-2",
+    "new-3a",
+    "new-3b",
     "new-4",
     "new-5",
     "auth",
@@ -76,7 +78,7 @@ describe("ENV-934d0f2a: Firefox promotion to ordinary E2E CI", () => {
             value.uses?.startsWith("actions/upload-artifact@")
         );
         expect(upload.if).toBe(
-            "failure() || startsWith(matrix.project, 'firefox-') || matrix.project == 'new-2' || matrix.project == 'tables-1' || matrix.project == 'utils'",
+            "failure() || startsWith(matrix.project, 'firefox-') || startsWith(matrix.project, 'new-2-') || startsWith(matrix.project, 'new-3') || matrix.project == 'tables-1' || matrix.project == 'utils'",
         );
         for (const identity of ["env.E2E_BROWSER", "matrix.project", "github.run_id", "github.run_attempt"]) {
             expect(upload.with.name).toContain(`\${{ ${identity} }}`);
@@ -92,7 +94,7 @@ describe("ENV-934d0f2a: Firefox promotion to ordinary E2E CI", () => {
         const job = workflow("ci-test-e2e.yml").jobs["e2e-test"];
         expect(job["timeout-minutes"]).toBe(30);
         const step = job.steps.find((value: { id?: string; }) => value.id === "tests");
-        expect(step.run).toContain('if [ "$project" = "new-2" ]; then');
+        expect(step.run).toContain('if [[ "$project" =~ ^new-2-([12])$ ]]; then');
         expect(step.run).toContain("python3 ../scripts/ci/run-bounded-e2e.py");
         expect(step.run).toContain("--timeout-seconds=1200 --job-budget-seconds=1320 --grace-seconds=10");
         expect(step.run).toContain('--report="${PLAYWRIGHT_JSON_OUTPUT_NAME}"');
@@ -100,7 +102,7 @@ describe("ENV-934d0f2a: Firefox promotion to ordinary E2E CI", () => {
             value.uses?.startsWith("actions/upload-artifact@")
         );
         expect(upload.with["if-no-files-found"]).toBe(
-            "${{ (matrix.project == 'new-2' || matrix.project == 'tables-1' || matrix.project == 'utils') && 'error' || 'warn' }}",
+            "${{ (startsWith(matrix.project, 'new-2-') || startsWith(matrix.project, 'new-3') || matrix.project == 'tables-1' || matrix.project == 'utils') && 'error' || 'warn' }}",
         );
     });
 
@@ -114,7 +116,7 @@ describe("ENV-934d0f2a: Firefox promotion to ordinary E2E CI", () => {
         expect(tables).toContain("--status=../job_logs/tables-1-command-status.json");
         expect(tables).toContain("--timeout-seconds=1200 --job-budget-seconds=1320 --grace-seconds=10");
         expect(tables).toContain("-- npm run github:test:e2e -- --project=tables --shard=1/2");
-        expect(run.match(/python3 \.\.\/scripts\/ci\/run-bounded-e2e\.py/g)).toHaveLength(2);
+        expect(run.match(/python3 \.\.\/scripts\/ci\/run-bounded-e2e\.py/g)).toHaveLength(3);
         expect(run).toContain('--project=tables --shard="${BASH_REMATCH[1]}/2"');
     });
 

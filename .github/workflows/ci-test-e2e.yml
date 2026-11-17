@@ -91,7 +91,7 @@ jobs:
         run: |
           set -euo pipefail
           cd scripts/tests
-          npx vitest run env-playwright-collects-every-spec-7d41ae62.spec.ts env-firefox-selection-coverage-78ad2b91.spec.ts env-firefox-ci-promotion-934d0f2a.spec.ts 2>&1 | tee ../../job_logs/selection-coverage.log
+          npx vitest run env-playwright-collects-every-spec-7d41ae62.spec.ts env-firefox-selection-coverage-78ad2b91.spec.ts env-firefox-ci-promotion-934d0f2a.spec.ts env-new3-shard-partition-8624c6a1.spec.ts env-new2-native-shards-8c3de7a2.spec.ts 2>&1 | tee ../../job_logs/selection-coverage.log
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s . -p 'test_bounded_e2e*.py' -v 2>&1 | tee ../../job_logs/bounded-e2e-contract.log
 
       - name: Upload collection guard logs
@@ -126,7 +126,7 @@ jobs:
       pull-requests: write
     env:
       E2E_BROWSER: ${{ startsWith(matrix.project, 'firefox-') && 'firefox' || 'chromium' }}
-      E2E_PROJECT: ${{ matrix.project }}
+      E2E_PROJECT: ${{ startsWith(matrix.project, 'new-2-') && 'new-2' || matrix.project }}
       E2E_EXECUTION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       E2E_EXECUTION_REPORT: ${{ github.workspace }}/job_logs/e2e-${{ matrix.project }}-${{ github.run_id }}-${{ github.run_attempt }}.execution.json
       E2E_EXPECTED_COLLECTION: ${{ github.workspace }}/job_logs/expected-${{ matrix.project }}-${{ github.run_id }}-${{ github.run_attempt }}.json
@@ -135,7 +135,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        project: [basic, core-1, core-2, core-3, core-4, core-4b, core-5, core-6, core-7, core-8, new-1, new-2, new-3, new-4, new-5, auth, utils, server, yjs, tables-1, tables-2, schedule, onprem, firefox-selection-core-4, firefox-selection-core-4b, firefox-selection-new, firefox-selection-basic]
+        project: [basic, core-1, core-2, core-3, core-4, core-4b, core-5, core-6, core-7, core-8, new-1, new-2-1, new-2-2, new-3a, new-3b, new-4, new-5, auth, utils, server, yjs, tables-1, tables-2, schedule, onprem, firefox-selection-core-4, firefox-selection-core-4b, firefox-selection-new, firefox-selection-basic]
 
     steps:
       - name: Checkout code
@@ -156,6 +156,7 @@ jobs:
             playwrightVersion: JSON.parse(fs.readFileSync('client/package-lock.json', 'utf8')).packages['node_modules/@playwright/test'].version,
             playwrightVersionSource: 'client/package-lock.json',
             project: process.env.E2E_PROJECT,
+            ciShard: '${{ matrix.project }}',
             executionId: process.env.E2E_EXECUTION_ID,
             commit: process.env.GITHUB_SHA,
             status: 'setup',
@@ -261,14 +262,25 @@ jobs:
               2>&1 | tee "job_logs/e2e-${E2E_BROWSER}-${project}-${E2E_EXECUTION_ID}.log"
           else
             cd client
-            if [ "$project" = "new-2" ]; then
-              python3 ../scripts/ci/run-bounded-e2e.py \
+            if [[ "$project" =~ ^new-2-([12])$ ]]; then
+              shard="${BASH_REMATCH[1]}/2"
+              PLAYWRIGHT_HTML_OPEN=never python3 ../scripts/ci/run-bounded-e2e.py \
                 --context=../job_logs/execution-context.json \
-                --status=../job_logs/new-2-command-status.json \
+                --status="../job_logs/${project}-command-status.json" \
                 --log="../job_logs/e2e-${E2E_BROWSER}-${project}-${E2E_EXECUTION_ID}.log" \
                 --report="${PLAYWRIGHT_JSON_OUTPUT_NAME}" \
                 --timeout-seconds=1200 --job-budget-seconds=1320 --grace-seconds=10 \
-                -- npm run github:test:e2e -- --project="$project"
+                -- npm run github:test:e2e -- --project=new-2 --shard="$shard" --reporter=line,list,json,html
+            elif [[ "$project" =~ ^new-3[ab]$ ]]; then
+              # Bound the command before the job deadline so timeout evidence
+              # can upload. Line output identifies started, unfinished cases.
+              PLAYWRIGHT_HTML_OPEN=never python3 ../scripts/ci/run-bounded-e2e.py \
+                --context=../job_logs/execution-context.json \
+                --status="../job_logs/${project}-command-status.json" \
+                --log="../job_logs/e2e-${E2E_BROWSER}-${project}-${E2E_EXECUTION_ID}.log" \
+                --report="${PLAYWRIGHT_JSON_OUTPUT_NAME}" \
+                --timeout-seconds=1200 --job-budget-seconds=1320 --grace-seconds=10 \
+                -- npm run github:test:e2e -- --project="$project" --reporter=line,json,html
             elif [ "$project" = "tables-1" ]; then
               python3 ../scripts/ci/run-bounded-e2e.py \
                 --context=../job_logs/execution-context.json \
@@ -327,7 +339,7 @@ jobs:
           VITE_DISABLE_FLUID_TELEMETRY: true
 
       - name: Record retry-free Grid clipboard verification
-        if: matrix.project == 'new-2'
+        if: matrix.project == 'new-2-1'
         shell: bash
         run: |
           set -euo pipefail
@@ -380,8 +392,8 @@ jobs:
         if: failure()
         run: |
           echo "## ❌ E2E Test Failed (${{ matrix.project }})" >> $GITHUB_STEP_SUMMARY
-          if [ -f "job_logs/e2e-${E2E_BROWSER}-${E2E_PROJECT}-${E2E_EXECUTION_ID}.log" ]; then
-            grep -E -A1 -B0 "FAIL|FAILED" "job_logs/e2e-${E2E_BROWSER}-${E2E_PROJECT}-${E2E_EXECUTION_ID}.log" >> $GITHUB_STEP_SUMMARY || true
+          if [ -f "job_logs/e2e-${E2E_BROWSER}-${{ matrix.project }}-${E2E_EXECUTION_ID}.log" ]; then
+            grep -E -A1 -B0 "FAIL|FAILED" "job_logs/e2e-${E2E_BROWSER}-${{ matrix.project }}-${E2E_EXECUTION_ID}.log" >> $GITHUB_STEP_SUMMARY || true
           fi
 
       - name: Verify utils startup evidence
@@ -433,7 +445,7 @@ jobs:
 
       - name: Upload Logs & Artifacts
         # Keep bounded-command evidence even after successful/retried execution.
-        if: failure() || startsWith(matrix.project, 'firefox-') || matrix.project == 'new-2' || matrix.project == 'tables-1' || matrix.project == 'utils'
+        if: failure() || startsWith(matrix.project, 'firefox-') || startsWith(matrix.project, 'new-2-') || startsWith(matrix.project, 'new-3') || matrix.project == 'tables-1' || matrix.project == 'utils'
         uses: actions/upload-artifact@v7
         with:
           name: e2e-artifacts-${{ env.E2E_BROWSER }}-${{ matrix.project }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -446,5 +458,32 @@ jobs:
             logs/
             firebase-debug.log
           archive: true
-          if-no-files-found: ${{ (matrix.project == 'new-2' || matrix.project == 'tables-1' || matrix.project == 'utils') && 'error' || 'warn' }}
+          if-no-files-found: ${{ (startsWith(matrix.project, 'new-2-') || startsWith(matrix.project, 'new-3') || matrix.project == 'tables-1' || matrix.project == 'utils') && 'error' || 'warn' }}
           retention-days: 2
+
+  new-3-complete:
+    # Preserve the original consumer-facing check name. Every E2E matrix row,
+    # including both new-3 halves, must succeed before this check can pass.
+    name: e2e-test (new-3)
+    needs: e2e-test
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require complete E2E matrix
+        env:
+          E2E_RESULT: ${{ needs.e2e-test.result }}
+        run: test "$E2E_RESULT" = success
+
+  new-2-complete:
+    name: e2e-test (new-2)
+    needs: [e2e-test, selection-coverage]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require complete E2E matrix and collection
+        env:
+          E2E_RESULT: ${{ needs.e2e-test.result }}
+          COLLECTION_RESULT: ${{ needs.selection-coverage.result }}
+        run: test "$E2E_RESULT" = success && test "$COLLECTION_RESULT" = success
