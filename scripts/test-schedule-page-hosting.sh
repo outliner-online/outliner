@@ -42,4 +42,4 @@ env -i HOME="$fixture/home" PATH="$PATH" CI=true SENTRY_DSN= \
   FIREBASE_EMULATORS_PATH="${FIREBASE_EMULATORS_PATH:-$HOME/.cache/firebase/emulators}" \
   node scripts/firebase-cli-npm.cjs emulators:exec --project demo-schedule-contract \
   --config "$fixture/firebase.json" --only auth,firestore,functions,hosting \
-  'node client/e2e/fixtures/schedule-page-hosting/seed-user.cjs && SKIP_AUTO_SETUP=1 bash scripts/test.sh client/e2e/hosting-schedule/sch-standalone-hosting-contract-a43ce270.spec.ts client/e2e/schedule/sch-stryker-nightly-schedule-visibility-2c9b1a4d.spec.ts -- --config=playwright.schedule-page-hosting.config.ts'
+  'node client/e2e/fixtures/schedule-page-hosting/seed-user.mjs && SKIP_AUTO_SETUP=1 bash scripts/test.sh client/e2e/hosting-schedule/sch-standalone-hosting-contract-a43ce270.spec.ts client/e2e/schedule/sch-stryker-nightly-schedule-visibility-2c9b1a4d.spec.ts -- --config=playwright.schedule-page-hosting.config.ts'

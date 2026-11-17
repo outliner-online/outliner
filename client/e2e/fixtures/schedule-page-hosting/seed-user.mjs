@@ -1,5 +1,5 @@
-const { initializeApp, deleteApp } = require("firebase/app");
-const { getAuth, connectAuthEmulator, createUserWithEmailAndPassword } = require("firebase/auth");
+import { deleteApp, initializeApp } from "firebase/app";
+import { connectAuthEmulator, createUserWithEmailAndPassword, getAuth } from "firebase/auth";
 
 async function seed() {
     const app = initializeApp({ projectId: "demo-schedule-contract", apiKey: "emulator-only" });

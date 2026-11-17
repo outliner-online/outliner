@@ -15,5 +15,6 @@ state before rendering is accepted. Missing and invalid body credentials reach
 the actual Function and are rejected distinctly; real Hosting HTML cannot satisfy
 the successful-read oracle. A pre-existing private emulator email/password user
 is seeded only for the legacy visual spec. No token value is exported by fixtures.
-The normal CI shards do not automatically run the dedicated configuration. This
-is nonproduction evidence, not Google popup or deployed authenticated API proof.
+The dedicated Schedule Hosting workflow executes this private fixture in CI;
+normal application shards retain their existing fixture configuration. This is
+nonproduction evidence, not Google popup or deployed authenticated API proof.
