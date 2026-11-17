@@ -5,7 +5,8 @@ the locked root/client/Functions dependencies, Node 22 and the pinned Firebase C
 This dedicated fixture uses the actual Schedule service and Auth SDK in a static
 browser bundle. It runs only against private Auth/Firestore/Functions/Hosting
 emulators for `demo-schedule-contract`, never a SvelteKit proxy or public data.
-The normal CI shards do not automatically run this dedicated configuration.
+The dedicated Schedule Hosting workflow runs this configuration with private emulators;
+normal application shards retain their existing fixture configuration.
 
 The runner invokes canonical `scripts/test.sh` with
 `playwright.schedule-service-hosting.config.ts`. The positive oracle observes all

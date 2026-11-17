@@ -8,8 +8,20 @@ const resolver = Object.values(compiled).find(value =>
     typeof value === "function" && value.name === "getFirebaseFunctionUrl"
 );
 assert.ok(resolver, "Production output must export the actual Functions URL helper");
-for (const name of ["getUserProjects", "saveProject", "deleteProject", "listSchedules", "health"]) {
+for (const name of ["getUserProjects", "saveProject", "deleteProject", "health"]) {
     assert.equal(resolver(name), `https://outliner-online.com/api/${name}`);
+}
+
+for (
+    const [name, path] of Object.entries({
+        createSchedule: "create-schedule",
+        listSchedules: "list-schedules",
+        updateSchedule: "update-schedule",
+        cancelSchedule: "cancel-schedule",
+        exportSchedulesIcal: "export-schedules-ical",
+    })
+) {
+    assert.equal(resolver(name), `https://outliner-online.com/api/${path}`);
 }
 
 const assets = new URL("../../build/_app/immutable/", import.meta.url);
