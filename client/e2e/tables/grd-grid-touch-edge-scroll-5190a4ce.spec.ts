@@ -1,6 +1,7 @@
 /** @feature GRD-5190a4ce */
 import { devices, expect, test } from "@playwright/test";
 import { createOverflowingTouchGrid, enterTouchRangeMode, gridClientBox } from "../utils/gridTouchEdgeHelpers";
+import { observeTouchNavigationOnly } from "../utils/gridTouchNavigationProbe";
 import { registerCoverageHooks } from "../utils/registerCoverageHooks";
 import { TestHelpers } from "../utils/testHelpers";
 import { TouchGestures } from "../utils/touchGestures";
@@ -18,6 +19,7 @@ test.describe("Grid touch handle edge scrolling", () => {
         const grid = await createOverflowingTouchGrid(page);
         const titleCell = grid.locator('tbody tr:first-child td[data-col="title"]');
         await enterTouchRangeMode(page, titleCell);
+        const assertNavigationOnly = await observeTouchNavigationOnly(page, grid);
 
         const handle = grid.getByRole("button", { name: "Resize selection from end" });
         await expect(handle).toBeVisible();
@@ -65,6 +67,7 @@ test.describe("Grid touch handle edge scrolling", () => {
         expect(await grid.evaluate((node: HTMLElement) => node.scrollLeft)).toBe(released);
         await expect(titleCell).toHaveClass(/grid-selected/);
         await expect(grid.locator('td[data-col="id"].grid-selected')).toHaveCount(0);
+        await assertNavigationOnly();
     });
 
     test("the start handle scrolls left, stops in the interior, reverses, and cancels cleanly", async ({ page }) => {
@@ -77,6 +80,7 @@ test.describe("Grid touch handle edge scrolling", () => {
         const done = grid.locator('tbody tr:first-child td[data-col="done"]');
         await expect(done).toBeVisible();
         await enterTouchRangeMode(page, done);
+        const assertNavigationOnly = await observeTouchNavigationOnly(page, grid);
         const doneBox = await done.boundingBox();
         expect(doneBox).not.toBeNull();
         // Separate the coincident single-cell endpoints through the real end
@@ -140,6 +144,7 @@ test.describe("Grid touch handle edge scrolling", () => {
             },
             0,
         );
+        await assertNavigationOnly();
     });
 
     test("ordinary touch panning remains native when no handle owns the gesture", async ({ page }) => {
