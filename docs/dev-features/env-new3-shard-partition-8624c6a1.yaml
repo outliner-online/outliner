@@ -1,0 +1,13 @@
+id: ENV-8624c6a1
+title: Partition new-3 without losing cases or its required check
+title-ja: new-3 のテスト集合と必須チェックを保った分割
+description: Run the former d-through-i Chromium selection as disjoint d/e/f and g/h/i jobs with fresh worker pools, preserving assertions, retries, four workers and each 30-minute job deadline. Actual Playwright collection compares their union with an independent inventory of the old selection and rejects missing, duplicate or unscheduled cases. Preserve the old new-3 check name as a gate requiring the entire E2E matrix to succeed. Supervise each half within the existing 20-minute command and 22-minute job-context budget, retain complete JSON reports and artifacts even on success, and log case starts with the line reporter. This reduces work per job and retains timeout evidence; it does not establish or claim to repair the historical hosted-runner shutdown source.
+category: environment
+status: implemented
+components:
+- .github/workflows/ci-test-e2e.yml
+- client/playwright.config.ts
+tests:
+- scripts/tests/env-new3-shard-partition-8624c6a1.spec.ts
+- scripts/tests/test_bounded_e2e.py
+- scripts/tests/test_bounded_e2e_playwright.py

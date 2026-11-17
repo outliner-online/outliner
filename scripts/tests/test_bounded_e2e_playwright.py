@@ -1,6 +1,7 @@
 """Exercise the real Playwright CLI, reporter and attachments without an app mock."""
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import shlex
 import subprocess
@@ -15,11 +16,13 @@ MODULE = (CLI.parent / 'index.mjs').as_uri()
 
 
 class PlaywrightBoundaryTest(unittest.TestCase):
-    def run_probe(self, mode, tables_shard=False):
+    def run_probe(self, mode, tables_shard=False, new3_half=None):
         with tempfile.TemporaryDirectory(prefix='bounded-playwright-') as directory:
             root = Path(directory)
             (root / 'context.json').write_text(json.dumps({'startedAt': datetime.now(timezone.utc).isoformat()}))
             projects = "projects:[{name:'tables'}]," if tables_shard else ''
+            if new3_half:
+                projects = "projects:[{name:'new-3a'},{name:'new-3b'}],"
             (root / 'playwright.config.mjs').write_text("export default {testDir:'.',retries:0,workers:1,"
                                                        + projects + "reporter:[['json',{outputFile:'report.json'}]]};")
             action = "process.exit(0)" if mode == 'incomplete' else "await new Promise(() => {})" if mode == 'timeout' else (
@@ -54,6 +57,11 @@ class PlaywrightBoundaryTest(unittest.TestCase):
                     import {{test}} from {json.dumps(MODULE)};
                     test('must remain on shard two', () => {{throw new Error('wrong shard executed')}});
                 """)
+            if new3_half:
+                workflow = (ROOT / '.github/workflows/ci-test-e2e.yml').read_text()
+                branch = workflow.split('elif [[ "$project" =~ ^new-3[ab]$ ]]; then')[1].split('elif ')[0]
+                command = branch.split('-- npm run github:test:e2e -- ', 1)[1].strip()
+                cli_arguments = shlex.split(command.replace('"$project"', new3_half))
             result = subprocess.run([
                 sys.executable, str(RUNNER), '--context', str(root / 'context.json'),
                 '--status', str(root / 'status.json'), '--log', str(root / 'command.log'),
@@ -61,7 +69,10 @@ class PlaywrightBoundaryTest(unittest.TestCase):
                 '--job-budget-seconds', '60', '--grace-seconds', '0.2',
                 '--', 'node', str(CLI), 'test', '--config', str(root / 'playwright.config.mjs'),
                 '--output', str(root / 'results'), *cli_arguments,
-            ], cwd=root, capture_output=True, text=True, timeout=20)
+            ], cwd=root, capture_output=True, text=True, timeout=20, env={
+                **os.environ, 'PLAYWRIGHT_JSON_OUTPUT_NAME': str(root / 'report.json'),
+                'PLAYWRIGHT_HTML_OPEN': 'never',
+            })
             status = json.loads((root / 'status.json').read_text())
             self.assertEqual(result.returncode, {'pass': 0, 'failure': 1, 'incomplete': 1, 'timeout': 124}[mode], result.stderr)
             self.assertEqual(status['status'], {'pass': 'passed', 'failure': 'failed',
@@ -81,6 +92,20 @@ class PlaywrightBoundaryTest(unittest.TestCase):
 
     def test_real_playwright_pass(self):
         self.run_probe('pass')
+
+    def test_new3_shipped_half_commands_and_reporters(self):
+        for half in ('new-3a', 'new-3b'):
+            with self.subTest(half=half):
+                self.run_probe('pass', new3_half=half)
+
+    def test_new3_shipped_command_failure_is_nonzero(self):
+        self.run_probe('failure', new3_half='new-3b')
+
+    def test_new3_shipped_command_timeout_retains_diagnostics(self):
+        self.run_probe('timeout', new3_half='new-3a')
+
+    def test_new3_shipped_command_incomplete_report_cannot_pass(self):
+        self.run_probe('incomplete', new3_half='new-3b')
 
     def test_real_playwright_assertion_failure_is_not_converted(self):
         self.run_probe('failure')
