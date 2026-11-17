@@ -47,6 +47,33 @@ describe("ENV-8c3de7a2: complete native new-2 sharding", () => {
         expect(() => verifyNew2NativeShards(f.client, f.workflow)).toThrow(/schedule new-2-2 exactly once/);
     }, 120_000);
 
+    it("summarises the actual shard log while the Playwright project retains its old name", () => {
+        const f = probes();
+        const workflow = parse(fs.readFileSync(f.workflow, "utf8"));
+        const summary = workflow.jobs["e2e-test"].steps.find((step: { name?: string; }) =>
+            step.name === "Summarise failures"
+        );
+        fs.mkdirSync(path.join(f.root, "job_logs"));
+        for (const shard of ["new-2-1", "new-2-2"]) {
+            const report = path.join(f.root, `${shard}-summary.md`);
+            fs.writeFileSync(path.join(f.root, `job_logs/e2e-chromium-${shard}-run-attempt.log`),
+                `FAIL ${shard} sentinel\ndetail\n`);
+            const result = spawnSync("bash", ["-euo", "pipefail", "-c",
+                summary.run.replaceAll("${{ matrix.project }}", shard)], {
+                cwd: f.root,
+                env: {
+                    ...process.env,
+                    E2E_BROWSER: "chromium",
+                    E2E_PROJECT: "new-2",
+                    E2E_EXECUTION_ID: "run-attempt",
+                    GITHUB_STEP_SUMMARY: report,
+                },
+            });
+            expect(result.status).toBe(0);
+            expect(fs.readFileSync(report, "utf8")).toContain(`FAIL ${shard} sentinel`);
+        }
+    });
+
     it("keeps the shipped native selection, followups exactly once, evidence and old-name gate", () => {
         const workflow = parse(fs.readFileSync(path.join(root, ".github/workflows/ci-test-e2e.yml"), "utf8"));
         const job = workflow.jobs["e2e-test"];
