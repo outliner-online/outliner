@@ -1,4 +1,6 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
@@ -111,21 +113,71 @@ test("artifact and Pages deployment producers retain their consumer-facing contr
 
     const roundtripUpload = findStep(e2e, "artifact-roundtrip", "Upload representative E2E evidence");
     const roundtripDownload = findStep(e2e, "artifact-roundtrip", "Download representative E2E evidence");
+    const wrongUpload = findStep(e2e, "artifact-roundtrip", "Upload wrong-artifact control");
     expectMultiFileArtifactArchive(roundtripUpload);
     expect(roundtripUpload.with.name).toBe(
         artifact.with.name
             .replace("${{ env.E2E_BROWSER }}", "firefox")
             .replace("${{ matrix.project }}", "artifact-roundtrip"),
     );
-    expect(roundtripDownload.with.name).toBe(roundtripUpload.with.name);
-    expect(findStep(e2e, "artifact-roundtrip", "Verify downloaded E2E evidence").run).toContain(
-        "cmp artifact-roundtrip/source/runtime.log artifact-roundtrip/downloaded/runtime.log",
+    expect(roundtripUpload.id).toBe("representative-upload");
+    expect(roundtripDownload.with["artifact-ids"]).toBe(
+        "${{ steps.representative-upload.outputs.artifact-id }}",
     );
+    expect(roundtripDownload.with.name).toBeUndefined();
+    expect(wrongUpload.id).toBe("wrong-upload");
+    expectMultiFileArtifactArchive(wrongUpload);
+    expect(findStep(e2e, "artifact-roundtrip", "Verify downloaded E2E evidence").run).toContain(
+        "scripts/ci/verify-artifact-roundtrip.sh artifact-roundtrip/source artifact-roundtrip/downloaded",
+    );
+    expect(findStep(e2e, "artifact-roundtrip", "Reject an unavailable artifact")["continue-on-error"]).toBe(true);
+    expect(findStep(e2e, "artifact-roundtrip", "Confirm unavailable artifact is non-success").run).toContain(
+        'test "$DOWNLOAD_OUTCOME" = failure',
+    );
+    const negativeControls = findStep(
+        e2e,
+        "artifact-roundtrip",
+        "Confirm wrong, missing, and corrupted evidence are non-success",
+    ).run;
+    expect(negativeControls).toContain("artifact-roundtrip/wrong-downloaded");
+    expect(negativeControls).toContain("artifact-roundtrip/missing-file");
+    expect(negativeControls).toContain("artifact-roundtrip/corrupted-file");
 
     const pages = parseWorkflow("docs-deploy.yml");
     expect(findStep(pages, "build", "Upload artifact").with.path).toBe("docs/.vitepress/dist");
     expect(pages.jobs.deploy.needs).toBe("build");
     expect(findStep(pages, "deploy", "Deploy to GitHub Pages").id).toBe("deployment");
+});
+
+test("artifact round-trip verifier independently rejects missing and changed evidence", () => {
+    const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "artifact-roundtrip-"));
+    const source = path.join(temporaryRoot, "source");
+    const downloaded = path.join(temporaryRoot, "downloaded");
+    const verifier = path.join(root, "scripts/ci/verify-artifact-roundtrip.sh");
+
+    try {
+        fs.mkdirSync(source);
+        fs.mkdirSync(downloaded);
+        for (
+            const [name, content] of [
+                ["execution.json", '{"status":"passed"}\n'],
+                ["runtime.log", "firefox evidence retained\n"],
+            ]
+        ) {
+            fs.writeFileSync(path.join(source, name), content);
+            fs.writeFileSync(path.join(downloaded, name), content);
+        }
+
+        expect(() => execFileSync(verifier, [source, downloaded])).not.toThrow();
+
+        fs.rmSync(path.join(downloaded, "runtime.log"));
+        expect(() => execFileSync(verifier, [source, downloaded])).toThrow();
+
+        fs.writeFileSync(path.join(downloaded, "runtime.log"), "corrupted evidence\n");
+        expect(() => execFileSync(verifier, [source, downloaded])).toThrow();
+    } finally {
+        fs.rmSync(temporaryRoot, { recursive: true, force: true });
+    }
 });
 
 test("production deployment remains success-gated and Sentry upgrades do not mutate build output", () => {
