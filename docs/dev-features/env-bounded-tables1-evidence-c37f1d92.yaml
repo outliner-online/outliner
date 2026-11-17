@@ -8,7 +8,7 @@ components:
 - .github/workflows/ci-test-e2e.yml
 - scripts/ci/run-bounded-e2e.py
 tests:
+- client/src/tests/new2-diagnostics-retention.test.ts
+- scripts/tests/env-firefox-ci-promotion-934d0f2a.spec.ts
 - scripts/tests/test_bounded_e2e.py
 - scripts/tests/test_bounded_e2e_playwright.py
-- scripts/tests/env-firefox-ci-promotion-934d0f2a.spec.ts
-- client/src/tests/new2-diagnostics-retention.test.ts

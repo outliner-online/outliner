@@ -91,7 +91,7 @@ jobs:
         run: |
           set -euo pipefail
           cd scripts/tests
-          npx vitest run env-playwright-collects-every-spec-7d41ae62.spec.ts env-firefox-selection-coverage-78ad2b91.spec.ts env-firefox-ci-promotion-934d0f2a.spec.ts 2>&1 | tee ../../job_logs/selection-coverage.log
+          npx vitest run env-playwright-collects-every-spec-7d41ae62.spec.ts env-firefox-selection-coverage-78ad2b91.spec.ts env-firefox-ci-promotion-934d0f2a.spec.ts env-new3-shard-partition-8624c6a1.spec.ts 2>&1 | tee ../../job_logs/selection-coverage.log
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s . -p 'test_bounded_e2e*.py' -v 2>&1 | tee ../../job_logs/bounded-e2e-contract.log
 
       - name: Upload collection guard logs
@@ -135,7 +135,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        project: [basic, core-1, core-2, core-3, core-4, core-4b, core-5, core-6, core-7, core-8, new-1, new-2, new-3, new-4, new-5, auth, utils, server, yjs, tables-1, tables-2, schedule, onprem, firefox-selection-core-4, firefox-selection-core-4b, firefox-selection-new, firefox-selection-basic]
+        project: [basic, core-1, core-2, core-3, core-4, core-4b, core-5, core-6, core-7, core-8, new-1, new-2, new-3a, new-3b, new-4, new-5, auth, utils, server, yjs, tables-1, tables-2, schedule, onprem, firefox-selection-core-4, firefox-selection-core-4b, firefox-selection-new, firefox-selection-basic]
 
     steps:
       - name: Checkout code
@@ -269,6 +269,16 @@ jobs:
                 --report="${PLAYWRIGHT_JSON_OUTPUT_NAME}" \
                 --timeout-seconds=1200 --job-budget-seconds=1320 --grace-seconds=10 \
                 -- npm run github:test:e2e -- --project="$project"
+            elif [[ "$project" =~ ^new-3[ab]$ ]]; then
+              # Bound the command before the job deadline so timeout evidence
+              # can upload. Line output identifies started, unfinished cases.
+              PLAYWRIGHT_HTML_OPEN=never python3 ../scripts/ci/run-bounded-e2e.py \
+                --context=../job_logs/execution-context.json \
+                --status="../job_logs/${project}-command-status.json" \
+                --log="../job_logs/e2e-${E2E_BROWSER}-${project}-${E2E_EXECUTION_ID}.log" \
+                --report="${PLAYWRIGHT_JSON_OUTPUT_NAME}" \
+                --timeout-seconds=1200 --job-budget-seconds=1320 --grace-seconds=10 \
+                -- npm run github:test:e2e -- --project="$project" --reporter=line,json,html
             elif [ "$project" = "tables-1" ]; then
               python3 ../scripts/ci/run-bounded-e2e.py \
                 --context=../job_logs/execution-context.json \
@@ -433,7 +443,7 @@ jobs:
 
       - name: Upload Logs & Artifacts
         # Keep bounded-command evidence even after successful/retried execution.
-        if: failure() || startsWith(matrix.project, 'firefox-') || matrix.project == 'new-2' || matrix.project == 'tables-1' || matrix.project == 'utils'
+        if: failure() || startsWith(matrix.project, 'firefox-') || matrix.project == 'new-2' || startsWith(matrix.project, 'new-3') || matrix.project == 'tables-1' || matrix.project == 'utils'
         uses: actions/upload-artifact@v7
         with:
           name: e2e-artifacts-${{ env.E2E_BROWSER }}-${{ matrix.project }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -446,5 +456,19 @@ jobs:
             logs/
             firebase-debug.log
           archive: true
-          if-no-files-found: ${{ (matrix.project == 'new-2' || matrix.project == 'tables-1' || matrix.project == 'utils') && 'error' || 'warn' }}
+          if-no-files-found: ${{ (matrix.project == 'new-2' || startsWith(matrix.project, 'new-3') || matrix.project == 'tables-1' || matrix.project == 'utils') && 'error' || 'warn' }}
           retention-days: 2
+
+  new-3-complete:
+    # Preserve the original consumer-facing check name. Every E2E matrix row,
+    # including both new-3 halves, must succeed before this check can pass.
+    name: e2e-test (new-3)
+    needs: e2e-test
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require complete E2E matrix
+        env:
+          E2E_RESULT: ${{ needs.e2e-test.result }}
+        run: test "$E2E_RESULT" = success

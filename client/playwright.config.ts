@@ -293,10 +293,15 @@ export default defineConfig({
             testMatch: ["**/c*.spec.ts"],
         },
         {
-            // New feature tests 3: d, e, f, g, h, i
-            name: "new-3",
+            // Keep the former new-3 case set, with a fresh worker pool per half.
+            name: "new-3a",
             testDir: "./e2e/new",
-            testMatch: ["**/[defghi]*.spec.ts"],
+            testMatch: ["**/[def]*.spec.ts"],
+        },
+        {
+            name: "new-3b",
+            testDir: "./e2e/new",
+            testMatch: ["**/[ghi]*.spec.ts"],
         },
         {
             // New feature tests 4: j-s

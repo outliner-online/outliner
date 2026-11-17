@@ -5,11 +5,11 @@ description: Production builds select outliner-online.com while preserving Fireb
 category: environment
 status: implemented
 components:
-- client/.env.production
-- client/.env.firebase
-- client/scripts/check-production-build.mjs
-- client/playwright.deployed.config.ts
 - .github/workflows/ci.yml
+- client/.env.firebase
+- client/.env.production
+- client/playwright.deployed.config.ts
+- client/scripts/check-production-build.mjs
 tests:
-- client/src/tests/firebase-functions-production.test.ts
 - client/e2e/deployed/env-production-firebase-origin-4ad259e1.spec.ts
+- client/src/tests/firebase-functions-production.test.ts

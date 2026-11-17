@@ -43,11 +43,11 @@ describe("Schedules Manager status (production path)", function() {
     const dailyRule = buildDemoScheduleRules().find(r => r.ruleId === DEMO_DAILY_RULE_ID)!;
     // Two days back, so the rule is both due now and — because it has never
     // run — carries an overdue first occurrence as its authoritative cursor.
-    const dtstart = `${DateTime.utc().minus({ days: 2 }).toFormat("yyyy-MM-dd")}T00:00:00`;
+    let dtstart: string;
     // Midnight today: exactly one occurrence is in the past, so a tick
     // dispatches exactly one execution and the occurrence it consumes is
     // unambiguous.
-    const singleOccurrenceDtstart = `${DateTime.utc().toFormat("yyyy-MM-dd")}T00:00:00`;
+    let singleOccurrenceDtstart: string;
 
     let db: Database.Database;
     let docs: Map<string, Y.Doc>;
@@ -250,6 +250,11 @@ describe("Schedules Manager status (production path)", function() {
     const TERMINAL_RESULTS = ["success", "failed", "interrupted"];
 
     beforeEach(function() {
+        // Collection can precede execution by a UTC date boundary. Build the
+        // fixture's due occurrences for this test, not the module import day.
+        const today = DateTime.utc();
+        dtstart = `${today.minus({ days: 2 }).toFormat("yyyy-MM-dd")}T00:00:00`;
+        singleOccurrenceDtstart = `${today.toFormat("yyyy-MM-dd")}T00:00:00`;
         db = new Database(":memory:");
         // The same table @hocuspocus/extension-sqlite persists documents into,
         // in the same database the scheduler indexes into — which is how the
