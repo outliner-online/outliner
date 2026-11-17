@@ -1,0 +1,11 @@
+id: ENV-a71c9e40
+title: Deploy Firebase Functions serially with source and traffic proof
+title-ja: Firebase Functions を直列配布しソースと traffic を確認する
+description: The existing main-CI-gated Firebase workflow checks out the exact successful revision and finishes one rollout before another. Discover every static onRequest export without executing initialization, deploy each us-central1 Function once, and verify the immutable deployed runtime JavaScript and dependency manifests, expected Ready revision and 100 percent traffic before continuing. A failed command, timeout, missing evidence, unchanged-source skip with an unready revision, or wrong source fails the job and prevents Hosting, Firestore rules and Storage publication. Recheck every target immediately before publishing other resources. Fail before mutation when a deployed endpoint has no declaration and needs an explicit retirement plan. Serialize every workflow invocation for the same project, and lint without modifying the checked-out source. Retain bounded non-secret receipts. Preserve existing runtime settings, IAM, quota and deployment targets; do not infer usage from max instances. Serial recovery measured roughly 103 and 111 seconds per Function versus 26 concurrent starts under a 20-vCPU regional allocation limit. The 90-minute job and per-command/readiness deadlines bound work without an outer retry or success-by-error-text fallback. This covers the automatic and workflow-dispatch Deploy workflow, not the legacy manual deploy-to-firebase.sh helper. Control tests use isolated executable fixtures and make no production calls; they are not deployed functional health evidence.
+category: environment
+status: implemented
+components:
+- .github/workflows/deploy.yml
+- scripts/deploy-firebase-serial.py
+tests:
+- scripts/tests/env-firebase-serial-rollout-a71c9e40.spec.ts

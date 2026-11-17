@@ -29,6 +29,8 @@ const supportedMajors: Record<string, number> = {
     "docker/metadata-action": 6,
     "docker/setup-buildx-action": 4,
     "getsentry/action-release": 3,
+    // Official release audit: google-github-actions/setup-gcloud v3.0.1.
+    "google-github-actions/setup-gcloud": 3,
     "peter-evans/create-pull-request": 8,
 };
 
