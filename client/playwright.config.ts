@@ -180,15 +180,6 @@ export default defineConfig({
 
     projects: withFirefoxSelectionProjects([
         {
-            // The dedicated Schedule Hosting workflow runs the private emulator fixture.
-            name: "schedule-hosting-page",
-            testDir: "./e2e/hosting-schedule",
-            testMatch: "sch-standalone-hosting-contract-a43ce270.spec.ts",
-            timeout: 30000,
-            retries: 0,
-            use: { baseURL: "http://127.0.0.1:57100", ...devices["Desktop Chrome"] },
-        },
-        {
             // Production-built client with the real on-premises server stack.
             // CI dispatches this project through scripts/test-onprem-client.sh.
             name: "onprem",
@@ -199,6 +190,15 @@ export default defineConfig({
             // built and started the packaged production artifact.
             name: "compose-onprem",
             testDir: "./e2e/compose-onprem",
+        },
+        {
+            // The dedicated Schedule Hosting workflow runs the private emulator fixture.
+            name: "schedule-hosting-page",
+            testDir: "./e2e/hosting-schedule",
+            testMatch: "sch-standalone-hosting-contract-a43ce270.spec.ts",
+            timeout: 30000,
+            retries: 0,
+            use: { baseURL: "http://127.0.0.1:57100", ...devices["Desktop Chrome"] },
         },
         {
             // Tables tests
