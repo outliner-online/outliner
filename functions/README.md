@@ -75,12 +75,15 @@ firebase deploy --only functions
 
 ## Environment Variable Configuration
 
-In the production environment, you need to set environment variables for
-Firebase Functions:
+The current Functions v2 source does not consume legacy `functions.config()`.
+Azure Fluid Relay integration and its Azure Secret Manager bindings have been
+removed; `azure.*` Runtime Config is not a prerequisite for the current
+deployment.
 
-```bash
-firebase functions:config:set azure.tenant_id="your-tenant-id" azure.endpoint="https://us.fluidrelay.azure.com" azure.primary_key="your-primary-key"
-```
+The deployment workflow leaves legacy Runtime Config resources untouched instead
+of running the deprecated cleanup command on every deployment. Any remaining
+resource cleanup needs a separate authorized inventory and deletion decision. A
+CLI deprecation error is not evidence that a configuration is absent or deleted.
 
 ## Azure Fluid Relay Health Check
 
