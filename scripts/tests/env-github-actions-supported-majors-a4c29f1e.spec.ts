@@ -29,6 +29,8 @@ const supportedMajors: Record<string, number> = {
     "docker/metadata-action": 6,
     "docker/setup-buildx-action": 4,
     "getsentry/action-release": 3,
+    // Official release audit: google-github-actions/setup-gcloud v3.0.1.
+    "google-github-actions/setup-gcloud": 3,
     "peter-evans/create-pull-request": 8,
 };
 
@@ -93,7 +95,9 @@ test("representative PR CI retains its trigger, permissions, guards, and failure
 test("artifact and Pages deployment producers retain their consumer-facing contracts", () => {
     const e2e = parseWorkflow("ci-test-e2e.yml");
     const artifact = findStep(e2e, "e2e-test", "Upload Logs & Artifacts");
-    expect(artifact.if).toBe("failure() || startsWith(matrix.project, 'firefox-') || matrix.project == 'new-2'");
+    expect(artifact.if).toBe(
+        "failure() || startsWith(matrix.project, 'firefox-') || startsWith(matrix.project, 'new-2-') || startsWith(matrix.project, 'new-3') || matrix.project == 'tables-1' || matrix.project == 'utils'",
+    );
     expect(artifact.with.name).toBe(
         "e2e-artifacts-${{ env.E2E_BROWSER }}-${{ matrix.project }}-${{ github.run_id }}-${{ github.run_attempt }}",
     );
