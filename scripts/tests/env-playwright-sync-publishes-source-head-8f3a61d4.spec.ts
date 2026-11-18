@@ -62,6 +62,12 @@ describe.each([
         const obs = observe(fx);
         const C = git(fx.tmp, obs, "rev-parse", "HEAD");
         expect(git(fx.tmp, obs, "rev-list", "--parents", "-n1", C)).toBe(`${C} ${fx.H}`);
+        // GitHub's documented opt-in applies to the generated commit, not its
+        // source history. It must not suppress the corrected head's CI.
+        const message = git(fx.tmp, obs, "show", "-s", "--format=%B", C);
+        expect(message).toContain("[dependabot skip]");
+        expect(message).not.toMatch(/\[(?:skip ci|ci skip|no ci|skip actions|actions skip)\]/i);
+        expect(git(fx.tmp, obs, "show", "-s", "--format=%B", fx.H)).not.toContain("[dependabot skip]");
         expect(git(fx.tmp, obs, "diff", "--name-only", fx.H, C)).toBe(DOCKERFILE);
         expect(fs.readFileSync(path.join(obs, DOCKERFILE), "utf-8")).toBe(dockerfile(to));
         expect(fs.existsSync(path.join(obs, "BASE_SENTINEL.txt"))).toBe(false);
