@@ -14,5 +14,6 @@ components:
 - functions/index.js
 tests:
 - client/e2e/core/sch-export-ics-5a1c2b3d.spec.ts
+- client/e2e/hosting-schedule/sch-service-hosting-contract-4d23a6b8.spec.ts
 - functions/test/ical.test.js
 - functions/test/scheduled-publishing.test.js

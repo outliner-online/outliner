@@ -17,8 +17,19 @@ describe("#5932 production Firebase origin", () => {
             vi.stubEnv("MODE", "production");
             vi.stubEnv("DEV", false);
             vi.stubEnv("VITE_FIREBASE_FUNCTIONS_URL", values.VITE_FIREBASE_FUNCTIONS_URL);
-            for (const name of ["getUserProjects", "saveProject", "deleteProject", "listSchedules", "health"]) {
+            for (const name of ["getUserProjects", "saveProject", "deleteProject", "health"]) {
                 expect(getFirebaseFunctionUrl(name)).toBe(`https://outliner-online.com/api/${name}`);
+            }
+            for (
+                const [name, path] of Object.entries({
+                    createSchedule: "create-schedule",
+                    listSchedules: "list-schedules",
+                    updateSchedule: "update-schedule",
+                    cancelSchedule: "cancel-schedule",
+                    exportSchedulesIcal: "export-schedules-ical",
+                })
+            ) {
+                expect(getFirebaseFunctionUrl(name)).toBe(`https://outliner-online.com/api/${path}`);
             }
             expect(values.VITE_FIREBASE_PROJECT_ID).toBe("outliner-d57b0");
             expect(values.VITE_FIREBASE_AUTH_DOMAIN).toBe("outliner-d57b0.firebaseapp.com");
