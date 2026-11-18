@@ -466,7 +466,7 @@ direct_runner_provenance() {
   if (( remaining > 7 )); then remaining=7; fi
   timeout --signal=TERM --kill-after=1 "$remaining" python3 \
     "$ROOT_DIR/scripts/collect-apt-provenance.py" \
-    --output "$ROOT_DIR/job_logs/apt-provenance-$phase.json" -- "$@" \
+    --output "$ROOT_DIR/job_logs/apt-provenance-$phase.json" --phase "$phase" -- "$@" \
     >/dev/null 2>&1 || status=$?
   echo "APT provenance: phase=$phase diagnostic-exit=$status (not readiness evidence)."
   return 0
