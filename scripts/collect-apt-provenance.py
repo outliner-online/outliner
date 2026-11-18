@@ -32,7 +32,7 @@ def uri_identity(value):
 
 
 def sanitize(text):
-    return re.sub(r"[a-zA-Z][\w+.-]*://[^\s\"'<>]+", lambda m: uri_identity(m[0]), text)
+    return re.sub(r"\b[a-zA-Z][\w+.-]*:(?://|/)[^\s\"'<>]+", lambda m: uri_identity(m[0]), text)
 
 
 def read_fields(path, allowed):
@@ -62,9 +62,9 @@ def read_fields(path, allowed):
     return result
 
 
-def probe(argv):
+def probe(argv, timeout=1):
     try:
-        run = subprocess.run(argv, capture_output=True, text=True, timeout=1)
+        run = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
         # A missing/unavailable command is diagnostic failure, never success.
         return {"exit": run.returncode, "stdout": sanitize(run.stdout[:1048576]),
                 "stderr": sanitize(run.stderr[:32768]),
@@ -75,7 +75,7 @@ def probe(argv):
         return {"status": "unavailable", "output": "not retained"}
 
 
-def collect(root, required, runner=probe):
+def collect(root, required, runner=probe, *, phase="before", output=None, checkpoint=lambda result: None):
     config = runner(["apt-config", "shell", "ROOT", "Dir", "ETC", "Dir::Etc", "LIST", "Dir::Etc::sourcelist",
                      "PARTS", "Dir::Etc::sourceparts", "PREF", "Dir::Etc::preferences",
                      "PREFPARTS", "Dir::Etc::preferencesparts", "STATE", "Dir::State", "LISTS", "Dir::State::lists"])
@@ -120,14 +120,10 @@ def collect(root, required, runner=probe):
                 # Filenames may encode private paths; do not publish them.
                 indexes.append({"name_sha256": hashlib.sha256(file.name.encode()).hexdigest(),
                                 "bytes": st.st_size, "mtime_ns": st.st_mtime_ns})
-    depends = runner(["apt-cache", "depends", "--recurse", "--important", *required]) if required else {"status": "no required set reached"}
-    names = set(required)
-    if depends.get("exit") == 0:
-        names.update(re.findall(r"^([a-z0-9][a-z0-9+.-]*(?::[a-z0-9]+)?)$", depends["stdout"], re.M))
-    limited = len(names) > 4096
-    names = sorted(names)[:4096]
-    return {
-        "schema": 1, "observed_at_ns": time.time_ns(),
+    result = {
+        "schema": 2, "observed_at_ns": time.time_ns(), "phase": phase,
+        "collection_status": "partial", "readiness_evidence": False, "source_exclusion_proof": False,
+        "refresh_boundary": "strict refresh returned success" if phase == "after-refresh" else "not asserted",
         "purpose": "offline observations only; indexes may be stale/incomplete; not readiness or source-exclusion proof",
         "runner": {k: os.environ[k] for k in ("ImageOS", "ImageVersion", "RUNNER_OS", "RUNNER_ARCH", "GITHUB_SHA", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT")
                    if k in os.environ and re.fullmatch(r"[a-zA-Z0-9._-]{1,100}", os.environ[k])},
@@ -135,19 +131,64 @@ def collect(root, required, runner=probe):
         "config_status": {k: v for k, v in config.items() if k != "stdout"},
         "paths_observed": bool(paths), "source_fields": sources, "pin_fields": pins,
         "index_inventory": indexes, "required_by_repository": required,
-        "installed": runner(["dpkg-query", "-W", "-f=${Package}\t${Version}\t${Status}\t${Provides}\n"]),
-        "source_policy": runner(["apt-cache", "policy"]),
-        "dependency_observation": depends, "dependency_names_limited": limited,
-        "candidate_policy": runner(["apt-cache", "policy", *names]) if names else {"status": "no required set reached"},
         "limitations": ["Package closure uses existing indexes and may be incomplete.",
-                        "Repository required set does not enumerate additional locked Playwright native dependency declarations.",
+                        "Dependency/provider output is a cached observation, not independently resolved authoritative solver closure.",
+                        "APT trust and signed-manifest hash links are observations, not independent signature/freshness verification.",
                         "Unknown source options, URI paths, key contents and credential configuration are intentionally not collected."],
     }
+    checkpoint(result)
+    names = set(required)
+    if phase != "before":
+        repository = Path(__file__).resolve().parents[1]
+        native = probe(["node", str(repository / "scripts/locked-browser-os-packages.cjs"),
+                        str(repository), os.environ.get("E2E_BROWSER", "chromium")], timeout=3)
+        result["locked_native_probe"] = {k: v for k, v in native.items() if k not in ("stdout", "stderr")}
+        if native.get("exit") == 0 and not native.get("truncated"):
+            try:
+                declarations = json.loads(native["stdout"])
+                native_names = declarations["packages"]
+                if not native_names or any(not re.fullmatch(r"[a-z0-9][a-z0-9+.-]*", name) for name in native_names):
+                    raise ValueError("unsupported package declaration")
+                result["locked_native_declarations"] = declarations
+                names.update(native_names)
+            except (ValueError, KeyError, TypeError):
+                result["locked_native_probe"] = {"status": "unsupported-declarations"}
+        checkpoint(result)
+    if phase == "after-refresh" and output:
+        from apt_catalog_evidence import collect_catalogs
+        catalog_dir = output.with_name(output.stem + ".catalogs")
+        result["catalog_directory"] = catalog_dir.name
+        result["public_catalog_observations"] = collect_catalogs(root, lists, catalog_dir)
+        checkpoint(result)
+    for key, command in [
+        ("installed", ["dpkg-query", "-W", "-f=${Package}\t${Version}\t${Status}\t${Provides}\n"]),
+        ("source_policy", ["apt-cache", "policy"]),
+        ("provider_observation", ["apt-cache", "showpkg", *sorted(names)]),
+        ("dependency_observation", ["apt-cache", "depends", "--recurse", "--important", *sorted(names)]),
+    ]:
+        result[key] = runner(command) if names else {"status": "no required set reached"}
+        checkpoint(result)
+    depends = result["dependency_observation"]
+    if depends.get("exit") == 0 and not depends.get("truncated"):
+        names.update(re.findall(r"^([a-z0-9][a-z0-9+.-]*(?::[a-z0-9]+)?)$", depends["stdout"], re.M))
+    result["dependency_names_limited"] = len(names) > 4096
+    result["queried_candidate_names"] = sorted(names)[:4096]
+    result["candidate_policy"] = runner(["apt-cache", "policy", *sorted(names)[:4096]]) if names else {"status": "no required set reached"}
+    keys = ["architecture", "config_status", "installed", "source_policy", "provider_observation", "dependency_observation", "candidate_policy"]
+    if phase != "before":
+        keys.append("locked_native_probe")
+    complete = all(result[key].get("exit") == 0 and not result[key].get("truncated") for key in keys)
+    if phase == "after-refresh":
+        complete = complete and result.get("public_catalog_observations", {}).get("status") == "retained-observations"
+    result["collection_status"] = "collected-observations" if complete and not result["dependency_names_limited"] else "partial"
+    checkpoint(result)
+    return result
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--phase", choices=["before", "after-refresh", "after"], default="before")
     parser.add_argument("packages", nargs="*")
     args = parser.parse_args()
     if any(not re.fullmatch(r"[a-z0-9][a-z0-9+.-]*(?::[a-z0-9]+)?", p) for p in args.packages):
@@ -157,12 +198,13 @@ def main():
     # Timeout/error leaves an explicit incomplete record, not a ready claim.
     with target.open("x", encoding="utf-8") as stream:
         stream.write('{"status":"incomplete","readiness_evidence":false}\n')
-    result = collect(Path("/"), args.packages)
-    temporary = target.with_name(target.name + ".pending")
-    with temporary.open("x", encoding="utf-8") as stream:
-        json.dump(result, stream, indent=2)
-        stream.write("\n")
-    temporary.replace(target)
+    def checkpoint(result):
+        temporary = target.with_name(target.name + ".pending")
+        with temporary.open("x", encoding="utf-8") as stream:
+            json.dump(result, stream, indent=2)
+            stream.write("\n")
+        temporary.replace(target)
+    collect(Path("/"), args.packages, phase=args.phase, output=target, checkpoint=checkpoint)
 
 
 if __name__ == "__main__":
