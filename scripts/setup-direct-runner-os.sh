@@ -7,6 +7,10 @@ export ROOT_DIR
 if [ "${1:-}" = "--worker" ]; then
   source "$ROOT_DIR/scripts/common-functions.sh"
   export DIRECT_RUNNER_OS_STRICT=1
+  DIRECT_RUNNER_REQUIRED_PACKAGES=()
+  # Snapshot on ordinary success/failure; the outer supervisor still owns the
+  # deadline. A timeout may prevent this snapshot and must stay a failure.
+  trap 'acquisition_status=$?; direct_runner_provenance after "${DIRECT_RUNNER_REQUIRED_PACKAGES[@]}"; exit "$acquisition_status"' EXIT
   direct_runner_stage prerequisites
   if [ "${SKIP_APT_INSTALL:-0}" = "1" ]; then
     echo "Error: direct-runner setup cannot skip required OS acquisition." >&2
