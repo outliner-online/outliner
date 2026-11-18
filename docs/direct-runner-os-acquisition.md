@@ -93,23 +93,44 @@ must not be reported as completing the Issue before that validation is available
 
 ## Read-only APT provenance (#5964)
 
-Before the first repository required-package verification and on ordinary worker
-exit, `collect-apt-provenance.py` records observations in
-`job_logs/apt-provenance-before.json` and `apt-provenance-after.json`. The existing
-artifact uploader retains these files. Collection shares the original acquisition
-deadline, takes at most seven seconds plus one second of termination grace per
-snapshot, and never changes the acquisition exit code. An exhausted deadline can
-prevent collection; diagnostic errors, incomplete files and absent snapshots are
-not successful package acquisition. No extra index refresh or installation runs.
+Before the first repository required-package verification, immediately after the
+strict refresh returns success, and on ordinary worker exit,
+`collect-apt-provenance.py` records observations in
+`job_logs/apt-provenance-{before,after-refresh,after}.json`. The existing artifact
+uploader retains these files. Collection shares the original acquisition deadline,
+takes at most seven seconds plus one second of termination grace per snapshot,
+and never changes the acquisition exit code. Atomic partial checkpoints retain
+completed observations if later probes or the enclosing collector time out. An
+exhausted deadline can prevent collection; missing, partial or failed collection
+never means successful package acquisition. No extra refresh or installation runs.
 
-Evidence includes allowlisted runner image/revision fields, APT source and pin
-fields, index sizes/timestamps, installed package/provider state, and cached
-candidate/dependency observations for the actual repository required set. URI
-userinfo, query, fragment and paths are omitted (paths have hashes); auth/proxy
-configuration and key contents are not collected. Unknown source options and
-continuation fields are omitted. The source/pin observations are not a complete
-security-configuration audit. The repository required set does not enumerate the
-additional locked Playwright native dependency declarations.
+Evidence includes allowlisted image/revision fields, source and pin fields, index
+sizes/timestamps, installed package/provider state, `apt-cache showpkg` provider
+observations and cached candidate/dependency observations. At the refresh boundary
+and ordinary exit, a TypeScript AST reader obtains the requested browser and
+`tools` declarations from the actual version-fenced Playwright bundle. It uses the
+SDK's own platform selector, rejects unsupported/ambiguous/nonliteral tables, and
+records bundle SHA-256 and lock integrity. It never invokes the SDK installer or
+executes extracted table expressions. The repository and SDK declarations seed
+queries; their output remains an observation, not an independently resolved
+complete dependency/alternative-provider proof.
+
+At the refresh boundary only, `apt-get indextargets` observes existing metadata
+without fetching. For the public Microsoft Ubuntu26.04/resolute feed only,
+allowlisted local package indexes are read with `apt-helper cat-file` and retained
+with their existing clearsigned InRelease under the snapshot's `.catalogs/`
+directory. Catalog bytes must match the signed manifest's SHA-256/size entry and
+APT's observed trust flag must be yes. These checks do **not** independently
+revalidate the signature or prove freshness/source necessity. Missing manifests,
+hash mismatch, unsupported layouts, unavailable indexes, private URIs and
+truncated/timed-out probes stay explicit and cannot become complete evidence.
+Other catalogs and key/auth/proxy files are not directly opened by the collector.
+
+Source URI userinfo/query/fragment/path and credentials are not exported (source
+paths have hashes). Public catalog exports additionally reject credential-bearing
+or query/fragment-bearing URIs. Unknown source options and continuation fields
+are omitted; this is not a complete security-configuration audit. No source is
+excluded or changed by these diagnostics.
 
 Cached metadata may be stale, incomplete or unavailable. These observations
 cannot prove readiness, a complete dependency closure, or that an unrelated
