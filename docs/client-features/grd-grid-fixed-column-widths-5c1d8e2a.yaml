@@ -18,6 +18,7 @@ acceptance:
 - Fixed-width rendering preserves each column's cell component and its SQL-derived write eligibility
 - Long unbreakable labels and values, padding, controls and focused inline editors never widen a fixed column nor paint over neighboring contents
 - On an editable Grid host every visible data-column header (including the final column and zero-row results) offers a right-edge resize handle for primary mouse, touch and pen pointers; utility columns, read-only hosts and raw Table views offer none
+- Reload restores the same Grid identity and saved width before its header and body geometry are checked; missing hydration or incorrect saved or rendered widths remain failures
 - Rendering, reloading or resizing never writes presentation settings, mutates query/schema/records, creates a Grid, or adds persisted width state to a raw Table view
 - Setting or clearing a width preserves established row and reordered-column selections by exact record and result-column identity, without changing source data
 - Widths follow exact result-column names across reorder, relabel, hide and restore; hidden or query-absent names occupy no track while their saved widths stay dormant and reapply on return
