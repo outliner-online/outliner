@@ -155,9 +155,13 @@ describe("production WebSocket Origin policy", () => {
             });
         });
 
-        // This isolated server deliberately has no Firebase app. Reaching the existing
-        // FIREBASE_NOT_READY rejection proves that Origin admission did not grant access.
-        expect(verifyTokenStub.called).to.equal(false);
+        // In a focused run Firebase is deliberately uninitialized, while the complete
+        // server suite has already initialized it. Either existing authentication gate
+        // must reject before authorization; when verification is reached it must receive
+        // the invalid token supplied by this client.
+        if (verifyTokenStub.called) {
+            expect(verifyTokenStub.calledOnceWith("invalid-token")).to.equal(true);
+        }
         expect(checkAccessStub.called).to.equal(false);
     });
 });
