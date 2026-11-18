@@ -90,3 +90,48 @@ E2E test execution/results. Record cancellation, unavailable Docker, unavailable
 CI publication or unexecuted tests explicitly. Local shell/static checks and
 isolated regression success cannot substitute for that evidence. This repair
 must not be reported as completing the Issue before that validation is available.
+
+## Read-only APT provenance (#5964)
+
+Before the first repository required-package verification and on ordinary worker
+exit, `collect-apt-provenance.py` records observations in
+`job_logs/apt-provenance-before.json` and `apt-provenance-after.json`. The existing
+artifact uploader retains these files. Collection shares the original acquisition
+deadline, takes at most seven seconds plus one second of termination grace per
+snapshot, and never changes the acquisition exit code. An exhausted deadline can
+prevent collection; diagnostic errors, incomplete files and absent snapshots are
+not successful package acquisition. No extra index refresh or installation runs.
+
+Evidence includes allowlisted runner image/revision fields, APT source and pin
+fields, index sizes/timestamps, installed package/provider state, and cached
+candidate/dependency observations for the actual repository required set. URI
+userinfo, query, fragment and paths are omitted (paths have hashes); auth/proxy
+configuration and key contents are not collected. Unknown source options and
+continuation fields are omitted. The source/pin observations are not a complete
+security-configuration audit. The repository required set does not enumerate the
+additional locked Playwright native dependency declarations.
+
+Cached metadata may be stale, incomplete or unavailable. These observations
+cannot prove readiness, a complete dependency closure, or that an unrelated
+source can safely be excluded. The strict source refresh, installed-package
+verification and actual browser checks remain authoritative. The locked
+Playwright CLI also refreshes APT during `install-deps`; diagnosing just the
+initial update must not conceal that second consumer.
+
+Issue #5964 records Microsoft resolute InRelease HTTP 429 before E2E on main
+`dfd17de5`. Retained initialization logs identify `ubuntu-26.04`, image version
+`20261111.196.1` (distinct from Provisioner version `20261103.629`). Neither that
+identity nor a later passing run establishes the rate-limit cause or source
+necessity. No source exclusion or retry-policy correction is implemented here.
+
+Collector/privacy and actual supervisor exit/deadline contract regressions run in
+the existing CI Python contract-test discovery:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts/tests -p 'test_bounded_e2e_apt_provenance.py' -v
+```
+
+These use private diagnostic/acquisition substitutes to test control flow; they
+are not the real Ubuntu acquisition/browser ENV suite described above. Exact
+revision normal CI must retain the new observations and distinguish setup
+completion and actual E2E execution from failed, cancelled or unexecuted cases.
