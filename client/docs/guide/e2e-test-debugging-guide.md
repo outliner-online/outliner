@@ -20,6 +20,16 @@ assertions instead of fixed sleeps or forced clicks.
 
 ## Common Issues and Solutions
 
+### Real socket terminal callbacks
+
+The on-premises tunnel fixture can reach a held terminal callback from a real
+socket error, including `ECONNRESET`, before that socket emits `close`. A single
+`setImmediate` does not establish that both raw socket closes have occurred.
+Start the identity-bound raw-close observation alongside the existing terminal
+waits, within their 15-second deadline. Keep the callback held until both closes
+are observed, then verify that cleanup has not destroyed either socket before
+releasing it. Preserve the close, cleanup, and event-order assertions.
+
 ### 1. Firestore Permission Errors
 
 **Symptom**: `PERMISSION_DENIED` errors when tests try to write to Firestore
