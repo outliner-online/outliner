@@ -30,6 +30,9 @@ if [ "${1:-}" = "--worker" ]; then
   install_os_utilities --os-only
   # Always required, even on a browser-cache hit. Never use cache as OS evidence.
   apt_is_available
+  # Preserve evidence of the successful strict refresh before the SDK's own
+  # acquisition can consume the remaining deadline. No additional refresh runs.
+  direct_runner_provenance after-refresh "${DIRECT_RUNNER_REQUIRED_PACKAGES[@]}"
   direct_runner_stage "playwright-install-deps ($browser, $pinned)"
   # Start the pinned CLI inside the privileged supervisor. It then installs
   # directly as root instead of introducing another unsupervised sudo boundary.
