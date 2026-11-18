@@ -40,7 +40,7 @@ apt_is_available() {
     if [ "$APT_AVAILABLE_CACHE" = "yes" ]; then return 0; fi
     direct_runner_stage "apt-update"
     # Unlike the local probe, partial source failure must fail and retain diagnostics.
-    sudo apt-get -o APT::Update::Error-Mode=any -o Acquire::Retries=1 \
+    direct_runner_root apt-get -o APT::Update::Error-Mode=any -o Acquire::Retries=1 \
       -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 \
       -o Acquire::ForceIPv4=true update || return $?
     APT_AVAILABLE_CACHE="yes"
@@ -72,7 +72,7 @@ retry_apt_get() {
   local attempts=0
   local max_attempts=3
   while true; do
-    if sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::ForceIPv4=true "$@"; then
+    if direct_runner_root apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::ForceIPv4=true "$@"; then
       break
     else
       local apt_status=$?
@@ -85,7 +85,7 @@ retry_apt_get() {
     fi
     echo "apt-get $* failed (attempt ${attempts}/${max_attempts}); repairing and retrying..."
     if [ "${DIRECT_RUNNER_OS_STRICT:-0}" = "1" ]; then direct_runner_stage "dpkg-repair ($*)"; fi
-    sudo dpkg --configure -a || true
+    direct_runner_root dpkg --configure -a || true
     if [ "${DIRECT_RUNNER_OS_STRICT:-0}" = "1" ]; then direct_runner_stage "apt-install ($*)"; fi
     sleep 2
   done
@@ -413,6 +413,40 @@ install_global_packages() {
 direct_runner_stage() {
   echo "Direct-runner stage: $*"
   printf '%s\n' "$*" > "$E2E_OS_STAGE_FILE"
+}
+
+# Keep the privilege boundary inside its own deadline. A runner-owned timeout
+# cannot by itself guarantee that a sudo-launched acquisition closes its output
+# pipe. The root-owned timeout can terminate its root-owned acquisition group.
+# The outer worker's existing five-second grace contains the inner two-second
+# TERM/KILL grace and millisecond remaining-time calculation.
+direct_runner_root() {
+  if [ "${DIRECT_RUNNER_OS_STRICT:-0}" != "1" ]; then
+    sudo "$@"
+    return $?
+  fi
+  if ! [[ "${E2E_OS_WORK_DEADLINE:-}" =~ ^[0-9]+$ ]]; then
+    echo "Error: direct-runner privileged acquisition has no aggregate deadline." >&2
+    return 64
+  fi
+  # Calculate remaining time after crossing sudo, so sudo/PAM startup time
+  # cannot grant the privileged acquisition a fresh relative timeout.
+  local bounded=(bash -c '
+    deadline=$1
+    shift
+    remaining=$((deadline - $(date +%s%3N)))
+    if (( remaining <= 0 )); then
+      echo "Error: direct-runner acquisition budget exhausted before $1." >&2
+      exit 124
+    fi
+    printf -v duration "%d.%03d" "$((remaining / 1000))" "$((remaining % 1000))"
+    exec timeout --signal=TERM --kill-after=2 "$duration" "$@"
+  ' direct-runner-root "$E2E_OS_WORK_DEADLINE" "$@")
+  if (( EUID == 0 )); then
+    "${bounded[@]}"
+  else
+    sudo --non-interactive "${bounded[@]}"
+  fi
 }
 
 # dpkg -s alone also succeeds for config-files-only entries. Accept only fully

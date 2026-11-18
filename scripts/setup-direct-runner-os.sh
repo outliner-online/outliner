@@ -27,7 +27,9 @@ if [ "${1:-}" = "--worker" ]; then
   # Always required, even on a browser-cache hit. Never use cache as OS evidence.
   apt_is_available
   direct_runner_stage "playwright-install-deps ($browser, $pinned)"
-  node "$ROOT_DIR/client/node_modules/playwright/cli.js" install-deps "$browser"
+  # Start the pinned CLI inside the privileged supervisor. It then installs
+  # directly as root instead of introducing another unsupervised sudo boundary.
+  direct_runner_root "$(command -v node)" "$ROOT_DIR/client/node_modules/playwright/cli.js" install-deps "$browser"
   # Check again after Playwright's package transaction, before browser readiness.
   install_os_utilities --os-only
   direct_runner_stage "playwright-browser ($browser, $pinned)"
@@ -38,8 +40,8 @@ fi
 
 # Includes all probes, APT retries, repair, install-deps and browser preparation.
 # 595s work + at most 5s TERM-to-KILL grace = 600s, below the 30m E2E job.
-# Require GNU timeout's process-group supervision for sudo/APT descendants;
-# _run_bounded's portable watchdog only signals its immediate child PID.
+# The outer timeout bounds the unprivileged worker/browser preparation; each
+# privileged acquisition also has a root-owned supervisor using this deadline.
 budget=${E2E_OS_BUDGET_SECONDS:-600}
 if ! [[ "$budget" =~ ^[0-9]{1,3}$ ]]; then
   echo "E2E_OS_BUDGET_SECONDS must be an integer from 6 through 600." >&2
@@ -56,6 +58,7 @@ export E2E_OS_STAGE_FILE
 trap 'rm -f "$E2E_OS_STAGE_FILE"' EXIT
 printf '%s\n' starting > "$E2E_OS_STAGE_FILE"
 started=$SECONDS
+export E2E_OS_WORK_DEADLINE=$(($(date +%s%3N) + (budget - 5) * 1000))
 status=0
 timeout --signal=TERM --kill-after=5 "$((budget - 5))" bash "$0" --worker || status=$?
 stage=$(cat "$E2E_OS_STAGE_FILE")

@@ -22,7 +22,10 @@ beforeAll(() => {
     mkdirSync(join(buildContext, "client"));
     copyFileSync(join(root, "client/package-lock.json"), join(buildContext, "client/package-lock.json"));
     copyFileSync(join(root, "scripts/tests/fixtures/direct-runner-os/Dockerfile"), join(buildContext, "Dockerfile"));
-    const build = spawnSync("docker", ["build", "-t", image, buildContext], {
+    // Honor a managed environment's trusted CA without disabling TLS checks.
+    const ca = process.env.NODE_EXTRA_CA_CERTS;
+    const trust = ca ? ["--secret", `id=environment-ca,src=${ca}`] : [];
+    const build = spawnSync("docker", ["build", ...trust, "-t", image, buildContext], {
         cwd: root,
         encoding: "utf8",
         timeout: 900000,
@@ -98,3 +101,20 @@ test("a real warm browser cache cannot hide a removed required dependency", () =
     expect(negativeLog).toContain("Required OS package is not installed: lsof");
     expect(negativeLog).not.toContain("stage=ready");
 }, 660000);
+
+test("a nonroot runner retains its own cache and executes the locked Firefox", () => {
+    const { result, elapsed, log } = run("nonroot-success", 650000);
+    expect(result.status).toBe(0);
+    expect(elapsed).toBeLessThan(610000);
+    expect(log).toContain("stage=ready exit=0");
+    expect(log).toContain("INDEPENDENT_NONROOT_FIREFOX_EXECUTED");
+}, 660000);
+
+test("nonroot Playwright acquisition closes its tee pipeline and root acquisition within the budget", () => {
+    const { result, log } = run("nonroot-playwright-slow", 850000);
+    expect(result.status).toBe(0);
+    const record = JSON.parse(log.split("NONROOT_PIPELINE_OUTCOME ")[1].split("\n")[0]);
+    expect([124, 137]).toContain(record.exit);
+    expect(record.elapsedMs).toBeLessThan(33000);
+    expect(record.activeAcquisition).toEqual([]);
+}, 860000);

@@ -16,6 +16,14 @@ timeout. `E2E_OS_BUDGET_SECONDS` can shorten the budget (6–600 seconds), never
 extend it. It bounds this setup stage; earlier npm/cache steps can still consume
 job time and an enclosing cancellation is not a successful setup.
 
+Each privileged acquisition also starts a root-owned `timeout` **inside** the
+sudo boundary, using the remaining work deadline and a two-second kill grace.
+The locked Playwright dependency CLI runs inside that supervisor; browser
+downloads and execution retain the runner's user and cache. This prevents a
+privileged acquisition from keeping the action's `tee` pipeline open after the
+unprivileged worker times out. The inner grace fits within the outer five-second
+grace; neither the aggregate budget nor the job timeout is increased.
+
 Source refresh uses `APT::Update::Error-Mode=any` so a partial index refresh
 cannot conceal an unavailable source. Diagnostics are visible in the existing
 `job_logs/setup-browser-<browser>.log`. Every result includes the last stage,
@@ -46,6 +54,16 @@ production package verifier. No package manager commands are mocked and no
 host package/source/network state changes. Docker absence is a failed prerequisite,
 not a skipped or passing regression.
 
+Additional real nonroot cases exercise passwordless sudo, the locked Firefox
+and its runner-owned cache. A signed Ubuntu metadata proxy stalls a genuine
+Firefox-only dependency download after the real Playwright dependency phase
+begins and its metadata update completes. An independent observer measures
+the actual setup-plus-`tee` pipeline exit, verifies that root acquisition
+processes and their source connections end, and rejects its own watchdog as
+success. Proxy warmup occurs before the measured negative acquisition. Managed
+environments can supply their trusted CA through `NODE_EXTRA_CA_CERTS`; TLS and
+APT signature checks remain enabled.
+
 ## Incident evidence and publication validation
 
 The retained incident is run **43026891337**, core-3 job **130548244153**,
@@ -56,6 +74,15 @@ service and test execution had not begun. PR #5920's manifest/lockfile-only
 changes do not establish a cause for that OS acquisition failure. The evidence
 does not distinguish runner resolution/network conditions from package-service
 conditions; neither fallback success nor a later successful rerun proves causality.
+
+A separate reproduced deadline violation occurred in run **44203816431**,
+Firefox-selection-new job **134465542228**, tested merge checkout
+`f6038ba0721c265c89ff479808180b3c10e09203` with repair head
+`2893f8389dd71a00ad5bc0abb78302fa9cd2ae74`. Setup reported exit 124 at
+595 seconds, but APT acquisition and the action's output pipeline continued
+until approximately 738 seconds. Tests correctly remained unstarted. This
+establishes a deadline violation; the log does not contain process identities
+that would uniquely establish which signal or privilege boundary failed.
 
 Before acceptance, run normal direct-runner CI at the **exact final repair SHA**
 and retain its run/job URLs and setup/browser/test logs, including actual affected

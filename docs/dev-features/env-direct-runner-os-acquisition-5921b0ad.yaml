@@ -6,4 +6,4 @@ category: environment
 status: implemented
 tests:
 - scripts/tests/env-direct-runner-os-acquisition-5921b0ad.spec.ts
-notes: Real isolated Ubuntu APT/dpkg and browser regressions require Docker control. Passing these regressions does not replace normal CI evidence at the final repair SHA. See docs/direct-runner-os-acquisition.md for the budget and evidence contract.
+notes: Real isolated Ubuntu APT/dpkg and browser regressions require Docker control. Nonroot Firefox cases check the runner-owned cache and root acquisition termination through the actual tee pipeline during a stalled dependency download. Passing these regressions does not replace normal CI evidence at the final repair SHA. See docs/direct-runner-os-acquisition.md for the budget and evidence contract.

@@ -1,8 +1,41 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cp -r /source/scripts /fixture/scripts
+# Workspace mounts can be private to their owner; the container's runner must
+# be able to read the copied production scripts without writing them.
+chmod -R a+rX /fixture/scripts
 export ROOT_DIR=/fixture
+# Preserve the managed container's legitimate egress route across sudo without
+# changing production sudo policy. Loopback negative sources remain direct.
+python3 - <<'PY'
+import json, os, pathlib
+proxy = os.environ.get('http_proxy') or os.environ.get('HTTP_PROXY')
+if proxy:
+    pathlib.Path('/etc/apt/apt.conf.d/80fixture-proxy').write_text(
+        'Acquire::http::Proxy ' + json.dumps(proxy) + ';\n'
+        'Acquire::http::Proxy::127.0.0.1 "DIRECT";\n')
+PY
 case "$1" in
+  nonroot-success)
+    runuser -u runner -- env E2E_BROWSER=firefox bash /fixture/scripts/setup-direct-runner-os.sh
+    test "$(stat -c %u /home/runner/.cache/ms-playwright)" = "$(id -u runner)"
+    cd /fixture/client
+    runuser -u runner -- node - <<'NODE'
+const { firefox } = require('playwright');
+(async () => {
+  if (process.getuid() === 0) throw new Error('nonroot runner required');
+  const browser = await firefox.launch({headless: true});
+  const page = await browser.newPage();
+  await page.setContent('<title>nonroot direct-runner</title>');
+  if (await page.title() !== 'nonroot direct-runner') throw new Error('browser assertion failed');
+  await browser.close();
+  console.log('INDEPENDENT_NONROOT_FIREFOX_EXECUTED');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+NODE
+    ;;
+  nonroot-playwright-slow)
+    bash /fixture/scripts/tests/fixtures/direct-runner-os/nonroot-playwright-slow.sh
+    ;;
   success)
     bash /fixture/scripts/setup-direct-runner-os.sh
     # Independent producer/consumer evidence: dpkg state plus a real browser.
