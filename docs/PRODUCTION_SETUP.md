@@ -116,9 +116,10 @@ canonical origin to complete Google popup sign-in. Inspect a read-only API reque
 in the Network panel: confirm its canonical origin, existing method/path, JSON
 payload and Firebase ID token, and successful JSON response. Do not log or copy
 tokens into reports. Do not create/delete production users or projects for this
-check. The current helper produces camelCase paths (for example
-`/api/listSchedules`) while some Hosting rewrites use kebab-case; report a mismatch
-if encountered rather than changing endpoint contracts as part of this cutover.
+check. The Schedule helper maps its five operations to the configured kebab-case
+Hosting routes (for example `/api/list-schedules`); unrelated Function mappings
+remain unchanged. Verify the actual deployed revision and report any route mismatch
+rather than treating HTML fallback as a successful authenticated API response.
 A no-auth health response cannot prove popup sign-in or authenticated reads.
 
 On 2026-11-15 at 14:56 UTC, HTTPS GETs through the configured environment proxy
