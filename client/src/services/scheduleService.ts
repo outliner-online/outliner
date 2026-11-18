@@ -140,6 +140,9 @@ export async function exportSchedulesIcal(
     const filenameMatch = contentDisposition.match(/filename="([^"]+)"/);
     const filename = filenameMatch ? filenameMatch[1] : `outliner-schedules-${pageId}.ics`;
     const text = await response.text();
+    if (!response.headers.get("Content-Type")?.includes("text/calendar") || !text.startsWith("BEGIN:VCALENDAR")) {
+        throw new Error("Invalid calendar response");
+    }
     const blob = new Blob([text], { type: "text/calendar" });
     return { blob, filename };
 }

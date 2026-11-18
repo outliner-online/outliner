@@ -1,0 +1,39 @@
+name: Schedule service Hosting contract
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  schedule-hosting-service:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install locked dependencies and emulator tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npm ci --prefix client --no-audit --no-fund
+          npm ci --prefix functions --no-audit --no-fund
+          npm install --prefix "$RUNNER_TEMP/firebase-tools" --no-audit --no-fund "firebase-tools@$(cat .firebase-tools-version)"
+          echo "$RUNNER_TEMP/firebase-tools/node_modules/.bin" >> "$GITHUB_PATH"
+          client/node_modules/.bin/playwright install --with-deps chromium
+      - name: Verify real private Hosting and Functions boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD
+          bash scripts/test-schedule-service-hosting.sh
