@@ -44,7 +44,7 @@ onMount(() => {
                 "Content-Type": "application/json",
                 Authorization: `Bearer ${idToken}`,
             },
-            body: JSON.stringify({ pageId }),
+            body: JSON.stringify({ idToken, pageId }),
         });
         if (res.ok) {
             const data = await res.json();

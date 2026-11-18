@@ -34,7 +34,9 @@ async function fulfillListSchedules(route: Route, schedules: ScheduleFixture[]):
     const authorization = await request.headerValue("authorization");
     expect(authorization).toMatch(/^Bearer .+/);
 
-    expect(request.postDataJSON()).toEqual({ pageId: "mutation-jobs" });
+    const body = request.postDataJSON();
+    expect(body.pageId).toBe("mutation-jobs");
+    expect(typeof body.idToken === "string" && body.idToken === authorization?.slice(7)).toBe(true);
 
     await route.fulfill({
         status: 200,
