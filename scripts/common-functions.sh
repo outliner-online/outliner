@@ -449,6 +449,29 @@ direct_runner_root() {
   fi
 }
 
+# Read-only, best-effort evidence. It shares the acquisition deadline and must
+# never replace package/browser readiness or change the acquisition exit code.
+direct_runner_provenance() {
+  local phase=$1 remaining status=0
+  shift
+  if ! [[ "${E2E_OS_WORK_DEADLINE:-}" =~ ^[0-9]+$ ]]; then
+    echo "APT provenance: phase=$phase not collected (no acquisition deadline)."
+    return 0
+  fi
+  remaining=$(( (E2E_OS_WORK_DEADLINE - $(date +%s%3N)) / 1000 - 2 ))
+  if (( remaining <= 0 )); then
+    echo "APT provenance: phase=$phase not collected (acquisition deadline)."
+    return 0
+  fi
+  if (( remaining > 7 )); then remaining=7; fi
+  timeout --signal=TERM --kill-after=1 "$remaining" python3 \
+    "$ROOT_DIR/scripts/collect-apt-provenance.py" \
+    --output "$ROOT_DIR/job_logs/apt-provenance-$phase.json" -- "$@" \
+    >/dev/null 2>&1 || status=$?
+  echo "APT provenance: phase=$phase diagnostic-exit=$status (not readiness evidence)."
+  return 0
+}
+
 # dpkg -s alone also succeeds for config-files-only entries. Accept only fully
 # installed packages, including installed providers of renamed/virtual packages
 # (Ubuntu's t64 transition keeps several required names as Provides aliases).
@@ -510,6 +533,11 @@ install_os_utilities() {
 
   if [ "${DIRECT_RUNNER_OS_STRICT:-0}" = "1" ]; then
     local required=("${original_deps[@]}" "${playwright_deps[@]}" "${CANVAS_NATIVE_DEPS[@]}")
+    if [ "${DIRECT_RUNNER_PROVENANCE_STARTED:-0}" != "1" ]; then
+      DIRECT_RUNNER_REQUIRED_PACKAGES=("${required[@]}")
+      DIRECT_RUNNER_PROVENANCE_STARTED=1
+      direct_runner_provenance before "${required[@]}"
+    fi
     direct_runner_stage "verify-required-packages (${required[*]})"
     if ! verify_required_os_packages "${required[@]}"; then
       apt_is_available || return $?
