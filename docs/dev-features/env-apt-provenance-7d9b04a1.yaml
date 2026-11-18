@@ -3,7 +3,7 @@ title: Read-only direct-runner APT provenance
 title-ja: 直接実行CIのAPT供給元を読み取り専用で記録
 category: environment
 status: implemented
-description: Collect bounded offline source, pin, index and package observations inside the existing acquisition deadline without changing readiness or acquisition exit status. Cached observations do not prove source necessity or successful E2E execution.
+description: Collect bounded offline source, pin, installed/provider and locked-browser declaration observations, with a strict-refresh-boundary snapshot and hash-linked public catalog evidence, inside the existing acquisition deadline. Collection never changes readiness or acquisition exit status and is not freshness, signature, source-exclusion or E2E proof.
 tests:
 - scripts/tests/test_bounded_e2e_apt_provenance.py
 notes: Diagnostic work for Issue 5964 only. No source exclusion, added index refresh, retry-policy change, host configuration change or historical rate-limit cause claim. Normal exact-revision CI and real Ubuntu acquisition remain separate validation requirements.
