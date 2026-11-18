@@ -4,6 +4,7 @@ cp -r /source/scripts /fixture/scripts
 # Workspace mounts can be private to their owner; the container's runner must
 # be able to read the copied production scripts without writing them.
 chmod -R a+rX /fixture/scripts
+chmod a+r /fixture/client/package-lock.json
 export ROOT_DIR=/fixture
 # Preserve the managed container's legitimate egress route across sudo without
 # changing production sudo policy. Loopback negative sources remain direct.
