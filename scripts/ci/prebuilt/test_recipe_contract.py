@@ -105,6 +105,15 @@ class RecipeContract(unittest.TestCase):
         self.assertIn('for missing in /opt/emulator-cache /prepared/source/client/node_modules', workflow)
         self.assertIn('EXPECTED_SOURCE_REVISION=0000000000000000000000000000000000000000', workflow)
 
+    def test_portable_bootstrap_contract_and_ci_test_integration(self):
+        recipe = RECIPE.read_text()
+        self.assertNotIn('.tar.xz', recipe)
+        self.assertNotIn('tar -xJf', recipe)
+        self.assertIn('node-v22.23.5-linux-x64.tar.gz', recipe)
+        self.assertIn('COPY scripts/ci/prebuilt/extract-node.cjs /tmp/extract-node.cjs', recipe)
+        self.assertLess(recipe.index('sha256sum --check --strict'), recipe.index('&& node /tmp/extract-node.cjs'))
+        self.assertIn('node --test scripts/ci/prebuilt/extract-node.test.cjs', WORKFLOW.read_text())
+
     def test_smoke_is_not_e2e_readiness(self):
         validator = (HERE / 'validate.py').read_text()
         self.assertIn("'readiness': False", validator)

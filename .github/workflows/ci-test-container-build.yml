@@ -72,6 +72,7 @@ jobs:
         shell: bash
         run: |
           PREPARED_PROFILE_ROOT="$GITHUB_WORKSPACE" python3 -m unittest discover -s scripts/ci/prebuilt -p 'test_*.py' -v
+          node --test scripts/ci/prebuilt/extract-node.test.cjs
       - name: Build one immutable local candidate without publishing
         shell: bash
         run: |
