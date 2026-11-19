@@ -97,9 +97,39 @@ def read_public(path, cap):
     return path.read_text()
 
 
+def source_shape_summary(sources):
+    """Bounded fixed enums only; no raw field, URI, path or exception output."""
+    suite_sets = {
+        frozenset(('resolute', 'resolute-updates', 'resolute-backports')): 'archive-three',
+        frozenset(('resolute-security',)): 'security-only',
+        frozenset(('resolute', 'resolute-updates', 'resolute-backports', 'resolute-security')): 'archive-and-security',
+    }
+    public_uris = {'mirror+file:/etc/apt/apt-mirrors.txt': 'image-mirrorlist'}
+    for scheme in ('http', 'https'):
+        for suffix in ('/ubuntu', '/ubuntu/'):
+            public_uris[scheme + '://security.ubuntu.com' + suffix] = 'security-' + scheme
+            public_uris[scheme + '://archive.ubuntu.com' + suffix] = 'archive-' + scheme
+    for suffix in ('/ubuntu', '/ubuntu/'):
+        public_uris['http://us-east-2.ec2.archive.ubuntu.com' + suffix] = 'ec2-http'
+    blocks = [block for block in re.split(r'\n[ \t]*\n', sources) if block.strip()]
+    rows = []
+    unknown = max(0, len(blocks) - 3)
+    for block in blocks[:3]:
+        try:
+            fields = source_fields(block)
+        except ValueError:
+            fields = {}
+        suite = suite_sets.get(frozenset(fields.get('Suites', '').split()), 'other')
+        uri = public_uris.get(fields.get('URIs'), 'other')
+        rows.append({'suites': suite, 'uri': uri})
+        unknown += suite == 'other' or uri == 'other'
+    return {'paragraphs': rows, 'unknown_count': unknown}
+
+
 def profile(etc):
     sources = read_public(etc / 'sources.list.d/ubuntu.sources', 16384)
     mirrors = read_public(etc / 'apt-mirrors.txt', 4096)
+    print('APT-MIRROR source-shape=' + json.dumps(source_shape_summary(sources), sort_keys=True), flush=True)
     # A diagnostic only: never log raw URI credentials, config or exception text.
     keys = set()
     for line in mirrors.splitlines():
@@ -305,7 +335,13 @@ def main(browser, deadline_ms, etc=Path('/etc/apt')):
         reason = str(error) if isinstance(error, ValueError) and str(error) in supported_reasons else 'unsupported-or-unreadable'
         print('APT-MIRROR profile=unsupported reason=' + reason + '; preserving existing setup', flush=True)
         return UNSUPPORTED
-    if os.geteuid() != 0 or not (0 < deadline_ms - int(time.time() * 1000) <= 595000):
+    if os.geteuid() != 0:
+        print('APT-MIRROR guard=refused reason=requires-root', flush=True)
+        return 64
+    guard_remaining = deadline_ms - int(time.time() * 1000)
+    if not (0 < guard_remaining <= 595000):
+        reason = 'deadline-expired' if guard_remaining <= 0 else 'deadline-out-of-range'
+        print('APT-MIRROR guard=refused reason=' + reason, flush=True)
         return 64
     if not effective_sources_supported():
         print('APT-MIRROR effective source layout unsupported; preserving existing setup', flush=True)
