@@ -1,0 +1,40 @@
+# Isolated prototype only. Does not change normal E2E or publish images.
+FROM --platform=linux/amd64 mcr.microsoft.com/playwright:v1.64.1-jammy@sha256:a3966b653e8d48a30901889081b616307fca73e0d843a117fadf6609397dac38
+USER root
+# Official HTTPS SHASUMS256 metadata; detached signature not asserted.
+RUN curl --fail --show-error --silent --proto '=https' --tlsv1.2 --max-time 60 \
+    https://nodejs.org/dist/v22.23.5/node-v22.23.5-linux-x64.tar.xz -o /tmp/node.tar.xz \
+    && printf '%s  /tmp/node.tar.xz\n' cdeb8670a0c81f51b4dc4ac61919f9b1ad917b304bf8221eb939570663d240f8 | sha256sum --check --strict - \
+    && mkdir /opt/node22 && tar -xJf /tmp/node.tar.xz --strip-components=1 -C /opt/node22
+ENV PATH=/opt/node22/bin:$PATH
+RUN test "$(node --version)" = "v22.23.5"
+ENV CI=true PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 PLAYWRIGHT_BROWSERS_PATH=/ms-playwright FIREBASE_EMULATORS_PATH=/opt/emulator-cache
+WORKDIR /prepared/source
+COPY package.json package-lock.json ./
+COPY patches/ ./patches/
+COPY scripts/ ./scripts/
+COPY client/package.json client/package-lock.json ./client/
+COPY client/patches/ ./client/patches/
+COPY shared/package.json shared/package-lock.json ./shared/
+COPY functions/package.json functions/package-lock.json ./functions/
+COPY server/package.json server/package-lock.json ./server/
+COPY .firebase-tools-version firebase.json firebase.emulator.json ./
+COPY .github/container/Dockerfile ./.github/container/Dockerfile
+# Locked npm installs including existing lifecycle/patch handling, all under Node22.
+RUN timeout --signal=TERM --kill-after=5 300 npm ci \
+    && timeout --signal=TERM --kill-after=5 300 npm ci --prefix client \
+    && timeout --signal=TERM --kill-after=5 300 npm ci --prefix functions
+# Pin CLI exactly as existing recipe; no floating npm global tools here.
+RUN timeout --signal=TERM --kill-after=5 120 npm install --global "firebase-tools@$(cat .firebase-tools-version)"
+RUN bash scripts/ci/prebuilt/produce-os.sh
+RUN timeout --signal=TERM --kill-after=5 120 firebase setup:emulators:firestore
+RUN python3 scripts/ci/prebuilt/prepare-fixture.py
+ARG SOURCE_REVISION
+RUN test "${#SOURCE_REVISION}" -eq 40 && printf '%s\n' "$SOURCE_REVISION" > /prepared/source-revision
+LABEL org.opencontainers.image.revision=$SOURCE_REVISION
+RUN python3 scripts/ci/prebuilt/seal.py
+# Base-provided pwuser; no host UID changes. Cache stays immutable, state in tmpfs.
+USER pwuser
+ENV HOME=/tmp/private-home XDG_CONFIG_HOME=/tmp/private-home/.config
+WORKDIR /prepared/source
+ENTRYPOINT ["python3", "/prepared/source/scripts/ci/prebuilt/validate.py"]

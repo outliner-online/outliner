@@ -4,12 +4,18 @@ on:
   pull_request:
     paths:
       - '.github/container/Dockerfile'
+      - '.github/container/Dockerfile.prebuilt-prototype'
       - '.github/workflows/ci-test-container-build.yml'
       - '.firebase-tools-version'
+      - '.dockerignore'
+      - 'firebase.json'
+      - 'firebase.emulator.json'
+      - 'patches/**'
+      - 'client/patches/**'
       - 'client/package*.json'
       - 'server/package*.json'
       - 'functions/package*.json'
-      - 'shared/package.json'
+      - 'shared/package*.json'
       - 'scripts/**'
       - 'package*.json'
 
@@ -17,7 +23,25 @@ permissions:
   contents: read
 
 jobs:
+  scope:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      legacy: ${{ steps.scope.outputs.legacy }}
+      prototype: ${{ steps.scope.outputs.prototype }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+      - id: scope
+        shell: bash
+        run: |
+          git diff --name-only -z HEAD^1 HEAD > /tmp/container-changes
+          python3 scripts/ci/prebuilt/select_jobs.py /tmp/container-changes >> "$GITHUB_OUTPUT"
+
   build:
+    needs: scope
+    if: needs.scope.outputs.legacy == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -35,3 +59,66 @@ jobs:
             command -v pm2
             command -v firebase
           '
+
+  prepared-prototype:
+    name: Prepared runtime smoke (not E2E migration)
+    needs: scope
+    if: needs.scope.outputs.prototype == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Local prototype contracts
+        shell: bash
+        run: |
+          PREPARED_PROFILE_ROOT="$GITHUB_WORKSPACE" python3 -m unittest discover -s scripts/ci/prebuilt -p 'test_*.py' -v
+      - name: Build one immutable local candidate without publishing
+        shell: bash
+        run: |
+          mkdir -p job_logs
+          set -o pipefail
+          timeout --signal=TERM --kill-after=10 1200 docker build --no-cache \
+            --platform linux/amd64 --file .github/container/Dockerfile.prebuilt-prototype \
+            --build-arg SOURCE_REVISION="$GITHUB_SHA" --tag outliner-prepared-prototype . \
+            2>&1 | tee job_logs/prepared-build.log
+          docker image inspect outliner-prepared-prototype --format '{{.Id}}' > job_logs/prepared-image-id
+          test "$(docker image inspect outliner-prepared-prototype --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "$GITHUB_SHA"
+      - name: Offline nonroot real runtime smoke
+        shell: bash
+        run: |
+          set -o pipefail
+          timeout --signal=TERM --kill-after=10 180 docker run --rm \
+            --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --tmpfs /tmp:rw,nosuid,nodev,size=512m --shm-size=256m \
+            --env EXPECTED_SOURCE_REVISION="$GITHUB_SHA" \
+            "$(cat job_logs/prepared-image-id)" 2>&1 | tee job_logs/prepared-smoke.log
+      - name: Require explicit failure for stale source and missing baked prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          image=$(cat job_logs/prepared-image-id)
+          status=0
+          timeout --signal=TERM --kill-after=5 30 docker run --rm \
+            --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+            --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+            --env EXPECTED_SOURCE_REVISION=0000000000000000000000000000000000000000 \
+            "$image" > job_logs/prepared-negative-source.log 2>&1 || status=$?
+          test "$status" -eq 1
+          for missing in /opt/emulator-cache /prepared/source/client/node_modules; do
+            status=0
+            name=${missing##*/}
+            timeout --signal=TERM --kill-after=5 30 docker run --rm \
+              --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+              --tmpfs /tmp:rw,nosuid,nodev,size=64m --tmpfs "$missing:ro,size=1m" \
+              --env EXPECTED_SOURCE_REVISION="$GITHUB_SHA" \
+              "$image" > "job_logs/prepared-negative-$name.log" 2>&1 || status=$?
+            test "$status" -eq 1
+          done
+      - name: Retain prototype evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: prepared-prototype-${{ github.run_id }}-${{ github.run_attempt }}
+          path: job_logs/prepared-*
+          if-no-files-found: error
+          retention-days: 2

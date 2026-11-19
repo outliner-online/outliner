@@ -1,0 +1,12 @@
+{
+    "metadata_url": "https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt",
+    "effective_url": "https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt",
+    "metadata_sha256": "658770bd465343e4bf441d22e89e7d944244b37041695f3f2a85b53d1a84b53f",
+    "version": "22.23.5",
+    "file": "node-v22.23.5-linux-x64.tar.xz",
+    "sha256": "cdeb8670a0c81f51b4dc4ac61919f9b1ad917b304bf8221eb939570663d240f8",
+    "artifact_url": "https://nodejs.org/dist/v22.23.5/node-v22.23.5-linux-x64.tar.xz",
+    "verification": "official HTTPS SHA256 metadata; detached signature not verified; binary NOT downloaded or executed",
+    "versioned_metadata_url": "https://nodejs.org/dist/v22.23.5/SHASUMS256.txt",
+    "versioned_metadata_sha256": "658770bd465343e4bf441d22e89e7d944244b37041695f3f2a85b53d1a84b53f"
+}
