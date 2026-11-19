@@ -23,13 +23,32 @@ if [ "${1:-}" = "--worker" ]; then
       exit 1
     fi
   done
+  unset E2E_MIRROR_OFFLINE_READY
+  direct_runner_stage mirror-profile-and-acquisition
+  mirror_status=0
+  direct_runner_root env PATH="$PATH" LC_ALL=C DEBIAN_FRONTEND=noninteractive \
+    /usr/bin/python3 "$ROOT_DIR/scripts/ci/ubuntu_mirror_download.py" \
+    --browser "$browser" --deadline-ms "$E2E_OS_WORK_DEADLINE" || mirror_status=$?
+  case "$mirror_status" in
+    0) export E2E_MIRROR_OFFLINE_READY=1 ;;
+    78) echo "APT mirror profile unsupported/target absent; using existing setup." ;;
+    *) exit "$mirror_status" ;;
+  esac
   install_os_utilities --os-only
   # Always required, even on a browser-cache hit. Never use cache as OS evidence.
   apt_is_available
   direct_runner_stage "playwright-install-deps ($browser, $pinned)"
   # Start the pinned CLI inside the privileged supervisor. It then installs
   # directly as root instead of introducing another unsupervised sudo boundary.
-  direct_runner_root "$(command -v node)" "$ROOT_DIR/client/node_modules/playwright/cli.js" install-deps "$browser"
+  if [ "${E2E_MIRROR_OFFLINE_READY:-0}" = 1 ]; then
+    # The same installed locked SDK native declarations supplied acquisition.
+    packages=$(node "$ROOT_DIR/scripts/ci/mirror-browser-packages.cjs" "$ROOT_DIR" "$browser")
+    mapfile -t required_sdk < <(printf '%s' "$packages" | /usr/bin/python3 -c 'import json,sys;print("\n".join(json.load(sys.stdin)["packages"]))')
+    [ "${#required_sdk[@]}" -gt 0 ] || exit 64
+    verify_required_os_packages "${required_sdk[@]}"
+  else
+    direct_runner_root "$(command -v node)" "$ROOT_DIR/client/node_modules/playwright/cli.js" install-deps "$browser"
+  fi
   # Check again after Playwright's package transaction, before browser readiness.
   install_os_utilities --os-only
   direct_runner_stage "playwright-browser ($browser, $pinned)"
