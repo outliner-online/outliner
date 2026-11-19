@@ -30,6 +30,26 @@ class Plan(unittest.TestCase):
         self.assertEqual(p['ubuntu_sources'].split('\n\n')[1],SOURCES.split('\n\n')[1])
         self.assertEqual(p['ubuntu_sources'].replace('mirror+file:/tmp/outliner-apt-'+'a'*32+'/mirrors.txt',m.MIRROR_URI),SOURCES)
         self.assertFalse(p['ready_for_real_runner']);self.assertFalse(p['host_files_changed'])
+    def test_security_fixed_origin_slash_variants_preserve_original_bytes(self):
+        for uri in ('http://security.ubuntu.com/ubuntu','http://security.ubuntu.com/ubuntu/',
+                    'https://security.ubuntu.com/ubuntu','https://security.ubuntu.com/ubuntu/'):
+            with self.subTest(uri=uri):
+                original=SOURCES.replace('http://security.ubuntu.com/ubuntu/',uri)
+                original=original.replace('Suites: resolute-security','# security paragraph preserved\nSuites: resolute-security')
+                plan=self.plan(sources=original)
+                self.assertEqual(plan['ubuntu_sources'].split('\n\n')[1].encode(),original.split('\n\n')[1].encode())
+                self.assertEqual(plan['ubuntu_sources'].replace('mirror+file:/tmp/outliner-apt-'+'a'*32+'/mirrors.txt',m.MIRROR_URI),original)
+    def test_security_near_matches_and_other_suites_remain_unsupported(self):
+        for uri in ('http://security.ubuntu.com','http://security.ubuntu.com/ubuntu//',
+                    'http://security.ubuntu.com/ubuntu/pool','http://security.ubuntu.com/Ubuntu',
+                    'http://security.ubuntu.com/ubuntu?','http://security.ubuntu.com/ubuntu#',
+                    'http://security.ubuntu.com:80/ubuntu','http://user@security.ubuntu.com/ubuntu',
+                    'http://security.ubuntu.com.evil.invalid/ubuntu','http://archive.ubuntu.com/ubuntu',
+                    'ftp://security.ubuntu.com/ubuntu','http://security.ubuntu.com/ubuntu https://security.ubuntu.com/ubuntu'):
+            with self.subTest(uri=uri),self.assertRaises(ValueError):
+                self.plan(sources=SOURCES.replace('http://security.ubuntu.com/ubuntu/',uri))
+        with self.assertRaises(ValueError):
+            self.plan(sources=SOURCES.replace('resolute-security','resolute-proposed'))
     def test_wrong_origin_or_pocket(self):
         for uri in (FAILED.replace('us-east-2.ec2.archive.ubuntu.com','packages.microsoft.com'),FAILED.replace('/pool/','/dists/'),FAILED.replace('http://','http://user:secret@')):
             with self.assertRaises(ValueError):self.plan(failed_uri=uri)
