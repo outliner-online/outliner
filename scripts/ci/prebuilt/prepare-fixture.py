@@ -10,6 +10,7 @@ root = Path('/prepared/fixture')
 (root / 'firestore.rules').write_text('rules_version = "2"; service cloud.firestore { match /databases/{database}/documents { match /{document=**} { allow read: if true; allow write: if false; } } }\n')
 (root / 'functions/package.json').write_text(json.dumps({'name': 'private-prepared-fixture', 'private': True, 'main': 'index.cjs', 'engines': {'node': '22'}, 'dependencies': {'firebase-functions': json.loads(Path('/prepared/source/functions/package-lock.json').read_text())['packages']['node_modules/firebase-functions']['version']}}))
 shutil.copy2('/prepared/source/scripts/ci/prebuilt/fixture.cjs', root / 'functions/index.cjs')
+shutil.copy2('/prepared/source/scripts/ci/prebuilt/pinned-functions.cjs', root / 'functions/pinned-functions.cjs')
 # Firebase's discovery requires installed SDK metadata from this project's module tree.
 (root / 'functions/node_modules').symlink_to('/prepared/source/functions/node_modules')
 (root / 'firebase.json').write_text(json.dumps({
