@@ -75,6 +75,115 @@ def probe(argv, timeout=1):
         return {"status": "unavailable", "output": "not retained"}
 
 
+# Proposed diagnostic only: no acquisition, refresh, route or source changes.
+def collect_transport_observation(root, runner=probe):
+    settings = {
+        "RETRIES": ("Acquire::Retries", "number"),
+        "HTTP_TIMEOUT": ("Acquire::http::Timeout", "number"),
+        "HTTPS_TIMEOUT": ("Acquire::https::Timeout", "number"),
+        "HTTP_PIPELINE": ("Acquire::http::Pipeline-Depth", "number"),
+        "HTTPS_PIPELINE": ("Acquire::https::Pipeline-Depth", "number"),
+        "HTTP_DL_LIMIT": ("Acquire::http::Dl-Limit", "number"),
+        "HTTPS_DL_LIMIT": ("Acquire::https::Dl-Limit", "number"),
+        "IPV4": ("Acquire::ForceIPv4", "boolean"),
+        "IPV6": ("Acquire::ForceIPv6", "boolean"),
+        "QUEUE": ("Acquire::Queue-Mode", "queue"),
+    }
+    argv = ["apt-config", "shell"]
+    for name, (key, _) in settings.items():
+        argv.extend([name, key])
+    observation = runner(argv)
+    result = {
+        "readiness_evidence": False,
+        "source_exclusion_proof": False,
+        "config_exit": observation.get("exit"),
+        "config_status": observation.get("status", "observed"),
+        "collection_status": "partial",
+        "settings": {},
+        "limitations": [
+            "Unset values are not claims about APT defaults.",
+            "Command-line overrides are not part of apt-config output.",
+            "Proxy/authentication settings, DNS, routes and live transfer probes are not collected.",
+            "Mirrorlist entries do not prove which endpoint served a transfer.",
+        ],
+    }
+    if observation.get("exit") == 0 and not observation.get("truncated"):
+        try:
+            for assignment in shlex.split(observation.get("stdout", "")):
+                key, sep, value = assignment.rstrip(";").partition("=")
+                if not sep or key not in settings:
+                    continue
+                kind = settings[key][1]
+                valid = (
+                    (kind == "number" and re.fullmatch(r"[0-9]{1,9}", value))
+                    or (kind == "boolean" and value.lower() in ("true", "false", "yes", "no", "1", "0"))
+                    or (kind == "queue" and value in ("host", "access"))
+                )
+                result["settings"][settings[key][0]] = value if valid else "[unsupported value omitted]"
+                if not valid:
+                    result["config_status"] = "unsupported-values"
+        except ValueError:
+            result["config_status"] = "unparseable"
+            result["settings"] = {}
+    elif observation.get("truncated"):
+        result["config_status"] = "truncated"
+    try:
+        import stat
+        from contextlib import ExitStack
+        # Production root is /. Root ancestors are trusted; every component
+        # beneath its opened descriptor is anchored and cannot follow a symlink.
+        with ExitStack() as cleanup:
+            flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+            directory = os.open(root, flags)
+            cleanup.callback(os.close, directory)
+            for component in ("etc", "apt"):
+                directory = os.open(component, flags, dir_fd=directory)
+                cleanup.callback(os.close, directory)
+            fd = os.open("apt-mirrors.txt", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+                         dir_fd=directory)
+            cleanup.callback(os.close, fd)
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_size > 4096:
+                result["mirrorlist"] = {"status": "nonregular or oversized omitted"}
+                return result
+            contents = os.read(fd, 4097)
+        if len(contents) > 4096:
+            result["mirrorlist"] = {"status": "oversized omitted"}
+            return result
+        entries = []
+        omitted = 0
+        for line in contents.decode("utf-8").splitlines():
+            tokens = line.split()
+            if not tokens or tokens[0].startswith("#"):
+                continue
+            try:
+                uri = urlsplit(tokens[0])
+                host = uri.hostname or ""
+                if uri.scheme in ("http", "https") and (
+                    host == "archive.ubuntu.com" or host.endswith(".archive.ubuntu.com")
+                    or host in ("security.ubuntu.com", "ports.ubuntu.com")
+                ):
+                    entries.append(uri_identity(tokens[0]))
+                else:
+                    omitted += 1
+            except ValueError:
+                omitted += 1
+        result["mirrorlist"] = {
+            "status": "observed-public-origins", "entries": entries,
+            "omitted_entries": omitted, "bytes": len(contents),
+            "mtime_ns": info.st_mtime_ns,
+        }
+    except FileNotFoundError:
+        result["mirrorlist"] = {"status": "absent"}
+    except (OSError, UnicodeError):
+        result["mirrorlist"] = {"status": "unreadable"}
+    if (result["config_exit"] == 0 and result["config_status"] == "observed"
+            and result["mirrorlist"].get("status") == "observed-public-origins"
+            and result["mirrorlist"].get("omitted_entries") == 0):
+        result["collection_status"] = "collected-observations"
+    return result
+
+
 def collect(root, required, runner=probe, *, phase="before", output=None, checkpoint=lambda result: None):
     config = runner(["apt-config", "shell", "ROOT", "Dir", "ETC", "Dir::Etc", "LIST", "Dir::Etc::sourcelist",
                      "PARTS", "Dir::Etc::sourceparts", "PREF", "Dir::Etc::preferences",
@@ -137,6 +246,11 @@ def collect(root, required, runner=probe, *, phase="before", output=None, checkp
                         "Unknown source options, URI paths, key contents and credential configuration are intentionally not collected."],
     }
     checkpoint(result)
+    if phase == "before":
+        result["transport_observation"] = {"collection_status": "partial", "status": "pending"}
+        checkpoint(result)
+        result["transport_observation"] = collect_transport_observation(root, runner)
+        checkpoint(result)
     names = set(required)
     if phase != "before":
         repository = Path(__file__).resolve().parents[1]
@@ -178,6 +292,8 @@ def collect(root, required, runner=probe, *, phase="before", output=None, checkp
     if phase != "before":
         keys.append("locked_native_probe")
     complete = all(result[key].get("exit") == 0 and not result[key].get("truncated") for key in keys)
+    if phase == "before":
+        complete = complete and result["transport_observation"]["collection_status"] == "collected-observations"
     if phase == "after-refresh":
         complete = complete and result.get("public_catalog_observations", {}).get("status") == "retained-observations"
     result["collection_status"] = "collected-observations" if complete and not result["dependency_names_limited"] else "partial"
