@@ -26,12 +26,12 @@
   },
   "dependencies": {
     "@dotenvx/dotenvx": "^2.38.2",
-    "@sentry/node": "^11.11.0",
+    "@sentry/node": "^11.13.0",
     "cors": "^2.8.6",
     "dotenv": "^18.0.10",
     "file-type": "^22.3.0",
-    "firebase": "^13.2.0",
-    "firebase-admin": "^14.5.0",
+    "firebase": "^13.4.0",
+    "firebase-admin": "^14.5.1",
     "firebase-functions": "^7.4.0",
     "jsonwebtoken": "^9.0.3"
   },
