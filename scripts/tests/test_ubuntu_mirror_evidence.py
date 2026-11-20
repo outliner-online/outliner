@@ -56,7 +56,7 @@ class ActualWiring(unittest.TestCase):
                     return code
                 log.write_text('');return 0
             with patch.object(m.os,'geteuid',return_value=0),patch.object(m,'effective_sources_supported',return_value=True),patch.object(m,'required',return_value=['fixture']),patch.object(m,'transaction',return_value=[]),patch.object(m,'supervise',side_effect=supervisor):
-                result=m.main('chromium',int(time.time()*1000)+500000,etc)
+                result=m.main('chromium',time.monotonic_ns()//1000000+500000,etc)
             return result,calls
     def test_update_ec2_then_non_ec2_lock_unknown_timeout_never_switch(self):
         cases=('Get:1 http://security.ubuntu.com/ubuntu resolute-security/main package\n',

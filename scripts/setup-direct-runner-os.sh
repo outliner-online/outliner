@@ -28,7 +28,7 @@ if [ "${1:-}" = "--worker" ]; then
   mirror_status=0
   direct_runner_root env PATH="$PATH" LC_ALL=C DEBIAN_FRONTEND=noninteractive \
     /usr/bin/python3 "$ROOT_DIR/scripts/ci/ubuntu_mirror_download.py" \
-    --browser "$browser" --deadline-ms "$E2E_OS_WORK_DEADLINE" || mirror_status=$?
+    --browser "$browser" --deadline-ms "${E2E_OS_WORK_DEADLINE:-}" || mirror_status=$?
   case "$mirror_status" in
     0) export E2E_MIRROR_OFFLINE_READY=1 ;;
     78) echo "APT mirror profile unsupported/target absent; using existing setup." ;;
@@ -77,7 +77,10 @@ export E2E_OS_STAGE_FILE
 trap 'rm -f "$E2E_OS_STAGE_FILE"' EXIT
 printf '%s\n' starting > "$E2E_OS_STAGE_FILE"
 started=$SECONDS
-export E2E_OS_WORK_DEADLINE=$(($(date +%s%3N) + (budget - 5) * 1000))
+# CLOCK_MONOTONIC has one boot-relative epoch across Linux processes/uids.
+# Wall time is for diagnostics only; never translate or renew this deadline.
+now=$(/usr/bin/python3 -c 'import time; print(time.monotonic_ns() // 1000000)')
+export E2E_OS_WORK_DEADLINE=$((now + (budget - 5) * 1000))
 status=0
 timeout --signal=TERM --kill-after=5 "$((budget - 5))" bash "$0" --worker || status=$?
 stage=$(cat "$E2E_OS_STAGE_FILE")
