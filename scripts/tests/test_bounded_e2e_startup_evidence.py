@@ -1,94 +1,117 @@
-"""Collected bounded-E2E regressions for the shipped utils evidence check."""
+"""Regression controls for the actual all-shard startup evidence gate."""
+from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
+import sys
 import tempfile
-import textwrap
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
-class UtilsEvidenceTest(unittest.TestCase):
+class StartupEvidenceTest(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix='utils-evidence-')
+        self.temp = tempfile.TemporaryDirectory(prefix='startup-evidence-')
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.logs = self.root / 'job_logs'
         self.logs.mkdir()
-        # Other upload inputs must not disguise missing startup diagnostics.
-        (self.logs / 'execution-context.json').write_text('{}')
-        (self.root / 'scripts/ci').mkdir(parents=True)
-        (self.root / 'scripts/ci/verify-utils-startup-evidence.py').symlink_to(
-            ROOT / 'scripts/ci/verify-utils-startup-evidence.py')
-
-    def record(self, status='passed', started=True):
-        value = {'status': status, 'command_started': started,
-                 'exit_code': 0 if status == 'passed' else 124}
-        if status == 'passed':
-            value['startup_completed'] = True
-            (self.logs / 'utils-startup-completed.json').write_text('{"status":"completed"}')
-        (self.logs / 'utils-startup-status.json').write_text(json.dumps(value))
-        if started:
-            (self.logs / 'setup-services-utils.log').write_text('real command output\n')
-
-    def check(self, expected):
-        workflow = (ROOT / '.github/workflows/ci-test-e2e.yml').read_text()
-        block = workflow.split('      - name: Verify utils startup evidence\n')[1]
-        self.assertIn("if: always() && matrix.project == 'utils'", block.split('        run: |')[0])
-        self.assertLess(workflow.index('      - name: Verify utils startup evidence'),
-                        workflow.index('      - name: Upload Logs & Artifacts'))
-        script = textwrap.dedent(block.split('        run: |\n')[1].split('\n      - name:')[0])
-        result = subprocess.run(['bash', '-euo', 'pipefail', '-c', script], cwd=self.root,
-                                env=os.environ.copy(), capture_output=True, text=True, timeout=5)
-        self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
-        result_record = json.loads((self.logs / 'utils-startup-evidence.json').read_text())
-        self.assertEqual(result_record['status'], 'available' if expected == 0 else 'missing_or_invalid')
-        return result_record
-
-    def test_success_requires_status_output_and_completion(self):
-        self.record()
-        self.check(0)
-
-    def test_failure_preserves_evidence_without_requiring_success_marker(self):
-        self.record('timed_out')
-        self.check(0)
-        record = json.loads((self.logs / 'utils-startup-status.json').read_text())
-        self.assertEqual(record['exit_code'], 124)
-
-    def test_not_started_reports_output_unavailable_without_inventing_it(self):
-        self.record('not_started', started=False)
-        result = self.check(0)
-        self.assertEqual(result['output'], 'not_produced_command_not_started')
-        self.assertFalse((self.logs / 'setup-services-utils.log').exists())
-
-    def test_missing_status_is_not_hidden_by_other_upload_inputs(self):
-        self.record()
-        (self.logs / 'utils-startup-status.json').unlink()
-        self.assertIn('utils-startup-status.json', ' '.join(self.check(1)['errors']))
-
-    def test_missing_output_is_not_hidden_by_other_upload_inputs(self):
-        self.record('failed')
-        (self.logs / 'setup-services-utils.log').unlink()
-        self.assertIn('setup-services-utils.log', ' '.join(self.check(1)['errors']))
-
-    def test_missing_completion_cannot_be_claimed_available(self):
-        self.record()
-        (self.logs / 'utils-startup-completed.json').unlink()
-        self.assertIn('utils-startup-completed.json', ' '.join(self.check(1)['errors']))
-
-    def test_invalid_status_cannot_be_claimed_available(self):
-        self.record()
-        (self.logs / 'utils-startup-status.json').write_text('not JSON')
-        self.check(1)
-
-    def test_incomplete_execution_outcome_is_not_available(self):
-        self.record()
-        (self.logs / 'utils-startup-status.json').write_text(json.dumps({
-            'status': 'running', 'command_started': True, 'exit_code': 1,
+        self.start = datetime.now(timezone.utc) - timedelta(seconds=1)
+        (self.logs / 'execution-context.json').write_text(json.dumps({
+            'startedAt': self.start.isoformat(), 'executionId': 'fixture-1', 'project': 'core-8',
         }))
-        self.check(1)
+        self.status = self.logs / 'core-8-startup-status.json'
+        self.output = self.logs / 'setup-services-core-8.log'
+        self.marker = self.logs / 'core-8-startup-completed.json'
+        self.value = dict(status='passed', command_started=True, exit_code=0, child_exit_code=0,
+                          phase='completion', attempt=1, elapsed_seconds=.5,
+                          updated_at=datetime.now(timezone.utc).isoformat(), shard='core-8',
+                          execution_id='fixture-1', nonce='unique', startup_completed=True,
+                          remaining_processes=[])
+        self.marker.write_text(json.dumps(dict(status='completed', shard='core-8',
+                                              execution_id='fixture-1', nonce='unique')))
+
+    def check(self, expected, require_success=False):
+        workflow = (ROOT / '.github/workflows/ci-test-e2e.yml').read_text()
+        block = workflow.split('      - name: Verify startup evidence\n')[1]
+        self.assertIn('if: always()', block.split('        run: |')[0])
+        self.assertLess(workflow.index('      - name: Verify startup evidence'),
+                        workflow.index('      - name: Upload Logs & Artifacts'))
+        command = [sys.executable, str(ROOT / 'scripts/ci/verify-startup-evidence.py')]
+        if require_success:
+            command.append('--require-success')
+        result = subprocess.run(command, cwd=self.root, env={**os.environ,
+                                'E2E_PROJECT': 'core-8', 'E2E_EXECUTION_ID': 'fixture-1'},
+                                capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+        evidence = json.loads((self.logs / 'core-8-startup-evidence.json').read_text())
+        self.assertEqual(evidence['status'], 'available' if expected == 0 else 'missing_or_invalid')
+
+    def write(self):
+        for path in (self.status, self.output):
+            path.write_text(json.dumps(self.value))
+
+    def test_success_requires_current_completion_and_diagnostics(self):
+        self.write()
+        self.check(0, True)
+        for path in (self.marker, self.status, self.output):
+            data = path.read_text()
+            path.unlink()
+            self.check(1, True)
+            path.write_text(data)
+
+    def test_failure_evidence_available_but_cannot_launch(self):
+        self.value.update(status='timed_out', exit_code=124, phase='readiness')
+        self.value.pop('startup_completed')
+        self.marker.unlink()
+        self.write()
+        self.check(0)
+        self.check(1, True)
+
+    def test_wrong_identity_nonce_stale_and_invalid_evidence_cannot_launch(self):
+        for field, value in [('shard', 'utils'), ('execution_id', 'old-run'), ('nonce', 'old-nonce'),
+                             ('updated_at', '2000-01-01T00:00:00+00:00'),
+                             ('phase', 'unverified'), ('attempt', 3), ('elapsed_seconds', float('nan')),
+                             ('error', 'SYNTHETIC_SECRET'), ('unknown', 'SYNTHETIC_SECRET')]:
+            with self.subTest(field=field):
+                original = self.value.copy()
+                self.value[field] = value
+                self.write()
+                self.check(1, True)
+                self.value = original
+        self.write()
+        os.utime(self.status, (1, 1))
+        self.check(1, True)
+        self.write()
+        self.marker.write_text('not JSON')
+        self.check(1, True)
+
+    def test_failed_cleanup_cannot_launch(self):
+        self.value.update(status='cleanup_failed', exit_code=125,
+                          remaining_processes=[dict(pid=123, ppid=1, state='S')])
+        self.value.pop('startup_completed')
+        self.write()
+        self.check(0)
+        self.check(1, True)
+
+    def test_invalid_evidence_stages_only_fixed_error_and_stays_nonzero(self):
+        self.value['unknown'] = 'SYNTHETIC_SERVICE_SECRET'
+        self.write()
+        output = self.root / 'github-output'
+        result = subprocess.run([sys.executable, str(ROOT / 'scripts/ci/verify-startup-evidence.py'),
+                                 '--stage-upload'], cwd=self.root, env={**os.environ,
+                                 'E2E_PROJECT': 'core-8', 'E2E_EXECUTION_ID': 'fixture-1',
+                                 'GITHUB_OUTPUT': str(output)}, capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 1)
+        staged = Path(output.read_text().strip().removeprefix('upload_path='))
+        self.addCleanup(shutil.rmtree, staged)
+        self.assertEqual([path.name for path in staged.iterdir()], ['core-8-startup-evidence.json'])
+        summary = (staged / 'core-8-startup-evidence.json').read_text()
+        self.assertNotIn('SYNTHETIC_SERVICE_SECRET', summary)
+        self.assertEqual(json.loads(summary)['status'], 'missing_or_invalid')
 
 
 if __name__ == '__main__':

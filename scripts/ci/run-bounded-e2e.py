@@ -2,13 +2,16 @@
 """Linux-only E2E supervisor: reserve the job's final minutes for evidence upload."""
 import argparse
 import ctypes
+from contextlib import nullcontext
 from datetime import datetime, timezone
 import json
 import math
 import os
+import re
 from pathlib import Path
 import signal
 import subprocess
+import tempfile
 import sys
 import time
 
@@ -62,12 +65,12 @@ def execution_counts(path, started_ns):
     return stats
 
 
-def startup_completion(path, started_ns):
+def startup_completion(path, started_ns, identity=None):
     """The workflow writes this only after its unchanged startup command succeeds."""
     marker = Path(path)
     if marker.stat().st_mtime_ns < started_ns:
         raise ValueError('Startup completion marker predates the command')
-    if json.loads(marker.read_text()) != {'status': 'completed'}:
+    if json.loads(marker.read_text()) != (identity or {'status': 'completed'}):
         raise ValueError('Startup completion marker does not prove command completion')
 
 
@@ -79,15 +82,32 @@ def main():
     completion = parser.add_mutually_exclusive_group(required=True)
     completion.add_argument('--report', help='Fresh complete Playwright JSON report')
     completion.add_argument('--startup-completion', help='Fresh marker written after successful service startup')
+    parser.add_argument('--startup-shard')
+    parser.add_argument('--startup-execution-id')
+    parser.add_argument('--startup-nonce')
+    parser.add_argument('--startup-progress')
     parser.add_argument('--timeout-seconds', type=float, default=1200)
     parser.add_argument('--job-budget-seconds', type=float, default=1320)
     parser.add_argument('--grace-seconds', type=float, default=10)
     parser.add_argument('command', nargs=argparse.REMAINDER)
     args = parser.parse_args()
+    structured = args.startup_shard is not None
+    identity = None
+    if structured:
+        values = (args.startup_shard, args.startup_execution_id, args.startup_nonce)
+        if (not args.startup_completion or not args.startup_progress
+                or any(not value or not re.fullmatch(r'[a-zA-Z0-9_-]{1,160}', value) for value in values)):
+            parser.error('Structured startup requires safe shard, execution, nonce and progress fields')
+        identity = dict(status='completed', shard=args.startup_shard,
+                        execution_id=args.startup_execution_id, nonce=args.startup_nonce)
+    supervisor_started = time.monotonic()
     status_path = Path(args.status)
     status_path.parent.mkdir(parents=True, exist_ok=True)
     record = {'status': 'not_started', 'command_started': False, 'child_exit_code': None,
               'console_dropped_bytes': 0}
+    if structured:
+        record.update(shard=args.startup_shard, execution_id=args.startup_execution_id,
+                      nonce=args.startup_nonce, phase='pre_readiness', attempt=0)
     log_path = None
     log_start = 0
     console_written = 0
@@ -98,10 +118,40 @@ def main():
         record.update(patch)
         if record.get('exit_code') is not None and log_path is not None and log_path.exists():
             record['console_dropped_bytes'] = max(0, log_path.stat().st_size - log_start - console_written)
+        if structured:
+            # Startup stdout, process names and exception text are untrusted.
+            # Retain only fields whose types and value domains we control.
+            record['elapsed_seconds'] = round(time.monotonic() - supervisor_started, 3)
+            try:
+                progress = json.loads(Path(args.startup_progress).read_text())
+                if (progress.get('phase') in ('pre_readiness', 'readiness', 'post_readiness', 'completion')
+                        and type(progress.get('attempt')) is int and progress['attempt'] in (1, 2)):
+                    record.update(phase=progress['phase'], attempt=progress['attempt'])
+            except (OSError, ValueError, AttributeError):
+                pass
+            for field in ('process_snapshot', 'remaining_processes', 'retained_service_processes'):
+                if field in record:
+                    record[field] = [{key: row[key] for key in ('pid', 'ppid', 'state')} for row in record[field]]
+            if 'error' in record:
+                record['error'] = 'startup_supervision_error'
+            if 'cleanup_error' in record:
+                record['cleanup_error'] = 'owned_process_signal_failed'
+            allowed = {
+                'status', 'command_started', 'child_exit_code', 'console_dropped_bytes',
+                'shard', 'execution_id', 'nonce', 'phase', 'attempt', 'elapsed_seconds',
+                'updated_at', 'exit_code', 'reason', 'pid', 'budget_seconds',
+                'startup_completed', 'retained_service_processes', 'remaining_processes',
+                'process_snapshot', 'cleanup_error', 'error',
+            }
+            for key in record.keys() - allowed:
+                del record[key]
         record['updated_at'] = datetime.now(timezone.utc).isoformat()
         temporary = status_path.with_suffix('.tmp')
         temporary.write_text(json.dumps(record, indent=2) + '\n')
         temporary.replace(status_path)
+        if structured:
+            # This is the only startup log eligible for artifact upload.
+            Path(args.log).write_text(json.dumps(record, indent=2) + '\n')
 
     save()
     child = None
@@ -123,12 +173,14 @@ def main():
         libc = ctypes.CDLL(None, use_errno=True)
         if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER (Linux)
             raise OSError(ctypes.get_errno(), 'Cannot enable child subreaper')
-        log_path = Path(args.log)
-        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path = None if structured else Path(args.log)
+        if log_path is not None:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
         console = sys.stdout.fileno()
         console_was_blocking = os.get_blocking(console)
         os.set_blocking(console, False)
-        with log_path.open('ab') as output, log_path.open('rb') as reader:
+        with (tempfile.TemporaryFile() if structured else log_path.open('ab')) as output, \
+                (nullcontext(output) if structured else log_path.open('rb')) as reader:
             reader.seek(0, os.SEEK_END)
             log_start = reader.tell()
             started_ns = time.time_ns()
@@ -144,6 +196,8 @@ def main():
 
             def pump():
                 nonlocal console_written
+                if structured:
+                    return
                 # A bounded read prevents an excessively noisy child from
                 # keeping the supervisor away from its deadline checks.
                 data = reader.read(262144)
@@ -176,7 +230,7 @@ def main():
                     elif now >= deadline:
                         stopping = 'timed_out'
                     elif code == 0 and args.startup_completion:
-                        startup_completion(args.startup_completion, started_ns)
+                        startup_completion(args.startup_completion, started_ns, identity)
                         # Startup intentionally leaves PM2 and its services alive for E2E.
                         # Only a fresh successful marker permits this handoff.
                         save(status='passed', child_exit_code=0, exit_code=0, startup_completed=True,
@@ -240,6 +294,12 @@ def main():
                     except (ProcessLookupError, ChildProcessError, PermissionError):
                         pass
                 time.sleep(0.05)
+        if structured and child is not None and not startup_succeeded:
+            remaining = descendants()
+            if remaining:
+                save(status='cleanup_failed', exit_code=125, remaining_processes=remaining)
+            else:
+                save(remaining_processes=[])
         try:
             save()
         finally:
