@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { randomUUID } from "node:crypto";
 import { registerCoverageHooks } from "../utils/registerCoverageHooks";
 import { createProject, login, stackFor } from "./helpers";
 registerCoverageHooks();
@@ -8,6 +9,7 @@ test("a reset drains buffered upstream data to native close while the authentica
         const stack = stackFor(testInfo);
         const targetContext = await browser.newContext();
         const peerContext = await browser.newContext();
+        const observerContext = await browser.newContext();
         const target = await targetContext.newPage();
         const peer = await peerContext.newPage();
         await stack.start();
@@ -27,6 +29,8 @@ test("a reset drains buffered upstream data to native close while the authentica
                 event.kind === "ws-open" && event.url === tunnel.url && event.id !== tunnel.id
             ).slice(-1)[0]!;
             await stack.waitForTransportEvent("ws-upstream-data", peerTunnel.url, { id: peerTunnel.id });
+            const additionalPeerRooms: string[] = [];
+            peer.on("websocket", socket => additionalPeerRooms.push(new URL(socket.url()).pathname));
 
             // Model the paused reader left by pipe() when its destination closes.
             // Real edits on the other authenticated owner supply unread bytes.
@@ -72,17 +76,27 @@ test("a reset drains buffered upstream data to native close while the authentica
                 .toBe(false);
 
             stack.clearTransportEvents();
-            await peer.keyboard.type("Same peer after target cleanup");
+            const marker = `Same peer after target cleanup ${randomUUID()}`;
+            await peer.keyboard.type(marker);
             await peer.keyboard.press("Enter");
             await peer.keyboard.type("Backend round trip");
             await peer.keyboard.press("Enter");
-            await expect(peer.getByText("Same peer after target cleanup")).toBeVisible();
+            await expect(peer.getByText(marker, { exact: true })).toBeVisible();
             await stack.waitForTransportEvent("ws-upstream-data", peerTunnel.url, { id: peerTunnel.id });
+            // A fresh authenticated context must receive this edit from the
+            // same backend; optimistic local text or unrelated bytes cannot pass.
+            const observer = await observerContext.newPage();
+            await login(observer, stack);
+            await observer.goto(peer.url());
+            await expect(observer.getByText(marker, { exact: true })).toBeVisible({ timeout: 15_000 });
             expect(stack.isTunnelOpen(peerTunnel.id)).toBe(true);
             expect(stack.transportSnapshot().some(event => event.id === peerTunnel.id && event.kind.includes("close")))
                 .toBe(false);
+            expect(additionalPeerRooms.filter(room => room === new URL(peerTunnel.url, stack.origin).pathname))
+                .toEqual([]);
         } finally {
             await targetContext.close();
+            await observerContext.close();
             await peerContext.close();
             await stack.stop();
         }
