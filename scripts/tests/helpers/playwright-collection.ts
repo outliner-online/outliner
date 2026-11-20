@@ -59,7 +59,7 @@ export function requiredSelectionFiles(client: string): string[] {
 export function collectPlaywright(
     client: string,
     config = path.join(client, "playwright.config.ts"),
-    invocation?: { project: string; browser: string; },
+    invocation?: { project: string; browser: string; shard?: string; },
 ): Collection {
     const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "pw-collection-"));
     const output = path.join(temporary, "collection.json");
@@ -75,6 +75,7 @@ export function collectPlaywright(
             "--list",
             `--reporter=${REPORTER}`,
             ...(invocation ? [`--project=${invocation.project}`] : []),
+            ...(invocation?.shard ? [`--shard=${invocation.shard}`] : []),
         ], {
             cwd: client,
             env: {

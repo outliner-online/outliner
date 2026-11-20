@@ -1,0 +1,16 @@
+id: ENV-8d6a7b29
+title: Preserve utils startup diagnostics before the job deadline
+title-ja: job 上限前に utils 起動の診断を保持する
+description: Bound only the utils CI startup command to 360 seconds and the existing 22-minute context budget after an observed 30-minute outer job timeout prevented log upload. Keep the existing readiness checks, two startup attempts, test assertions and job deadline. Reuse the Linux supervisor with an explicit fresh startup completion marker, separate from the strict Playwright report validator. Successful startup hands its persistent services to E2E; failed or timed out startup terminates its descendants and retains full output and status. Nonzero failures, missing or stale completion, timeout and cleanup failure cannot pass. Require utils diagnostic archive inputs on success and failure. Before upload, verify startup outcome and output individually, plus the completion marker for successful startup; report missing evidence even when unrelated logs are present, without changing failed-startup outcomes. The historical blocking command remains unknown because its logs and artifact were unavailable; this change preserves evidence rather than claiming that root cause is fixed.
+category: environment
+status: implemented
+components:
+- .github/workflows/ci-test-e2e.yml
+- scripts/ci/run-bounded-e2e.py
+- scripts/ci/verify-utils-startup-evidence.py
+tests:
+- scripts/tests/env-firefox-ci-promotion-934d0f2a.spec.ts
+- scripts/tests/test_bounded_e2e.py
+- scripts/tests/test_bounded_e2e_startup.py
+- scripts/tests/test_bounded_e2e_startup_evidence.py
+- scripts/tests/test_bounded_e2e_startup_workflow.py

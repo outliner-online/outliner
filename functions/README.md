@@ -75,12 +75,15 @@ firebase deploy --only functions
 
 ## Environment Variable Configuration
 
-In the production environment, you need to set environment variables for
-Firebase Functions:
+The current Functions v2 source does not consume legacy `functions.config()`.
+Azure Fluid Relay integration and its Azure Secret Manager bindings have been
+removed; `azure.*` Runtime Config is not a prerequisite for the current
+deployment.
 
-```bash
-firebase functions:config:set azure.tenant_id="your-tenant-id" azure.endpoint="https://us.fluidrelay.azure.com" azure.primary_key="your-primary-key"
-```
+The deployment workflow leaves legacy Runtime Config resources untouched instead
+of running the deprecated cleanup command on every deployment. Any remaining
+resource cleanup needs a separate authorized inventory and deletion decision. A
+CLI deprecation error is not evidence that a configuration is absent or deleted.
 
 ## Azure Fluid Relay Health Check
 
@@ -136,3 +139,19 @@ environment.
 - Please configure appropriate security rules in the production environment
 - Azure Fluid Relay settings must be set as environment variables for Firebase
   Functions
+
+# Isolated Schedule authentication regression
+
+Run `bash scripts/test-schedule-hosting.sh` from the repository root after
+installing the locked root, client and Functions dependencies. Use the
+repository-pinned Firebase CLI and Node 22. The runner starts only private Auth,
+Firestore, Functions and Hosting emulators for `demo-schedule-contract`, using a
+fresh HOME and the repository's unchanged Hosting rewrites and Firestore rules.
+It never uses a production session. `FIREBASE_EMULATORS_PATH` may select an
+existing emulator-binary cache.
+
+The explicit Jest configuration lives in `functions/schedule-hosting.jest.cjs`;
+the suite is separate from legacy Functions tests with shared mocks. All five
+operations must accept SDK-issued emulator credentials, reject nonempty invalid
+credentials separately from missing credentials, and preserve fixture state on
+rejection. Missing emulators, HTML or unavailable routes fail the suite.

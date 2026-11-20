@@ -1,4 +1,6 @@
 import { expect, test } from "@playwright/test";
+import { registerCoverageHooks } from "../utils/registerCoverageHooks";
+registerCoverageHooks();
 
 // Read-only availability check. No seeding or writes against the deployed site.
 // TLS errors fail through playwright.deployed.config.ts; redirects cannot pass.

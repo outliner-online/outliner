@@ -1,0 +1,11 @@
+id: ENV-8c3de7a2
+title: Keep native new-2 shards and delivery checks complete
+title-ja: new-2 の native shard と配布チェックの完全性を保つ
+description: Divide the unchanged new-2 Chromium project with native Playwright shard 1/2 and 2/2, keeping four workers, assertions, retries and the 30-minute job deadline. Compare both actual CI-context collections with an independent inventory of the original c-prefix selection and reject missing, duplicated or unscheduled work. Keep the existing bounded 20-minute commands and 22-minute context budgets, with line/list case lifecycle output, full JSON reports and success/failure artifact retention. Run the existing retry-free clipboard repeat-ten and full-spec checks exactly once on the first shard with their original selection, report paths and zero retries. Preserve the original new-2 check name as an always-run gate requiring the entire E2E matrix and collection guard to succeed. This lowers per-job work and provides finer evidence; it does not establish the source of the historical main timeout or claim that a hosted-runner fault was repaired.
+category: environment
+status: implemented
+components:
+- .github/workflows/ci-test-e2e.yml
+tests:
+- scripts/tests/env-new2-native-shards-8c3de7a2.spec.ts
+- scripts/tests/test_bounded_e2e_playwright.py

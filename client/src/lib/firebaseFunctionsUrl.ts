@@ -14,6 +14,14 @@ import { getEnv } from "./env";
  * @returns The appropriate URL
  */
 export function getFirebaseFunctionUrl(functionName: string): string {
+    const schedulePaths: Record<string, string> = {
+        createSchedule: "create-schedule",
+        listSchedules: "list-schedules",
+        updateSchedule: "update-schedule",
+        cancelSchedule: "cancel-schedule",
+        exportSchedulesIcal: "export-schedules-ical",
+    };
+    const hostingPath = Object.hasOwn(schedulePaths, functionName) ? schedulePaths[functionName] : functionName;
     const apiBaseUrl = getEnv("VITE_FIREBASE_FUNCTIONS_URL", import.meta.env.DEV ? "http://localhost:57070" : "");
     const isTest = import.meta.env.MODE === "test";
 
@@ -27,7 +35,7 @@ export function getFirebaseFunctionUrl(functionName: string): string {
     // When using Firebase Hosting Emulator (localhost:57000)
     if (import.meta.env.DEV && apiBaseUrl === "http://localhost:57000") {
         // Access via Firebase Hosting Emulator rewrite rules
-        return `${apiBaseUrl}/api/${functionName}`;
+        return `${apiBaseUrl}/api/${hostingPath}`;
     }
 
     // When using local development environment (Direct Firebase Functions Emulator)
@@ -38,7 +46,7 @@ export function getFirebaseFunctionUrl(functionName: string): string {
 
     // For production environment
     // Accessible via /api/function-name using Firebase Hosting rewrite rules
-    return `${apiBaseUrl}/api/${functionName}`;
+    return `${apiBaseUrl}/api/${hostingPath}`;
 }
 
 /**

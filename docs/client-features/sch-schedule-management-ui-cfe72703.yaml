@@ -4,6 +4,7 @@ description: Users can manage scheduled page posts via a dedicated interface.
 category: publishing
 status: implemented
 acceptance:
+- All five authenticated service operations use the existing Hosting rewrites and preserve their payloads and effects
 - Users can create a new schedule specifying publish time and strategy
 - Users can edit or cancel schedules from this screen
 - Users can open a schedule management screen from the page menu
@@ -17,6 +18,8 @@ components:
 - functions/test/schedule-management.test.js
 tests:
 - client/e2e/core/sch-schedule-management-ui-cfe72703.spec.ts
+- client/e2e/hosting-schedule/sch-service-hosting-contract-4d23a6b8.spec.ts
+- client/src/tests/schedule-hosting-paths.test.ts
 - client/src/tests/scheduleService.test.ts
 - functions/test/schedule-management.test.js
 title-ja: 予約投稿管理UI

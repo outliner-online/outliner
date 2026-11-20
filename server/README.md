@@ -36,7 +36,9 @@ Server behavior can be controlled with the following environment variables (see 
 
 - `PORT`: Server port number (default: `3000` or `7093`, etc.)
 - `LOG_LEVEL`: Log level (`fatal`, `error`, `warn`, `info`, `debug`, `trace`, `silent`. default: `info`)
-- `ORIGIN_ALLOWLIST`: Comma-separated list of allowed origins (no restriction if empty)
+- `ORIGIN_ALLOWLIST`: Comma-separated list of exact browser origins. Production
+  refuses to start with an empty list unless the unsafe `ALLOW_ALL_ORIGINS=true`
+  override is explicitly set.
 
 ### Hocuspocus / Yjs Settings
 
@@ -102,6 +104,31 @@ This unit automatically restarts with `Restart=on-failure` and enables hardening
 cp ../.env.example .env
 docker compose up --build
 ```
+
+The repository Compose deployment reads `server/.env.docker` through the
+`yjs-server.env_file` mapping. That file explicitly permits the production
+browser origin `https://outliner-online.com`; keep the scheme and host exact and
+do not add a path or wildcard. Apply a change by recreating the service, then
+verify the value loaded by the running process:
+
+```bash
+docker compose up -d --build --force-recreate yjs-server
+docker compose exec yjs-server sh -c 'printf "%s\\n" "$ORIGIN_ALLOWLIST"'
+```
+
+The expected output must contain `https://outliner-online.com`. This command is
+running-container evidence; `docker compose config` or inspection of
+`.env.docker` alone is not. If the production host is managed from a different
+checkout or deployment system, update and verify that system's environment
+instead of treating this example as a production change.
+
+The browser continues to connect to
+`wss://outliner-yjs-ws.outliner-online.com`. After recreation, verify an
+authorized or demo Yjs document actually synchronizes with
+`Origin: https://outliner-online.com` and an effective external client IP, then
+verify an unlisted and a missing Origin both close with code `4003` and reason
+`ORIGIN_NOT_ALLOWED`. A `/health` response or WebSocket handshake alone is not
+sufficient. Do not put Firebase credentials in a URL or verification log.
 
 Expected output includes the Hocuspocus server listening log and a Cloudflare Tunnel URL for the configured hostname.
 

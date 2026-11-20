@@ -141,9 +141,14 @@ it("calls exportSchedulesIcal API", async () => {
     vi.mocked(global.fetch).mockResolvedValueOnce({
         ok: true,
         headers: {
-            get: (key: string) => key === "Content-Disposition" ? 'attachment; filename="test.ics"' : null,
+            get: (key: string) =>
+                key === "Content-Disposition"
+                    ? 'attachment; filename="test.ics"'
+                    : key === "Content-Type"
+                    ? "text/calendar; charset=utf-8"
+                    : null,
         },
-        text: () => Promise.resolve("test calendar content"),
+        text: () => Promise.resolve("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nEND:VCALENDAR\r\n"),
     } as unknown as Response);
 
     const { exportSchedulesIcal } = await import("../services/scheduleService");

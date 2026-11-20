@@ -1404,15 +1404,9 @@ exports.createSchedule = onRequest(
           `createSchedule: Token verification failed: ${tokenError.message}`,
         );
 
-        // Fallback in emulator environment (last resort)
-        if (
-          isEmulatorEnv && idToken && typeof idToken === "string" &&
-          idToken.length > 0
-        ) {
-          logger.warn(
-            "createSchedule: Using fallback emulator user ID due to token verification failure",
-          );
-          uid = "emulator-test-user";
+        // Failed verification is terminal even for unsigned emulator tokens.
+        if (isEmulatorEnv) {
+          return res.status(401).json({ error: "Authentication failed" });
         } else {
           throw new Error(`Authentication failed: ${tokenError.message}`, {
             cause: tokenError,
@@ -1549,15 +1543,9 @@ exports.updateSchedule = onRequest(
           `updateSchedule: Token verification failed: ${tokenError.message}`,
         );
 
-        // Fallback in emulator environment (last resort)
-        if (
-          isEmulatorEnv && idToken && typeof idToken === "string" &&
-          idToken.length > 0
-        ) {
-          logger.warn(
-            "updateSchedule: Using fallback emulator user ID due to token verification failure",
-          );
-          uid = "emulator-test-user";
+        // Failed verification is terminal even for unsigned emulator tokens.
+        if (isEmulatorEnv) {
+          return res.status(401).json({ error: "Authentication failed" });
         } else {
           throw new Error(`Authentication failed: ${tokenError.message}`, {
             cause: tokenError,
@@ -1651,14 +1639,9 @@ exports.listSchedules = onRequest(
           `listSchedules: Token verification failed: ${tokenError.message}`,
         );
 
-        // Fallback in emulator environment (last resort)
-        if (
-          isEmulatorEnv && idToken && typeof idToken === "string" &&
-          idToken.length > 0
-        ) {
-          logger.warn(
-            "listSchedules: Using fallback emulator token verification",
-          );
+        // Failed verification is terminal even for unsigned emulator tokens.
+        if (isEmulatorEnv) {
+          return res.status(401).json({ error: "Authentication failed" });
         } else {
           throw new Error(`Authentication failed: ${tokenError.message}`, {
             cause: tokenError,
@@ -1735,13 +1718,8 @@ exports.exportSchedulesIcal = onRequest(
         logger.error(
           `exportSchedulesIcal: Token verification failed: ${tokenError.message}`,
         );
-        if (
-          isEmulatorEnv && idToken && typeof idToken === "string" &&
-          idToken.length > 0
-        ) {
-          logger.warn(
-            "exportSchedulesIcal: Proceeding with emulator token fallback",
-          );
+        if (isEmulatorEnv) {
+          return res.status(401).json({ error: "Authentication failed" });
         } else {
           throw new Error(`Authentication failed: ${tokenError.message}`, {
             cause: tokenError,
@@ -1854,15 +1832,9 @@ exports.cancelSchedule = onRequest(
           `cancelSchedule: Token verification failed: ${tokenError.message}`,
         );
 
-        // Fallback in emulator environment (last resort)
-        if (
-          isEmulatorEnv && idToken && typeof idToken === "string" &&
-          idToken.length > 0
-        ) {
-          logger.warn(
-            "cancelSchedule: Using fallback emulator user ID due to token verification failure",
-          );
-          uid = "emulator-test-user";
+        // Failed verification is terminal even for unsigned emulator tokens.
+        if (isEmulatorEnv) {
+          return res.status(401).json({ error: "Authentication failed" });
         } else {
           throw new Error(`Authentication failed: ${tokenError.message}`, {
             cause: tokenError,

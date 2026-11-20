@@ -46,6 +46,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  firebase-rollout-contract:
+    name: Firebase serial rollout contract
+    needs: [pr-guards, format]
+    if: needs.format.outputs.changes_pushed != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - run: npm ci --prefix client --ignore-scripts --no-audit --no-fund
+      - run: npm ci --prefix scripts/tests --ignore-scripts --no-audit --no-fund
+      - run: |
+          cd scripts/tests
+          npx vitest run env-firebase-serial-rollout-a71c9e40.spec.ts env-firebase-deploy-cli-policy-4d18a92c.spec.ts env-firebase-cli-version-policy-4d18a92c.spec.ts
+      - run: |
+          client/node_modules/.bin/tsc --noEmit --strict --target ES2022 --module ESNext --moduleResolution bundler --skipLibCheck \
+            --types node --typeRoots client/node_modules/@types \
+            scripts/tests/env-firebase-serial-rollout-a71c9e40.spec.ts scripts/tests/helpers/firebase-rollout-fixture.ts
+
   pr-guards:
     name: PR Guards
     uses: ./.github/workflows/ci-pr-guards.yml

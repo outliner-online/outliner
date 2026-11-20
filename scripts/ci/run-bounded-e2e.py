@@ -62,12 +62,23 @@ def execution_counts(path, started_ns):
     return stats
 
 
+def startup_completion(path, started_ns):
+    """The workflow writes this only after its unchanged startup command succeeds."""
+    marker = Path(path)
+    if marker.stat().st_mtime_ns < started_ns:
+        raise ValueError('Startup completion marker predates the command')
+    if json.loads(marker.read_text()) != {'status': 'completed'}:
+        raise ValueError('Startup completion marker does not prove command completion')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--context', required=True)
     parser.add_argument('--status', required=True)
     parser.add_argument('--log', required=True)
-    parser.add_argument('--report', required=True)
+    completion = parser.add_mutually_exclusive_group(required=True)
+    completion.add_argument('--report', help='Fresh complete Playwright JSON report')
+    completion.add_argument('--startup-completion', help='Fresh marker written after successful service startup')
     parser.add_argument('--timeout-seconds', type=float, default=1200)
     parser.add_argument('--job-budget-seconds', type=float, default=1320)
     parser.add_argument('--grace-seconds', type=float, default=10)
@@ -94,6 +105,7 @@ def main():
 
     save()
     child = None
+    startup_succeeded = False
     command = args.command[1:] if args.command[:1] == ['--'] else args.command
     try:
         budgets = (args.timeout_seconds, args.job_budget_seconds, args.grace_seconds)
@@ -163,6 +175,15 @@ def main():
                         stopping = 'interrupted'
                     elif now >= deadline:
                         stopping = 'timed_out'
+                    elif code == 0 and args.startup_completion:
+                        startup_completion(args.startup_completion, started_ns)
+                        # Startup intentionally leaves PM2 and its services alive for E2E.
+                        # Only a fresh successful marker permits this handoff.
+                        save(status='passed', child_exit_code=0, exit_code=0, startup_completed=True,
+                             retained_service_processes=rows, remaining_processes=rows)
+                        pump()
+                        startup_succeeded = True
+                        return 0
                     elif code is not None and rows:
                         stopping = 'orphaned_children'
                     elif code is not None:
@@ -202,7 +223,7 @@ def main():
         save(status='supervisor_failed', error=str(error), exit_code=125)
         return 125
     finally:
-        if child is not None:
+        if child is not None and not startup_succeeded:
             # Also bound exceptional exits (for example a broken CI console).
             # Only this supervisor's descendants are touched, never shared services.
             until = time.monotonic() + 2

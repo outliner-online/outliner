@@ -18,6 +18,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  direct-runner-os-regression:
+    name: Verify bounded direct-runner OS acquisition
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+      - name: Use Node.js 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Install ENV test dependencies
+        run: npm ci --prefix scripts/tests --include=dev --no-audit --no-fund
+      - name: Verify mirror-only control and owned-child cleanup
+        run: python3 -m unittest discover -s scripts/tests -p 'test_ubuntu_mirror*.py' -v
+      - name: Exercise real isolated package acquisition
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p job_logs
+          bash scripts/run-env-tests.sh --isolated env-direct-runner-os-acquisition-5921b0ad.spec.ts 2>&1 | tee job_logs/direct-runner-os-regression.log
+      - name: Retain isolated acquisition evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: direct-runner-os-regression-${{ github.run_id }}-${{ github.run_attempt }}
+          path: job_logs/direct-runner-os-regression.log
+          retention-days: 2
+
   artifact-roundtrip:
     name: Verify E2E artifact round trip
     runs-on: ubuntu-latest
@@ -25,6 +56,9 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Checkout artifact verifier
+        uses: actions/checkout@v7
+
       - name: Create representative E2E evidence
         shell: bash
         run: |
@@ -33,7 +67,12 @@ jobs:
           printf '%s\n' '{"status":"passed","executed":2}' > artifact-roundtrip/source/execution.json
           printf '%s\n' 'firefox evidence retained' > artifact-roundtrip/source/runtime.log
 
+          mkdir -p artifact-roundtrip/wrong
+          printf '%s\n' '{"status":"wrong-artifact","executed":0}' > artifact-roundtrip/wrong/execution.json
+          printf '%s\n' 'unrelated evidence' > artifact-roundtrip/wrong/runtime.log
+
       - name: Upload representative E2E evidence
+        id: representative-upload
         uses: actions/upload-artifact@v7
         with:
           name: e2e-artifacts-firefox-artifact-roundtrip-${{ github.run_id }}-${{ github.run_attempt }}
@@ -43,18 +82,87 @@ jobs:
           archive: true
           retention-days: 1
 
+      - name: Upload wrong-artifact control
+        id: wrong-upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-artifacts-firefox-artifact-roundtrip-wrong-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifact-roundtrip/wrong/execution.json
+            artifact-roundtrip/wrong/runtime.log
+          archive: true
+          retention-days: 1
+
+      - name: Record and validate artifact identities
+        shell: bash
+        env:
+          EXPECTED_ARTIFACT_ID: ${{ steps.representative-upload.outputs.artifact-id }}
+          WRONG_ARTIFACT_ID: ${{ steps.wrong-upload.outputs.artifact-id }}
+        run: |
+          set -euo pipefail
+          test -n "$EXPECTED_ARTIFACT_ID"
+          test -n "$WRONG_ARTIFACT_ID"
+          test "$EXPECTED_ARTIFACT_ID" != "$WRONG_ARTIFACT_ID"
+          printf 'run=%s attempt=%s expected-artifact=%s wrong-artifact=%s sha=%s\n' \
+            "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$EXPECTED_ARTIFACT_ID" "$WRONG_ARTIFACT_ID" "$GITHUB_SHA"
+
       - name: Download representative E2E evidence
         uses: actions/download-artifact@v8
         with:
-          name: e2e-artifacts-firefox-artifact-roundtrip-${{ github.run_id }}-${{ github.run_attempt }}
+          artifact-ids: ${{ steps.representative-upload.outputs.artifact-id }}
           path: artifact-roundtrip/downloaded
 
       - name: Verify downloaded E2E evidence
         shell: bash
         run: |
           set -euo pipefail
-          cmp artifact-roundtrip/source/execution.json artifact-roundtrip/downloaded/execution.json
-          cmp artifact-roundtrip/source/runtime.log artifact-roundtrip/downloaded/runtime.log
+          scripts/ci/verify-artifact-roundtrip.sh artifact-roundtrip/source artifact-roundtrip/downloaded
+
+      - name: Reject an unavailable artifact
+        id: unavailable-download
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: '0'
+          path: artifact-roundtrip/unavailable
+
+      - name: Confirm unavailable artifact is non-success
+        if: always()
+        shell: bash
+        env:
+          DOWNLOAD_OUTCOME: ${{ steps.unavailable-download.outcome }}
+        run: |
+          set -euo pipefail
+          test "$DOWNLOAD_OUTCOME" = failure
+
+      - name: Download wrong-artifact control
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ steps.wrong-upload.outputs.artifact-id }}
+          path: artifact-roundtrip/wrong-downloaded
+
+      - name: Confirm wrong, missing, and corrupted evidence are non-success
+        shell: bash
+        run: |
+          set -euo pipefail
+          if scripts/ci/verify-artifact-roundtrip.sh artifact-roundtrip/source artifact-roundtrip/wrong-downloaded; then
+            echo 'wrong artifact unexpectedly passed verification' >&2
+            exit 1
+          fi
+
+          cp -R artifact-roundtrip/downloaded artifact-roundtrip/missing-file
+          rm artifact-roundtrip/missing-file/runtime.log
+          if scripts/ci/verify-artifact-roundtrip.sh artifact-roundtrip/source artifact-roundtrip/missing-file; then
+            echo 'missing file unexpectedly passed verification' >&2
+            exit 1
+          fi
+
+          cp -R artifact-roundtrip/downloaded artifact-roundtrip/corrupted-file
+          printf '%s\n' 'corrupted evidence' > artifact-roundtrip/corrupted-file/execution.json
+          if scripts/ci/verify-artifact-roundtrip.sh artifact-roundtrip/source artifact-roundtrip/corrupted-file; then
+            echo 'corrupted file unexpectedly passed verification' >&2
+            exit 1
+          fi
 
   selection-coverage:
     name: Guard Chromium and Firefox selection coverage
@@ -91,7 +199,7 @@ jobs:
         run: |
           set -euo pipefail
           cd scripts/tests
-          npx vitest run env-playwright-collects-every-spec-7d41ae62.spec.ts env-firefox-selection-coverage-78ad2b91.spec.ts env-firefox-ci-promotion-934d0f2a.spec.ts 2>&1 | tee ../../job_logs/selection-coverage.log
+          npx vitest run env-playwright-collects-every-spec-7d41ae62.spec.ts env-firefox-selection-coverage-78ad2b91.spec.ts env-firefox-ci-promotion-934d0f2a.spec.ts env-new3-shard-partition-8624c6a1.spec.ts env-new2-native-shards-8c3de7a2.spec.ts 2>&1 | tee ../../job_logs/selection-coverage.log
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s . -p 'test_bounded_e2e*.py' -v 2>&1 | tee ../../job_logs/bounded-e2e-contract.log
 
       - name: Upload collection guard logs
@@ -126,7 +234,7 @@ jobs:
       pull-requests: write
     env:
       E2E_BROWSER: ${{ startsWith(matrix.project, 'firefox-') && 'firefox' || 'chromium' }}
-      E2E_PROJECT: ${{ matrix.project }}
+      E2E_PROJECT: ${{ startsWith(matrix.project, 'new-2-') && 'new-2' || matrix.project }}
       E2E_EXECUTION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       E2E_EXECUTION_REPORT: ${{ github.workspace }}/job_logs/e2e-${{ matrix.project }}-${{ github.run_id }}-${{ github.run_attempt }}.execution.json
       E2E_EXPECTED_COLLECTION: ${{ github.workspace }}/job_logs/expected-${{ matrix.project }}-${{ github.run_id }}-${{ github.run_attempt }}.json
@@ -135,7 +243,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        project: [basic, core-1, core-2, core-3, core-4, core-4b, core-5, core-6, core-7, core-8, new-1, new-2, new-3, new-4, new-5, auth, utils, server, yjs, tables-1, tables-2, schedule, onprem, firefox-selection-core-4, firefox-selection-core-4b, firefox-selection-new, firefox-selection-basic]
+        project: [basic, core-1, core-2, core-3, core-4, core-4b, core-5, core-6, core-7, core-8, new-1, new-2-1, new-2-2, new-3a, new-3b, new-4, new-5, auth, utils, server, yjs, tables-1, tables-2, schedule, onprem, firefox-selection-core-4, firefox-selection-core-4b, firefox-selection-new, firefox-selection-basic]
 
     steps:
       - name: Checkout code
@@ -156,6 +264,7 @@ jobs:
             playwrightVersion: JSON.parse(fs.readFileSync('client/package-lock.json', 'utf8')).packages['node_modules/@playwright/test'].version,
             playwrightVersionSource: 'client/package-lock.json',
             project: process.env.E2E_PROJECT,
+            ciShard: '${{ matrix.project }}',
             executionId: process.env.E2E_EXECUTION_ID,
             commit: process.env.GITHUB_SHA,
             status: 'setup',
@@ -206,17 +315,39 @@ jobs:
           # transient runner-level bring-up failure into a pass without
           # weakening any test. A systematic breakage still fails after the
           # second attempt with its original exit status.
-          attempt=1
-          max_attempts=2
-          until bash scripts/ci-e2e-start.sh 2>&1 | tee "job_logs/setup-services-${attempt}.log"; do
-            status=$?
-            if [ "$attempt" -ge "$max_attempts" ]; then
-              echo "E2E startup failed after ${attempt} attempt(s) (exit ${status})."
-              exit "$status"
-            fi
-            echo "E2E startup attempt ${attempt} failed (exit ${status}); retrying once..."
-            attempt=$((attempt + 1))
-          done
+          run_startup_attempts() {
+            attempt=1
+            max_attempts=2
+            until bash scripts/ci-e2e-start.sh 2>&1 | tee "job_logs/setup-services-${attempt}.log"; do
+              status=$?
+              if [ "$attempt" -ge "$max_attempts" ]; then
+                echo "E2E startup failed after ${attempt} attempt(s) (exit ${status})."
+                exit "$status"
+              fi
+              echo "E2E startup attempt ${attempt} failed (exit ${status}); retrying once..."
+              attempt=$((attempt + 1))
+            done
+          }
+          if [ "$E2E_PROJECT" = "utils" ]; then
+            # Capture the entire startup, including preparation before the
+            # existing per-attempt 180s readiness gate and initialization after it.
+            # Keep the existing two attempts within a single 2 * 180s budget.
+            utils_startup() {
+              run_startup_attempts
+              printf '%s\n' '{"status":"completed"}' > job_logs/utils-startup-completed.json
+            }
+            export -f run_startup_attempts utils_startup
+            rm -f job_logs/utils-startup-completed.json
+            python3 scripts/ci/run-bounded-e2e.py \
+              --context=job_logs/execution-context.json \
+              --status=job_logs/utils-startup-status.json \
+              --log=job_logs/setup-services-utils.log \
+              --startup-completion=job_logs/utils-startup-completed.json \
+              --timeout-seconds=360 --job-budget-seconds=1320 --grace-seconds=10 \
+              -- bash -euo pipefail -c utils_startup
+          else
+            run_startup_attempts
+          fi
         env:
           CI: true
           NODE_ENV: test
@@ -239,14 +370,25 @@ jobs:
               2>&1 | tee "job_logs/e2e-${E2E_BROWSER}-${project}-${E2E_EXECUTION_ID}.log"
           else
             cd client
-            if [ "$project" = "new-2" ]; then
-              python3 ../scripts/ci/run-bounded-e2e.py \
+            if [[ "$project" =~ ^new-2-([12])$ ]]; then
+              shard="${BASH_REMATCH[1]}/2"
+              PLAYWRIGHT_HTML_OPEN=never python3 ../scripts/ci/run-bounded-e2e.py \
                 --context=../job_logs/execution-context.json \
-                --status=../job_logs/new-2-command-status.json \
+                --status="../job_logs/${project}-command-status.json" \
                 --log="../job_logs/e2e-${E2E_BROWSER}-${project}-${E2E_EXECUTION_ID}.log" \
                 --report="${PLAYWRIGHT_JSON_OUTPUT_NAME}" \
                 --timeout-seconds=1200 --job-budget-seconds=1320 --grace-seconds=10 \
-                -- npm run github:test:e2e -- --project="$project"
+                -- npm run github:test:e2e -- --project=new-2 --shard="$shard" --reporter=line,list,json,html
+            elif [[ "$project" =~ ^new-3[ab]$ ]]; then
+              # Bound the command before the job deadline so timeout evidence
+              # can upload. Line output identifies started, unfinished cases.
+              PLAYWRIGHT_HTML_OPEN=never python3 ../scripts/ci/run-bounded-e2e.py \
+                --context=../job_logs/execution-context.json \
+                --status="../job_logs/${project}-command-status.json" \
+                --log="../job_logs/e2e-${E2E_BROWSER}-${project}-${E2E_EXECUTION_ID}.log" \
+                --report="${PLAYWRIGHT_JSON_OUTPUT_NAME}" \
+                --timeout-seconds=1200 --job-budget-seconds=1320 --grace-seconds=10 \
+                -- npm run github:test:e2e -- --project="$project" --reporter=line,json,html
             elif [ "$project" = "tables-1" ]; then
               python3 ../scripts/ci/run-bounded-e2e.py \
                 --context=../job_logs/execution-context.json \
@@ -305,7 +447,7 @@ jobs:
           VITE_DISABLE_FLUID_TELEMETRY: true
 
       - name: Record retry-free Grid clipboard verification
-        if: matrix.project == 'new-2'
+        if: matrix.project == 'new-2-1'
         shell: bash
         run: |
           set -euo pipefail
@@ -358,9 +500,15 @@ jobs:
         if: failure()
         run: |
           echo "## ❌ E2E Test Failed (${{ matrix.project }})" >> $GITHUB_STEP_SUMMARY
-          if [ -f "job_logs/e2e-${E2E_BROWSER}-${E2E_PROJECT}-${E2E_EXECUTION_ID}.log" ]; then
-            grep -E -A1 -B0 "FAIL|FAILED" "job_logs/e2e-${E2E_BROWSER}-${E2E_PROJECT}-${E2E_EXECUTION_ID}.log" >> $GITHUB_STEP_SUMMARY || true
+          if [ -f "job_logs/e2e-${E2E_BROWSER}-${{ matrix.project }}-${E2E_EXECUTION_ID}.log" ]; then
+            grep -E -A1 -B0 "FAIL|FAILED" "job_logs/e2e-${E2E_BROWSER}-${{ matrix.project }}-${E2E_EXECUTION_ID}.log" >> $GITHUB_STEP_SUMMARY || true
           fi
+
+      - name: Verify utils startup evidence
+        if: always() && matrix.project == 'utils'
+        shell: bash
+        run: |
+          python3 scripts/ci/verify-utils-startup-evidence.py
 
       - name: Record setup and execution status
         if: always()
@@ -405,7 +553,7 @@ jobs:
 
       - name: Upload Logs & Artifacts
         # Keep bounded-command evidence even after successful/retried execution.
-        if: failure() || startsWith(matrix.project, 'firefox-') || matrix.project == 'new-2' || matrix.project == 'tables-1'
+        if: failure() || startsWith(matrix.project, 'firefox-') || startsWith(matrix.project, 'new-2-') || startsWith(matrix.project, 'new-3') || matrix.project == 'tables-1' || matrix.project == 'utils'
         uses: actions/upload-artifact@v7
         with:
           name: e2e-artifacts-${{ env.E2E_BROWSER }}-${{ matrix.project }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -418,5 +566,32 @@ jobs:
             logs/
             firebase-debug.log
           archive: true
-          if-no-files-found: ${{ (matrix.project == 'new-2' || matrix.project == 'tables-1') && 'error' || 'warn' }}
+          if-no-files-found: ${{ (startsWith(matrix.project, 'new-2-') || startsWith(matrix.project, 'new-3') || matrix.project == 'tables-1' || matrix.project == 'utils') && 'error' || 'warn' }}
           retention-days: 2
+
+  new-3-complete:
+    # Preserve the original consumer-facing check name. Every E2E matrix row,
+    # including both new-3 halves, must succeed before this check can pass.
+    name: e2e-test (new-3)
+    needs: e2e-test
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require complete E2E matrix
+        env:
+          E2E_RESULT: ${{ needs.e2e-test.result }}
+        run: test "$E2E_RESULT" = success
+
+  new-2-complete:
+    name: e2e-test (new-2)
+    needs: [e2e-test, selection-coverage]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require complete E2E matrix and collection
+        env:
+          E2E_RESULT: ${{ needs.e2e-test.result }}
+          COLLECTION_RESULT: ${{ needs.selection-coverage.result }}
+        run: test "$E2E_RESULT" = success && test "$COLLECTION_RESULT" = success

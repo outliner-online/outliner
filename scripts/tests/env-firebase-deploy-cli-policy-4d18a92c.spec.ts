@@ -3,11 +3,23 @@ import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { describe, expect, test } from "vitest";
+import { parse } from "yaml";
 
 const root = resolve(import.meta.dirname, "../..");
 const expected = readFileSync(resolve(root, ".firebase-tools-version"), "utf8").trim();
 
 describe("Firebase production deploy CLI policy", () => {
+    test("workflow uses the checked serial rollout and never rewrites legacy config", () => {
+        const workflow = parse(readFileSync(resolve(root, ".github/workflows/deploy.yml"), "utf8"));
+        const deploy = workflow.jobs.deploy.steps.find((step: { name: string; }) => step.name === "Deploy to Firebase");
+        expect(deploy.run).toContain("python3 scripts/deploy-firebase-serial.py --project outliner-d57b0");
+        expect(deploy.run).not.toContain("MAX_ATTEMPTS");
+        expect(deploy.run).not.toContain("is the current active version");
+        const runs = workflow.jobs.deploy.steps.map((step: { run?: string; }) => step.run || "").join("\n");
+        expect(runs).not.toContain("functions:config:");
+        expect(runs).toContain("scripts/firebase-cli.sh --version");
+    });
+
     test("a clean deploy installs the declared CLI and deploys through the version-checking wrapper", () => {
         const fixture = mkdtempSync(resolve(tmpdir(), "firebase-deploy-policy-"));
         const bin = resolve(fixture, "bin");

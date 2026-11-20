@@ -8,6 +8,6 @@ components:
 - .github/workflows/ci-test-e2e.yml
 - client/e2e/fixtures/grid-render-trace.ts
 tests:
-- scripts/tests/env-github-actions-supported-majors-a4c29f1e.spec.ts
-- scripts/tests/env-firefox-ci-promotion-934d0f2a.spec.ts
 - client/src/tests/new2-diagnostics-retention.test.ts
+- scripts/tests/env-firefox-ci-promotion-934d0f2a.spec.ts
+- scripts/tests/env-github-actions-supported-majors-a4c29f1e.spec.ts
