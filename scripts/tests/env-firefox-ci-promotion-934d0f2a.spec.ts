@@ -78,13 +78,16 @@ describe("ENV-934d0f2a: Firefox promotion to ordinary E2E CI", () => {
             value.uses?.startsWith("actions/upload-artifact@")
         );
         expect(upload.if).toBe(
-            "failure() || startsWith(matrix.project, 'firefox-') || startsWith(matrix.project, 'new-2-') || startsWith(matrix.project, 'new-3') || matrix.project == 'tables-1' || matrix.project == 'utils'",
+            "steps.tests.outputs.startup_verified == 'true' && (failure() || startsWith(matrix.project, 'firefox-') || startsWith(matrix.project, 'new-2-') || startsWith(matrix.project, 'new-3') || matrix.project == 'tables-1' || matrix.project == 'utils')",
         );
         for (const identity of ["env.E2E_BROWSER", "matrix.project", "github.run_id", "github.run_attempt"]) {
             expect(upload.with.name).toContain(`\${{ ${identity} }}`);
         }
-        for (const directory of ["job_logs/", "client/test-results/", "server/logs/"]) {
+        for (const directory of ["job_logs/", "client/test-results/", "client/playwright-report/"]) {
             expect(upload.with.path).toContain(directory);
+        }
+        for (const raw of ["client/logs/", "server/logs/", "logs/", "firebase-debug.log"]) {
+            expect(upload.with.path.trim().split("\n").map((value: string) => value.trim())).not.toContain(raw);
         }
         expect(job.env.E2E_EXECUTION_REPORT).toContain("${{ github.workspace }}/job_logs/");
         expect(job.env.E2E_EXPECTED_COLLECTION).toContain("${{ github.workspace }}/job_logs/");
@@ -120,17 +123,21 @@ describe("ENV-934d0f2a: Firefox promotion to ordinary E2E CI", () => {
         expect(run).toContain('--project=tables --shard="${BASH_REMATCH[1]}/2"');
     });
 
-    it("bounds only utils startup while retaining the original readiness command and two attempts", () => {
+    it("bounds every startup while retaining readiness and two attempts", () => {
         const job = workflow("ci-test-e2e.yml").jobs["e2e-test"];
         const step = job.steps.find((value: { id?: string; }) => value.id === "startup");
         expect(job["timeout-minutes"]).toBe(30);
         expect(step["continue-on-error"]).toBeUndefined();
-        expect(step.run).toContain('if [ "$E2E_PROJECT" = "utils" ]; then');
-        expect(step.run).toContain("max_attempts=2");
-        expect(step.run).toContain("bash scripts/ci-e2e-start.sh");
-        expect(step.run).toContain("--timeout-seconds=360 --job-budget-seconds=1320 --grace-seconds=10");
-        expect(step.run).toContain("--startup-completion=job_logs/utils-startup-completed.json");
-        expect(step.run).toContain("-- bash -euo pipefail -c utils_startup");
+        expect(step.run).toContain("bash scripts/ci/run-e2e-startup.sh");
+        expect(step.run).not.toContain('if [ "$E2E_PROJECT" = "utils" ]');
+        const startup = fs.readFileSync(path.join(ROOT, "scripts/ci/run-e2e-startup.sh"), "utf8");
+        expect(startup).toContain("max_attempts=2");
+        expect(startup).toContain("bash scripts/ci-e2e-start.sh");
+        expect(startup).toContain("--timeout-seconds=360 --job-budget-seconds=1320 --grace-seconds=10");
+        expect(startup).toContain('--startup-completion="${STARTUP_PREFIX}-completed.json"');
+        expect(startup).toContain("-- bash -euo pipefail -c run_startup_attempts");
+        const tests = job.steps.find((value: { id?: string; }) => value.id === "tests");
+        expect(tests.run).toContain("verify-startup-evidence.py --require-success");
     });
 
     it("preserves the optional manual diagnostic without using it as ordinary execution", () => {

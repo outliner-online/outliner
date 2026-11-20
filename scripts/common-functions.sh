@@ -430,7 +430,7 @@ direct_runner_root() {
     sudo "$@"
     return $?
   fi
-  if ! [[ "${E2E_OS_WORK_DEADLINE:-}" =~ ^[0-9]+$ ]]; then
+  if ! [[ "${E2E_OS_WORK_DEADLINE:-}" =~ ^[0-9]{1,15}$ ]]; then
     echo "Error: direct-runner privileged acquisition has no aggregate deadline." >&2
     return 64
   fi
@@ -439,7 +439,12 @@ direct_runner_root() {
   local bounded=(bash -c '
     deadline=$1
     shift
-    remaining=$((deadline - $(date +%s%3N)))
+    now=$(/usr/bin/python3 -c "import time; print(time.monotonic_ns() // 1000000)") || exit 64
+    remaining=$((10#$deadline - now))
+    if (( remaining > 595000 )); then
+      echo "Error: direct-runner acquisition deadline out of range." >&2
+      exit 64
+    fi
     if (( remaining <= 0 )); then
       echo "Error: direct-runner acquisition budget exhausted before $1." >&2
       exit 124

@@ -1,0 +1,19 @@
+id: ENV-3c979da2
+title: Bound complete service startup on every normal E2E shard
+title-ja: 全通常E2Eシャードのサービス起動全体を制限する
+description: Extend the existing utils outer supervisor to every normal E2E matrix shard. The original at-most-two startup attempts share 360 seconds, clamped by the job-relative 1320-second checkpoint, with 10 seconds of termination grace. Keep the inner 180-second readiness and recovery gate and existing job limits. Supervise configuration preparation through fresh completion validation; reap only owned descendants on failure and hand ready services to the ordinary E2E follower on success. Bind fresh completion to the shard, execution and unique invocation nonce, and require successful structured evidence before any test command. Retain only typed phase, attempt, elapsed time, terminal outcome and safe process identifiers; discard raw startup stdout using an unlinked temporary file and omit exception text and process names. All shards verify diagnostic availability before artifact upload. Before verified E2E entry, upload only a fresh snapshot of approved structured evidence, excluding service-written raw log files and firebase-debug.log. After verified E2E entry, retain Playwright command logs, reports and attachments, but omit raw service directories and firebase-debug.log entirely because they can still contain startup-origin bytes. Source log files are left untouched; no byte-offset filtering, truncation or generic post-entry redaction is used. External runner cancellation cannot guarantee upload. Isolated production-entry controls prove pre/post readiness stalls, retry success and deadline exhaustion, scoped cleanup, launch gating, freshness and synthetic secret exclusion; these do not establish the cause of the historical core-8 cancellation.
+category: environment
+status: implemented
+components:
+- .github/workflows/ci-test-e2e.yml
+- scripts/ci-e2e-start.sh
+- scripts/ci/run-e2e-startup.sh
+- scripts/ci/run-bounded-e2e.py
+- scripts/ci/verify-startup-evidence.py
+tests:
+- scripts/tests/env-firefox-ci-promotion-934d0f2a.spec.ts
+- scripts/tests/test_bounded_e2e.py
+- scripts/tests/test_bounded_e2e_startup.py
+- scripts/tests/test_bounded_e2e_startup_evidence.py
+- scripts/tests/test_bounded_e2e_startup_workflow.py
+- scripts/tests/test_bounded_e2e_startup_artifacts.py
