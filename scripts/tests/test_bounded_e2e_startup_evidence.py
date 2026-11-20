@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import sys
 import tempfile
 import unittest
@@ -95,6 +96,22 @@ class StartupEvidenceTest(unittest.TestCase):
         self.write()
         self.check(0)
         self.check(1, True)
+
+    def test_invalid_evidence_stages_only_fixed_error_and_stays_nonzero(self):
+        self.value['unknown'] = 'SYNTHETIC_SERVICE_SECRET'
+        self.write()
+        output = self.root / 'github-output'
+        result = subprocess.run([sys.executable, str(ROOT / 'scripts/ci/verify-startup-evidence.py'),
+                                 '--stage-upload'], cwd=self.root, env={**os.environ,
+                                 'E2E_PROJECT': 'core-8', 'E2E_EXECUTION_ID': 'fixture-1',
+                                 'GITHUB_OUTPUT': str(output)}, capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 1)
+        staged = Path(output.read_text().strip().removeprefix('upload_path='))
+        self.addCleanup(shutil.rmtree, staged)
+        self.assertEqual([path.name for path in staged.iterdir()], ['core-8-startup-evidence.json'])
+        summary = (staged / 'core-8-startup-evidence.json').read_text()
+        self.assertNotIn('SYNTHETIC_SERVICE_SECRET', summary)
+        self.assertEqual(json.loads(summary)['status'], 'missing_or_invalid')
 
 
 if __name__ == '__main__':

@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import tempfile
 
 TERMINAL = {'passed', 'failed', 'timed_out', 'interrupted', 'cleanup_failed',
             'supervisor_failed', 'not_started', 'orphaned_children'}
@@ -61,6 +62,8 @@ def valid_record(value):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--require-success', action='store_true')
+    parser.add_argument('--stage-upload', action='store_true',
+                        help='Snapshot verified structured startup diagnostics outside raw log paths')
     args = parser.parse_args()
     root = Path('job_logs')
     root.mkdir(exist_ok=True)
@@ -102,6 +105,21 @@ def main():
         errors.append('Startup evidence is missing, invalid, stale or unsuccessful')
     result = {'status': 'missing_or_invalid' if errors else 'available', 'errors': errors}
     (root / (prefix + '-evidence.json')).write_text(json.dumps(result, indent=2) + '\n')
+    if args.stage_upload:
+        # Service processes can write raw files directly, independently of the
+        # supervisor's stdout capture. Before E2E entry, upload only this fresh
+        # snapshot, never the source log directories. Invalid evidence yields
+        # only the fixed diagnostic error above and still exits nonzero.
+        upload = Path(tempfile.mkdtemp(prefix='startup-artifacts-'))
+        (upload / (prefix + '-evidence.json')).write_text(json.dumps(result, indent=2) + '\n')
+        if not errors:
+            for name in (prefix + '-status.json', 'setup-services-' + shard + '.log'):
+                (upload / name).write_text(json.dumps(status, indent=2) + '\n')
+            if status['status'] == 'passed':
+                (upload / (prefix + '-completed.json')).write_text(json.dumps(expected) + '\n')
+        # Publish a path only after all selected files have been safely written.
+        with Path(os.environ['GITHUB_OUTPUT']).open('a') as output:
+            output.write('upload_path=' + str(upload) + '\n')
     print(json.dumps(result))
     return 1 if errors else 0
 

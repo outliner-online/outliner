@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class StartupWorkflowTest(unittest.TestCase):
-    def run_case(self, mode, project='core-8', expired=False):
+    def run_case(self, mode, project='core-8', expired=False, artifact_check=None):
         with tempfile.TemporaryDirectory(prefix='all-shard-startup-') as directory:
             root = Path(directory)
             (root / 'job_logs').mkdir()
@@ -49,7 +49,8 @@ class StartupWorkflowTest(unittest.TestCase):
             command += '\npython3 scripts/ci/verify-startup-evidence.py --require-success\ntouch launched\n'
             sentinel = 'SYNTHETIC_SECRET_' + uuid.uuid4().hex
             env = {**os.environ, 'E2E_PROJECT': project, 'E2E_EXECUTION_ID': 'fixture-1',
-                   'CONTROL_MODE': mode, 'SECRET_SENTINEL': sentinel}
+                   'CONTROL_MODE': mode, 'SECRET_SENTINEL': sentinel,
+                   'WRITE_SERVICE_FILES': '1' if artifact_check else ''}
             unrelated = subprocess.Popen([sys.executable, '-c', 'import time;time.sleep(60)'])
             wall_started = time.time()
             before = time.monotonic()
@@ -102,6 +103,8 @@ class StartupWorkflowTest(unittest.TestCase):
                     else:
                         self.assertIn(pid, [row['pid'] for row in record['retained_service_processes']])
                         os.kill(pid, 0)
+                if artifact_check:
+                    artifact_check(root, env, sentinel, expected)
             finally:
                 unrelated.terminate()
                 unrelated.wait()

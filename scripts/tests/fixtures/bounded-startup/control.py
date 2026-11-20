@@ -14,6 +14,16 @@ mode = os.environ['CONTROL_MODE']
 attempt = int(os.environ['attempt'])
 if stage == 'prepare':
     print(os.environ['SECRET_SENTINEL'], flush=True)
+    if os.environ.get('WRITE_SERVICE_FILES'):
+        # A real child writes directly to service files, outside stdout capture.
+        # This path is independently checked against the PM2 configuration.
+        subprocess.run([sys.executable, '-c', '''from pathlib import Path
+import os
+value = os.environ['SECRET_SENTINEL']
+Path('logs').mkdir(exist_ok=True)
+Path('logs/yjs-server.log').write_text(value)
+Path('firebase-debug.log').write_text(value)
+'''], check=True, timeout=2)
     # Deliberately detached and TERM-resistant: the subreaper must reap it.
     child = subprocess.Popen([sys.executable, '-c',
         'import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(60)'],

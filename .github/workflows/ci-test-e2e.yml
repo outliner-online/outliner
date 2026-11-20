@@ -326,6 +326,7 @@ jobs:
           set -euo pipefail
           mkdir -p job_logs
           python3 scripts/ci/verify-startup-evidence.py --require-success
+          echo 'startup_verified=true' >> "$GITHUB_OUTPUT"
           project="${{ matrix.project }}"
           if [ "$project" = "onprem" ]; then
             scripts/test-onprem-client.sh 2>&1 | tee -a "job_logs/e2e-${E2E_BROWSER}-${project}-${E2E_EXECUTION_ID}.log"
@@ -469,10 +470,11 @@ jobs:
           fi
 
       - name: Verify startup evidence
+        id: startup_evidence
         if: always()
         shell: bash
         run: |
-          python3 scripts/ci/verify-startup-evidence.py
+          python3 scripts/ci/verify-startup-evidence.py --stage-upload
 
       - name: Record setup and execution status
         if: always()
@@ -517,7 +519,7 @@ jobs:
 
       - name: Upload Logs & Artifacts
         # Keep bounded-command evidence even after successful/retried execution.
-        if: failure() || startsWith(matrix.project, 'firefox-') || startsWith(matrix.project, 'new-2-') || startsWith(matrix.project, 'new-3') || matrix.project == 'tables-1' || matrix.project == 'utils'
+        if: steps.tests.outputs.startup_verified == 'true' && (failure() || startsWith(matrix.project, 'firefox-') || startsWith(matrix.project, 'new-2-') || startsWith(matrix.project, 'new-3') || matrix.project == 'tables-1' || matrix.project == 'utils')
         uses: actions/upload-artifact@v7
         with:
           name: e2e-artifacts-${{ env.E2E_BROWSER }}-${{ matrix.project }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -531,6 +533,18 @@ jobs:
             firebase-debug.log
           archive: true
           if-no-files-found: ${{ (startsWith(matrix.project, 'new-2-') || startsWith(matrix.project, 'new-3') || matrix.project == 'tables-1' || matrix.project == 'utils') && 'error' || 'warn' }}
+          retention-days: 2
+
+      - name: Upload safe startup diagnostics
+        # Services may write secrets directly to logs/ or firebase-debug.log.
+        # Before verified E2E entry, retain only the verifier's structured snapshot.
+        if: always() && steps.tests.outputs.startup_verified != 'true' && steps.startup_evidence.outputs.upload_path != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-artifacts-${{ env.E2E_BROWSER }}-${{ matrix.project }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.startup_evidence.outputs.upload_path }}
+          archive: true
+          if-no-files-found: error
           retention-days: 2
 
   new-3-complete:
