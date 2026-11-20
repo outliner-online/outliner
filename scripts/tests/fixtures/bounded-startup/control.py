@@ -21,8 +21,11 @@ if stage == 'prepare':
 import os
 value = os.environ['SECRET_SENTINEL']
 Path('logs').mkdir(exist_ok=True)
-Path('logs/yjs-server.log').write_text(value)
-Path('firebase-debug.log').write_text(value)
+for name in ('logs/yjs-server.log', 'client/logs/startup.log',
+             'server/logs/startup.log', 'firebase-debug.log'):
+    path = Path(name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(value)
 '''], check=True, timeout=2)
     # Deliberately detached and TERM-resistant: the subreaper must reap it.
     child = subprocess.Popen([sys.executable, '-c',

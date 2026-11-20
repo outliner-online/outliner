@@ -83,8 +83,11 @@ describe("ENV-934d0f2a: Firefox promotion to ordinary E2E CI", () => {
         for (const identity of ["env.E2E_BROWSER", "matrix.project", "github.run_id", "github.run_attempt"]) {
             expect(upload.with.name).toContain(`\${{ ${identity} }}`);
         }
-        for (const directory of ["job_logs/", "client/test-results/", "server/logs/"]) {
+        for (const directory of ["job_logs/", "client/test-results/", "client/playwright-report/"]) {
             expect(upload.with.path).toContain(directory);
+        }
+        for (const raw of ["client/logs/", "server/logs/", "logs/", "firebase-debug.log"]) {
+            expect(upload.with.path.trim().split("\n").map((value: string) => value.trim())).not.toContain(raw);
         }
         expect(job.env.E2E_EXECUTION_REPORT).toContain("${{ github.workspace }}/job_logs/");
         expect(job.env.E2E_EXPECTED_COLLECTION).toContain("${{ github.workspace }}/job_logs/");

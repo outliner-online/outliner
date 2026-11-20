@@ -518,7 +518,9 @@ jobs:
           NODE
 
       - name: Upload Logs & Artifacts
-        # Keep bounded-command evidence even after successful/retried execution.
+        # Retain Playwright command evidence, reports and attachments. Raw service
+        # files may still contain startup-origin bytes after readiness succeeds;
+        # omit them entirely rather than infer a safe byte boundary or mutate logs.
         if: steps.tests.outputs.startup_verified == 'true' && (failure() || startsWith(matrix.project, 'firefox-') || startsWith(matrix.project, 'new-2-') || startsWith(matrix.project, 'new-3') || matrix.project == 'tables-1' || matrix.project == 'utils')
         uses: actions/upload-artifact@v7
         with:
@@ -527,10 +529,6 @@ jobs:
             job_logs/
             client/test-results/
             client/playwright-report/
-            client/logs/
-            server/logs/
-            logs/
-            firebase-debug.log
           archive: true
           if-no-files-found: ${{ (startsWith(matrix.project, 'new-2-') || startsWith(matrix.project, 'new-3') || matrix.project == 'tables-1' || matrix.project == 'utils') && 'error' || 'warn' }}
           retention-days: 2
