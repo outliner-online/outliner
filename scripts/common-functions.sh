@@ -37,6 +37,7 @@ apt_is_available() {
       echo "Error: direct-runner setup cannot skip required OS acquisition." >&2
       return 1
     fi
+    if [ "${E2E_MIRROR_OFFLINE_READY:-0}" = 1 ]; then return 0; fi
     if [ "$APT_AVAILABLE_CACHE" = "yes" ]; then return 0; fi
     direct_runner_stage "apt-update"
     # Unlike the local probe, partial source failure must fail and retain diagnostics.
@@ -69,6 +70,10 @@ apt_is_available() {
 
 # Run apt-get with automatic retry and dpkg repair to handle transient failures
 retry_apt_get() {
+  if [ "${DIRECT_RUNNER_OS_STRICT:-0}" = 1 ] && [ "${E2E_MIRROR_OFFLINE_READY:-0}" = 1 ]; then
+    echo "Error: mirror acquisition/install left a required package missing; no fallback after dpkg." >&2
+    return 1
+  fi
   local attempts=0
   local max_attempts=3
   while true; do
