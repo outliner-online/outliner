@@ -62,7 +62,10 @@ if pgrep -f "node dist/server/src/index.js" >/dev/null; then
   pkill -f "node dist/server/src/index.js" || true
 fi
 
+# The outer CI supervisor consumes allowlisted phase/attempt evidence only.
+if declare -F startup_phase >/dev/null; then startup_phase readiness; fi
 start_and_wait_for_services
+if declare -F startup_phase >/dev/null; then startup_phase post_readiness; fi
 
 echo "Available services:"
 echo "- SvelteKit Server: http://127.0.0.1:${VITE_PORT}"
