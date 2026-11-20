@@ -338,7 +338,7 @@ def main(browser, deadline_ms, etc=Path('/etc/apt')):
     if os.geteuid() != 0:
         print('APT-MIRROR guard=refused reason=requires-root', flush=True)
         return 64
-    guard_remaining = deadline_ms - int(time.time() * 1000)
+    guard_remaining = deadline_ms - (time.monotonic_ns() // 1000000)
     if not (0 < guard_remaining <= 595000):
         reason = 'deadline-expired' if guard_remaining <= 0 else 'deadline-out-of-range'
         print('APT-MIRROR guard=refused reason=' + reason, flush=True)
@@ -349,7 +349,7 @@ def main(browser, deadline_ms, etc=Path('/etc/apt')):
     print('APT-MIRROR profile=ec2-resolute-priority1 first-max=150s retry-max=270s reserve=120s aggregate=600s', flush=True)
     packages = required(browser)
     def remaining():
-        return max(0, (deadline_ms - time.time() * 1000) / 1000 - 1.7)
+        return max(0, (deadline_ms - time.monotonic_ns() / 1000000) / 1000 - 1.7)
     temp = tempfile.mkdtemp(prefix='outliner-apt-')
     result = 125
     try:
@@ -406,7 +406,7 @@ if __name__ == '__main__':
     import sys
     parser = argparse.ArgumentParser()
     parser.add_argument('--browser', choices=('chromium', 'firefox'), required=True)
-    parser.add_argument('--deadline-ms', type=int, required=True)
+    parser.add_argument('--deadline-ms', type=int, required=True, help='Linux CLOCK_MONOTONIC deadline in milliseconds')
     args = parser.parse_args()
     try:
         raise SystemExit(main(args.browser, args.deadline_ms))

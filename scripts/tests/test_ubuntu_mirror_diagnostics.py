@@ -75,7 +75,7 @@ class Guards(unittest.TestCase):
         output = io.StringIO()
         # Replace only the preceding filesystem/profile and following effective
         # probe: tests exercise the actual main guard and prohibit acquisition.
-        with contextlib.redirect_stdout(output), patch.object(m, 'profile', return_value=('', '', {})), patch.object(m.os, 'geteuid', return_value=uid), patch.object(m.time, 'time', return_value=1000), patch.object(m, 'effective_sources_supported', return_value=False) as effective, patch.object(m, 'required', side_effect=AssertionError('must not acquire')):
+        with contextlib.redirect_stdout(output), patch.object(m, 'profile', return_value=('', '', {})), patch.object(m.os, 'geteuid', return_value=uid), patch.object(m.time, 'monotonic_ns', return_value=1000000000000), patch.object(m, 'effective_sources_supported', return_value=False) as effective, patch.object(m, 'required', side_effect=AssertionError('must not acquire')):
             result = m.main('chromium', 1000000 + remaining)
         return result, output.getvalue(), effective.call_count
     def test_root_reason_and_original_short_circuit(self):

@@ -88,7 +88,7 @@ time.sleep(60)
 class Unsupported(unittest.TestCase):
     def test_missing_or_unrecognised_profile_never_runs_apt(self):
         with tempfile.TemporaryDirectory() as d,patch.object(m,'pipeline') as pipeline:
-            self.assertEqual(m.main('chromium',int(time.time()*1000)+500000,Path(d)),78)
+            self.assertEqual(m.main('chromium',time.monotonic_ns()//1000000+500000,Path(d)),78)
             pipeline.assert_not_called()
     def test_azure_or_plain_list_preserves_legacy(self):
         from test_ubuntu_mirror_candidate import SOURCES
@@ -96,7 +96,7 @@ class Unsupported(unittest.TestCase):
             with tempfile.TemporaryDirectory() as d,patch.object(m,'pipeline') as pipeline:
                 root=Path(d);(root/'sources.list.d').mkdir();(root/'sources.list.d/ubuntu.sources').write_text(SOURCES)
                 (root/'apt-mirrors.txt').write_text(mirrors)
-                self.assertEqual(m.main('chromium',int(time.time()*1000)+500000,root),78)
+                self.assertEqual(m.main('chromium',time.monotonic_ns()//1000000+500000,root),78)
                 pipeline.assert_not_called()
     def test_workflow_and_existing_outer_boundary_unchanged(self):
         workflow=(ROOT/'.github/workflows/ci-test-e2e.yml').read_bytes()

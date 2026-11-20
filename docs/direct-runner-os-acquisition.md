@@ -16,6 +16,13 @@ timeout. `E2E_OS_BUDGET_SECONDS` can shorten the budget (6–600 seconds), never
 extend it. It bounds this setup stage; earlier npm/cache steps can still consume
 job time and an enclosing cancellation is not a successful setup.
 
+The entrypoint creates one Linux `CLOCK_MONOTONIC` deadline in milliseconds.
+The privileged wrapper reads the same clock after sudo and the Ubuntu acquisition
+consumer uses it for validation and all stage/fallback allowances. Wall time is
+only diagnostic: clock corrections cannot extend or expire the work allowance.
+The wrapper rejects missing/malformed and over-maximum inputs before starting a
+privileged command; elapsed time at every transition reduces the original budget.
+
 Each privileged acquisition also starts a root-owned `timeout` **inside** the
 sudo boundary, using the remaining work deadline and a two-second kill grace.
 The locked Playwright dependency CLI runs inside that supervisor; browser
@@ -35,6 +42,22 @@ locked local CLI and cannot fall back to a different preinstalled revision.
 No service/test readiness is reached after a failed setup step.
 
 ## Independent regression
+
+The fast offline deadline regressions for #5971 run through copied production
+entrypoint/wrapper/CLI code, with test-only OS, SDK and APT command adapters:
+
+```sh
+python3 -m unittest discover -s scripts/tests -p 'test_ubuntu_mirror*.py' -v
+```
+
+Independent child markers establish acquisition and fallback while wall time
+changes in both directions. They also check spent privilege/stage time, invalid
+inputs, native watchdog failure and child cleanup. Where `/usr/bin/sudo` exists,
+the fixture uses real privilege escalation and checks the acquisition UID;
+`APT_DEADLINE_REAL_SUDO=1` requires that path explicitly in a disposable nonroot
+container. The adapter path on hosts without sudo does not prove UID escalation.
+These fixtures do not establish package authenticity or browser readiness; the
+real OS/browser suite below and normal E2E CI remain required.
 
 With root/test npm dependencies installed and Docker control available, run:
 
