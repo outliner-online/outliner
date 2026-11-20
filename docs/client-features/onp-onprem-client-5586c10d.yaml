@@ -5,6 +5,7 @@ description: The shared client can authenticate with a local password session, u
 category: deployment
 status: implemented
 acceptance:
+- A cancelled browser tunnel drains buffered upstream data to native close before cleanup while its independently authenticated peer retains the same live tunnel
 - Cloud builds continue to use Firebase authentication and cloud project services
 - Controlled WebSocket terminal-order checks observe both real socket callbacks before cleanup, retaining the existing timeout and unrelated live connection checks
 - Local authentication uses the server-issued HTTP-only session cookie and restores the session after reload
@@ -19,6 +20,7 @@ tests:
 - client/e2e/onprem/onp-session-failures-5586c10d.spec.ts
 - client/e2e/onprem/onp-table-grid-sync-5586c10d.spec.ts
 - client/e2e/onprem/onp-transport-cancellation-5672.spec.ts
+- client/e2e/onprem/onp-websocket-buffered-cancellation-5586c10d.spec.ts
 - client/e2e/onprem/onp-websocket-cancellation-5586c10d.spec.ts
 - client/e2e/onprem/onp-websocket-reset-forwarding-5586c10d.spec.ts
 - client/e2e/onprem/onp-websocket-terminal-stop-5586c10d.spec.ts
