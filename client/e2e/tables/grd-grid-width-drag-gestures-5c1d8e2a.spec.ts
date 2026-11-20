@@ -137,6 +137,8 @@ test.describe("Grid header drag resize coexists with other gestures", () => {
         expect(await undoDepth(page)).toBe(depth + 3);
 
         const data = (await readGridProjectState(page)).tables[0].data;
+        const recordId = Object.keys(data)[0];
+        expect(recordId).toBeTruthy();
         for (const expected of [afterTouch + 40, afterTouch + 25, afterTouch]) {
             await page.getByTestId("toolbar-undo").click();
             await expect.poll(() => saved(page, "title")).toBe(expected);
@@ -168,6 +170,21 @@ test.describe("Grid header drag resize coexists with other gestures", () => {
         await waitForGridColumns(page);
         expect(await view.getAttribute("data-grid-id")).toBe(gridId);
         expect(await saved(page, "title")).toBe(afterTouch + 33);
-        await expectColumnGeometry(page, 0, "title", afterTouch + 33);
+        const grid = view.getByTestId("yjs-table-grid");
+        const body = grid.locator(`td[data-record-id="${recordId}"][data-col="title"]`);
+        await expect(body).toBeVisible({ timeout: 30000 });
+        // Require the known record's body geometry on every poll, even if
+        // rows disappear after readiness. A matching header alone cannot pass.
+        await expect(async () => {
+            const headerWidths = await grid.locator('th[data-col="title"]').evaluateAll(cells =>
+                cells.map(cell => cell.getBoundingClientRect().width)
+            );
+            const bodyWidths = await body.evaluateAll(cells => cells.map(cell => cell.getBoundingClientRect().width));
+            expect(headerWidths).toHaveLength(1);
+            expect(bodyWidths).toHaveLength(1);
+            for (const width of [...headerWidths, ...bodyWidths]) {
+                expect(Math.abs(width - (afterTouch + 33))).toBeLessThanOrEqual(1);
+            }
+        }).toPass({ timeout: 15000 });
     });
 });
