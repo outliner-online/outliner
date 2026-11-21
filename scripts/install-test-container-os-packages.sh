@@ -9,6 +9,7 @@ set -euo pipefail
 # the transport endpoint--Ubuntu's signed Release metadata and package signature
 # verification remain enabled.
 readonly acquisition_budget_seconds="${APT_ACQUISITION_BUDGET_SECONDS:-180}"
+readonly shutdown_grace_seconds="${APT_ACQUISITION_SHUTDOWN_GRACE_SECONDS:-5}"
 readonly primary_host="${APT_PRIMARY_HOST:-azure.archive.ubuntu.com}"
 readonly fallback_host="${APT_FALLBACK_HOST:-archive.ubuntu.com}"
 readonly apt_options=(
@@ -27,12 +28,16 @@ if [[ ! "$acquisition_budget_seconds" =~ ^[1-9][0-9]*$ ]]; then
     echo "APT_ACQUISITION_BUDGET_SECONDS must be a positive integer." >&2
     exit 64
 fi
+if [[ ! "$shutdown_grace_seconds" =~ ^[1-9][0-9]*$ ]]; then
+    echo "APT_ACQUISITION_SHUTDOWN_GRACE_SECONDS must be a positive integer." >&2
+    exit 64
+fi
 
 # Run the complete production acquisition path under one deadline. The private
 # worker mode avoids applying a fresh budget to each fallback attempt.
 if [[ $1 != "--bounded-acquisition-worker" ]]; then
     set +e
-    timeout --signal=TERM --kill-after=5 "$acquisition_budget_seconds" \
+    timeout --signal=TERM --kill-after="$shutdown_grace_seconds" "$acquisition_budget_seconds" \
         "$0" --bounded-acquisition-worker "$@"
     status=$?
     set -e
@@ -64,9 +69,11 @@ install_from_current_source() {
 }
 
 if ! install_from_current_source "primary host ${primary_host}" "$@"; then
+    echo "APT acquisition failure: primary host ${primary_host}" >&2
     echo "Primary APT source failed; retrying once through ${fallback_host}." >&2
     replace_archive_host "$primary_host" "$fallback_host"
     if ! install_from_current_source "fallback host ${fallback_host}" "$@"; then
+        echo "APT acquisition failure: fallback host ${fallback_host}" >&2
         echo "APT package acquisition exhausted the bounded primary and fallback attempts." >&2
         exit 1
     fi

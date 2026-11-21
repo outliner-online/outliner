@@ -7,4 +7,5 @@ category: environment
 status: implemented
 tests:
 - scripts/tests/env-test-container-apt-fallback-6c87a4d2.spec.ts
+- scripts/tests/env-test-container-negative-oracle-3f85b2a1.spec.ts
 - scripts/tests/test-container-os-packages.integration.sh
