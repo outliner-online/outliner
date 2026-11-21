@@ -1,0 +1,11 @@
+id: ENV-6017e2e0
+title: Exact-ID artifact round-trip recovery
+title-ja: Exact-ID artifact round-trip recovery
+description: Preserve strict artifact round-trip validation while retrying the same finalized identity after a transient lookup miss.
+category: environment
+status: implemented
+components:
+- .github/workflows/ci-test-e2e.yml
+- scripts/ci/verify-artifact-roundtrip.sh
+tests:
+- scripts/tests/env-artifact-roundtrip-exact-id-recovery-6017e2e0.spec.ts

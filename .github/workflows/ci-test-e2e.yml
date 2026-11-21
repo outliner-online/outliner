@@ -219,6 +219,20 @@ jobs:
             "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$EXPECTED_ARTIFACT_ID" "$WRONG_ARTIFACT_ID" "$GITHUB_SHA"
 
       - name: Download representative E2E evidence
+        id: representative-download
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ steps.representative-upload.outputs.artifact-id }}
+          path: artifact-roundtrip/downloaded
+
+      - name: Wait for exact artifact visibility
+        if: steps.representative-download.outcome == 'failure'
+        shell: bash
+        run: sleep 10
+
+      - name: Retry representative E2E evidence by exact identity
+        if: steps.representative-download.outcome == 'failure'
         uses: actions/download-artifact@v8
         with:
           artifact-ids: ${{ steps.representative-upload.outputs.artifact-id }}
