@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createECDH, createHash, timingSafeEqual } from "node:crypto";
 
 export interface PushConfig {
     publicKey: string;
@@ -27,5 +27,12 @@ export function loadPushConfig(env: NodeJS.ProcessEnv = process.env): PushConfig
         !publicKey || !privateKey || !subject || publicBytes?.length !== 65 || publicBytes[0] !== 4
         || privateBytes?.length !== 32 || !/^(mailto:|https:\/\/)/u.test(subject)
     ) return undefined;
+    try {
+        const ecdh = createECDH("prime256v1");
+        ecdh.setPrivateKey(privateBytes);
+        if (!timingSafeEqual(ecdh.getPublicKey(undefined, "uncompressed"), publicBytes)) return undefined;
+    } catch {
+        return undefined;
+    }
     return { publicKey, privateKey, subject, vapidKeyId: createHash("sha256").update(publicBytes).digest("base64url") };
 }

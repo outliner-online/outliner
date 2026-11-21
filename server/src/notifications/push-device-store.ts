@@ -18,6 +18,7 @@ export interface PushDeviceStatus {
     revision: number;
     state: "registered" | "disabled";
     vapidKeyId?: string;
+    endpointHash?: string;
 }
 export class PushDeviceError extends Error {
     constructor(public code: "conflict" | "capacity" | "unavailable", message: string) {
@@ -60,12 +61,12 @@ export class PushDeviceStore {
     }
     list(uid: string): PushDeviceStatus[] {
         return (this.db().prepare(
-            "SELECT device_id deviceId, revision, state, vapid_key_id vapidKeyId FROM web_push_devices WHERE uid=? ORDER BY device_id",
+            "SELECT device_id deviceId, revision, state, vapid_key_id vapidKeyId, endpoint_hash endpointHash FROM web_push_devices WHERE uid=? ORDER BY device_id",
         ).all(uid) as PushDeviceStatus[]);
     }
     get(uid: string, deviceId: string): PushDeviceStatus | undefined {
         return this.db().prepare(
-            "SELECT device_id deviceId, revision, state, vapid_key_id vapidKeyId FROM web_push_devices WHERE uid=? AND device_id=?",
+            "SELECT device_id deviceId, revision, state, vapid_key_id vapidKeyId, endpoint_hash endpointHash FROM web_push_devices WHERE uid=? AND device_id=?",
         ).get(uid, deviceId) as PushDeviceStatus | undefined;
     }
     register(uid: string, deviceId: string, input: ValidatedRegistration): PushDeviceStatus {
@@ -88,14 +89,14 @@ export class PushDeviceStore {
             if ((row ? Number(row.revision) : 0) !== input.expectedRevision) {
                 throw new PushDeviceError("conflict", "Registration authority is stale");
             }
-            if (!row) {
+            if (row?.state !== "registered") {
                 const counts = db.prepare(
                     "SELECT COUNT(*) total, SUM(state='registered') active FROM web_push_devices WHERE uid=?",
                 ).get(uid) as { total: number; active: number; };
                 if (counts.active >= MAX_ACTIVE_PUSH_DEVICES) {
                     throw new PushDeviceError("capacity", "Device capacity reached");
                 }
-                if (counts.total >= MAX_RETAINED_PUSH_DEVICES) {
+                if (!row && counts.total >= MAX_RETAINED_PUSH_DEVICES) {
                     db.prepare(
                         "DELETE FROM web_push_devices WHERE uid=? AND device_id=(SELECT device_id FROM web_push_devices WHERE uid=? AND state='disabled' ORDER BY updated_at LIMIT 1)",
                     ).run(uid, uid);
@@ -126,8 +127,11 @@ export class PushDeviceStore {
         const db = this.db();
         return db.transaction(() => {
             const row = this.get(uid, deviceId);
-            if (!row) return undefined;
+            // A pending first enrollment has no device row yet. Advancing an
+            // existing owner fence invalidates that admitted authority without
+            // allocating a per-device tombstone for a never-admitted ID.
             db.prepare("UPDATE web_push_owners SET admission_fence=admission_fence+1 WHERE uid=?").run(uid);
+            if (!row) return undefined;
             db.prepare(
                 `UPDATE web_push_devices SET revision=revision+1,state='disabled',endpoint_hash=NULL,endpoint=NULL,p256dh=NULL,auth_secret=NULL,enrollment_generation=NULL,updated_at=? WHERE uid=? AND device_id=?`,
             ).run(Date.now(), uid, deviceId);

@@ -55,4 +55,55 @@ describe("private Web Push device store", () => {
         ).to.throw(PushDeviceError, "conflicts with an existing destination");
         db.close();
     });
+
+    it("fences admitted first enrollment without a tombstone and enforces capacity on reactivation", () => {
+        const db = new Database(":memory:");
+        const store = new PushDeviceStore(db);
+        store.initialize();
+        const pendingFence = store.issueAdmission("pending-owner");
+        expect(store.disable("pending-owner", device)).to.equal(undefined);
+        expect(store.list("pending-owner")).to.deep.equal([]);
+        expect(() => store.register("pending-owner", device, {
+            endpoint: "https://push.example.test/pending",
+            p256dh: key,
+            auth,
+            vapidKeyId: "key-1",
+            expectedRevision: 0,
+            admissionFence: pendingFence,
+            enrollmentGeneration: "generation_pending_01",
+        })).to.throw(PushDeviceError, "stale");
+
+        for (let index = 0; index < 16; index++) {
+            store.register("full-owner", `capacity_device_${index.toString().padStart(2, "0")}`, {
+                endpoint: `https://push.example.test/capacity/${index}`,
+                p256dh: key,
+                auth,
+                vapidKeyId: "key-1",
+                expectedRevision: 0,
+                admissionFence: store.issueAdmission("full-owner"),
+                enrollmentGeneration: `capacity_generation_${index.toString().padStart(2, "0")}`,
+            });
+        }
+        const disabled = store.disable("full-owner", "capacity_device_00")!;
+        store.register("full-owner", "capacity_replacement", {
+            endpoint: "https://push.example.test/capacity/replacement",
+            p256dh: key,
+            auth,
+            vapidKeyId: "key-1",
+            expectedRevision: 0,
+            admissionFence: store.issueAdmission("full-owner"),
+            enrollmentGeneration: "capacity_replacement_generation",
+        });
+        expect(() => store.register("full-owner", "capacity_device_00", {
+            endpoint: "https://push.example.test/capacity/reactivated",
+            p256dh: key,
+            auth,
+            vapidKeyId: "key-1",
+            expectedRevision: disabled.revision,
+            admissionFence: store.issueAdmission("full-owner"),
+            enrollmentGeneration: "capacity_reactivation_generation",
+        })).to.throw(PushDeviceError, "capacity");
+        expect(store.get("full-owner", "capacity_device_00")).to.include({ state: "disabled" });
+        db.close();
+    });
 });

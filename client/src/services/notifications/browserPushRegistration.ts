@@ -29,6 +29,15 @@ function decodeKey(value: string): Uint8Array {
     const text = value.replace(/-/gu, "+").replace(/_/gu, "/");
     return Uint8Array.from(atob(text), c => c.charCodeAt(0));
 }
+function sameBytes(left: ArrayBuffer | null, right: Uint8Array): boolean {
+    if (!left) return false;
+    const value = new Uint8Array(left);
+    return value.length === right.length && value.every((byte, index) => byte === right[index]);
+}
+async function endpointHash(endpoint: string): Promise<string> {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(endpoint));
+    return [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, "0")).join("");
+}
 function deviceId(): string {
     let id = localStorage.getItem(DEVICE_KEY);
     if (!id) {
@@ -37,23 +46,43 @@ function deviceId(): string {
     }
     return id;
 }
-function binding(value?: { generation: string; vapidKeyId: string; } | undefined): Promise<void> {
+interface EnrollmentBinding {
+    fence: number;
+    generation?: string;
+    vapidKeyId?: string;
+}
+function updateBinding(operation: "read" | "disarm" | "arm", value?: EnrollmentBinding): Promise<EnrollmentBinding> {
     return new Promise((resolve, reject) => {
         const open = indexedDB.open(DB, 1);
         open.onupgradeneeded = () => open.result.createObjectStore(STORE);
         open.onerror = () => reject(open.error);
         open.onsuccess = () => {
-            const tx = open.result.transaction(STORE, "readwrite");
+            const tx = open.result.transaction(STORE, operation === "read" ? "readonly" : "readwrite");
             const store = tx.objectStore(STORE);
-            if (value) store.put(value, "current");
-            else store.delete("current");
-            tx.oncomplete = () => {
-                if (value) localStorage.setItem(ARMED_HINT_KEY, "true");
-                else localStorage.removeItem(ARMED_HINT_KEY);
-                open.result.close();
-                resolve();
+            const request = store.get("current");
+            let result: EnrollmentBinding = { fence: 0 };
+            request.onsuccess = () => {
+                const current = (request.result as EnrollmentBinding | undefined) ?? { fence: 0 };
+                if (operation === "read") result = current;
+                else if (operation === "disarm") {
+                    result = { fence: current.fence + 1 };
+                    store.put(result, "current");
+                } else {
+                    if (!value || current.fence !== value.fence || current.generation) {
+                        tx.abort();
+                        return;
+                    }
+                    result = value;
+                    store.put(result, "current");
+                }
             };
-            tx.onerror = () => reject(tx.error);
+            tx.oncomplete = () => {
+                if (result.generation) localStorage.setItem(ARMED_HINT_KEY, "true");
+                else if (operation === "disarm") localStorage.removeItem(ARMED_HINT_KEY);
+                open.result.close();
+                resolve(result);
+            };
+            tx.onabort = tx.onerror = () => reject(tx.error ?? new Error("Enrollment binding changed"));
         };
     });
 }
@@ -70,6 +99,8 @@ export class BrowserPushRegistration {
     private config?: Awaited<ReturnType<typeof getPushConfig>>;
     private registration?: ServiceWorkerRegistration;
     private serverStatus?: PushStatus;
+    private subscription?: PushSubscription;
+    private bindingFence?: number;
     status: EnrollmentView = "not-enrolled";
     detail = "";
     async reconcile(): Promise<void> {
@@ -82,13 +113,20 @@ export class BrowserPushRegistration {
             return;
         }
         try {
-            const [config, registration, server] = await Promise.all([getPushConfig(), worker(),
-                getPushStatus(deviceId())]);
+            const [config, registration, server, binding] = await Promise.all([getPushConfig(), worker(),
+                getPushStatus(deviceId()), updateBinding("read")]);
             this.config = config;
             this.registration = registration;
             this.serverStatus = server;
+            this.bindingFence = binding.fence;
             const subscription = await registration.pushManager.getSubscription();
-            this.status = server.state === "registered" && !!subscription && Notification.permission === "granted"
+            const keyMatches = !!subscription
+                && sameBytes(subscription.options.applicationServerKey, decodeKey(config.publicKey));
+            if (subscription && !keyMatches) await subscription.unsubscribe();
+            this.subscription = keyMatches ? subscription : undefined;
+            const matches = keyMatches && !!subscription
+                && server.endpointHash === await endpointHash(subscription.endpoint);
+            this.status = server.state === "registered" && matches && Notification.permission === "granted"
                     && server.vapidKeyId === config.vapidKeyId
                 ? "registered"
                 : "not-enrolled";
@@ -107,10 +145,13 @@ export class BrowserPushRegistration {
             const config = this.config;
             const registration = this.registration;
             if (!config || !registration) throw new Error("Enrollment is not ready");
-            const subscription = await registration.pushManager.subscribe({
-                userVisibleOnly: true,
-                applicationServerKey: decodeKey(config.publicKey),
-            });
+            if (this.bindingFence === undefined) throw new Error("Enrollment binding is not ready");
+            const applicationServerKey = decodeKey(config.publicKey);
+            let subscription = this.subscription;
+            if (subscription && !sameBytes(subscription.options.applicationServerKey, applicationServerKey)) {
+                throw new Error("Existing subscription must be reconciled before enrollment");
+            }
+            subscription ??= await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey });
             const json = subscription.toJSON();
             const enrollmentGeneration = randomId();
             const status = await registerPushDevice(deviceId(), {
@@ -121,7 +162,11 @@ export class BrowserPushRegistration {
                 subscription: { endpoint: subscription.endpoint, keys: json.keys },
             });
             if (generation !== this.operation) return;
-            await binding({ generation: enrollmentGeneration, vapidKeyId: config.vapidKeyId });
+            await updateBinding("arm", {
+                fence: this.bindingFence,
+                generation: enrollmentGeneration,
+                vapidKeyId: config.vapidKeyId,
+            });
             if (generation === this.operation && status.state === "registered") {
                 this.serverStatus = status;
                 this.status = "registered";
@@ -137,7 +182,7 @@ export class BrowserPushRegistration {
         ++this.operation;
         const failed: string[] = [];
         try {
-            await binding();
+            await updateBinding("disarm");
         } catch {
             failed.push("local disarm");
         }
