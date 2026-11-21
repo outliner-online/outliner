@@ -12,8 +12,9 @@ import { isPublicProject, projectRoute } from "../../lib/publicProject";
 import { projectKanbansRoute } from "../../lib/managementPaths";
 import { resolve } from "$app/paths";
 import { openRouteProject, type RouteProjectHandle } from "../../lib/routeProject";
-interface Props { projectName:string; kanbanId:string; }
-let { projectName, kanbanId }: Props = $props();
+import type { KanbanObservationContextV1 } from "../../../../shared/src/notifications/kanbanProjection";
+interface Props { projectName:string; kanbanId:string; observationContext?:KanbanObservationContextV1; contextError?:string; }
+let { projectName, kanbanId, observationContext, contextError }: Props = $props();
 let authenticated=$state(false), loading=$state(true), notFound=$state(false);
 let error=$state<string|undefined>(), handles=$state<KanbanHandles|undefined>(), name=$state("Kanban");
 let projectDoc=$state<NonNullable<typeof store.project>["ydoc"]|undefined>(), bindingRevision=$state(0);
@@ -31,5 +32,5 @@ onMount(()=>{authenticated=userManager.getCurrentUser()!==null;return()=>{destro
 <svelte:head><title>{name} | Outliner</title></svelte:head>
 <main class="w-full max-w-7xl mx-auto px-4 py-8"><Breadcrumb items={[{label:"Home",href:resolve("/")},{label:projectName,href:projectRoute(projectName)},{label:"Kanbans",href:projectKanbansRoute(projectName)},{label:name}]} /><div class="heading"><h1>{name}</h1></div>
 {#if demo}<p>Public demo / Guest access</p>{:else}<AuthComponent onAuthSuccess={()=>authenticated=true} onAuthLogout={handleLogout}/>{/if}
-{#if loading}<Loader/>{:else if error}<p role="alert">{error}</p>{:else if notFound}<p data-testid="kanban-not-found">Kanban not found.</p>{:else if canAccess&&handles&&projectDoc}{#key `${handles.kanbanId}:${bindingRevision}`}<KanbanBoard kanban={handles} {projectDoc} projectId={yjsStore.currentProjectId??undefined} isReadOnly={demo}/>{/key}{/if}</main>
+{#if contextError}<p role="alert" data-testid="kanban-context-error">{contextError}</p>{:else if loading}<Loader/>{:else if error}<p role="alert">{error}</p>{:else if notFound}<p data-testid="kanban-not-found">Kanban not found.</p>{:else if canAccess&&handles&&projectDoc}{#key `${handles.kanbanId}:${bindingRevision}`}<KanbanBoard kanban={handles} {projectDoc} projectId={yjsStore.currentProjectId??undefined} isReadOnly={demo} context={observationContext}/>{/key}{/if}</main>
 <style>.heading{display:flex;gap:1rem;align-items:baseline;margin:1rem 0}.heading h1{font-size:1.5rem;font-weight:700}</style>

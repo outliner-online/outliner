@@ -1,5 +1,12 @@
 import type * as Y from "yjs";
 import {
+    createKanbanVisibleProjection,
+    deriveKanbanRenderModel,
+    type KanbanObservationContextV1,
+    type KanbanVisibleProjectionResult,
+    nonReadyKanbanProjection,
+} from "../../../../shared/src/notifications/kanbanProjection";
+import {
     analyzeProjectQueryProvenance,
     type ProjectQueryProvenance,
     unambiguousPhysicalColumn,
@@ -47,6 +54,7 @@ export interface KanbanProjection {
     provenance?: KanbanExecutionProvenance;
     message?: string;
     current: boolean;
+    visible?: KanbanVisibleProjectionResult;
 }
 export interface KanbanRunnerOptions {
     projectDoc: Y.Doc;
@@ -55,11 +63,18 @@ export interface KanbanRunnerOptions {
     kanban: KanbanHandles;
     connect?: TableDocConnector;
     registry?: RelationRegistryPort;
+    context?: KanbanObservationContextV1;
 }
 
 export class KanbanQueryRunner {
     private listeners = new Set<(p: KanbanProjection) => void>();
-    private projection: KanbanProjection = { status: "loading", lanes: [], columns: [], current: false };
+    private projection: KanbanProjection = {
+        status: "loading",
+        lanes: [],
+        columns: [],
+        current: false,
+        visible: nonReadyKanbanProjection("Kanban query is loading"),
+    };
     private resolvedSourceSchema: ParsedTableSchema | undefined;
     private resolvedSchemas = new Map<string, ParsedTableSchema>();
     private pendingProjection: Promise<void> = Promise.resolve();
@@ -154,7 +169,14 @@ export class KanbanQueryRunner {
             return this.publish(this.fail("unavailable", `Kanban query source is missing: ${state.relation}`));
         }
         if (state.status === "error") {
-            return this.publish({ status: "error", message: state.message, lanes: [], columns: [], current: false });
+            return this.publish({
+                status: "error",
+                message: state.message,
+                lanes: [],
+                columns: [],
+                current: false,
+                visible: nonReadyKanbanProjection(state.message),
+            });
         }
         if (state.status === "success") {
             this.selectEvidence = state.evidence;
@@ -179,8 +201,7 @@ export class KanbanQueryRunner {
             ));
         }
         const analysis = analyzeProjectQueryProvenance(e),
-            by = new Map<KanbanLaneValue, KanbanCard[]>(),
-            seen: KanbanLaneValue[] = [];
+            by = new Map<KanbanLaneValue, KanbanCard[]>();
         for (let i = 0; i < e.rows.length; i++) {
             const row = e.rows[i]!, k = row[s.groupField];
             if (k !== null && typeof k !== "string") {
@@ -189,7 +210,6 @@ export class KanbanQueryRunner {
             const key = k as KanbanLaneValue;
             if (!by.has(key)) {
                 by.set(key, []);
-                seen.push(key);
             }
             by.get(key)!.push({ occurrenceKey: `${e.queryId}:${i}`, sourceIdentity: identity(row, analysis), row });
         }
@@ -243,17 +263,28 @@ export class KanbanQueryRunner {
         const declared: KanbanLaneValue[] = groupColumn?.kind === "text"
             ? [...(groupColumn.enumLabels ?? groupColumn.checkOptions ?? [])]
             : [];
-        const eligible = [...declared, ...seen.filter(key => !declared.includes(key))];
-        const preferred = s.laneOrder.filter(k => eligible.includes(k));
-        const order = [...preferred, ...eligible.filter(k => !preferred.includes(k))];
+        const renderInput = { rows: e.rows, settings: s, declaredGroupingChoices: declared };
+        const render = deriveKanbanRenderModel(renderInput);
+        const resolved = Intl.DateTimeFormat().resolvedOptions();
+        const visible = createKanbanVisibleProjection({
+            ...renderInput,
+            columns,
+            readiness: { status: "ready", complete: true, current: true },
+        }, this.options.context ?? {
+            version: 1,
+            surface: "board",
+            locale: resolved.locale,
+            timeZone: resolved.timeZone,
+        });
         if (definitionGeneration !== this.definitionGeneration) return;
         this.publish({
             status: "success",
-            lanes: order.map(key => ({ key, cards: by.get(key) ?? [] })),
+            lanes: render.lanes.map(lane => ({ key: lane.key, cards: by.get(lane.key) ?? [] })),
             columns,
             evidence: e,
             result: { columns, rows: e.rows },
             current: true,
+            visible,
             provenance: {
                 kanbanId: this.options.kanbanId,
                 query: e.query,
@@ -274,11 +305,23 @@ export class KanbanQueryRunner {
         });
     }
     private markStale(loading = false) {
-        if (this.projection.current) this.publish({ ...this.projection, current: false });
-        else if (loading && this.projection.status === "loading") this.publish(this.projection);
+        if (this.projection.current) {
+            this.publish({
+                ...this.projection,
+                current: false,
+                visible: nonReadyKanbanProjection("Kanban query result is not current"),
+            });
+        } else if (loading && this.projection.status === "loading") this.publish(this.projection);
     }
     private fail(status: "incomplete" | "invalid" | "unavailable", message: string): KanbanProjection {
-        return { status, message, lanes: [], columns: [], current: false };
+        return {
+            status,
+            message,
+            lanes: [],
+            columns: [],
+            current: false,
+            visible: nonReadyKanbanProjection(message),
+        };
     }
     private publish(p: KanbanProjection) {
         this.projection = p;
