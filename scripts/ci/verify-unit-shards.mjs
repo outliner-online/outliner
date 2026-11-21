@@ -73,8 +73,17 @@ function repositoryCoverageInventory() {
     return sourceFiles.filter((file) => /\.(?:js|ts|svelte)$/.test(file))
         .filter((file) => !/\.(?:spec|test)\.(?:js|ts)$/.test(file))
         .filter((file) => !/(?:^|\/)tests\//.test(file))
-        .filter((file) => !/(?:^|\/)(?:paraglide|stories)\//.test(file))
-        .filter((file) => !/(?:service-worker\.ts|\.d\.ts)$/.test(file))
+        // Keep this synchronized with the explicit coverage exclusions in
+        // client/vite.config.ts. In particular, generated declarations are
+        // part of Vitest's native inventory, and "paraglide" in a route or in
+        // the generated `src/paraglide.` directory is not excluded.
+        .filter((file) => !/(?:^|\/)lib\/paraglide\//.test(file))
+        .filter((file) => !/(?:^|\/)stories\//.test(file))
+        .filter((file) =>
+            !["service-worker.ts", "vite-env.d.ts", "global.d.ts", "app.d.ts"].includes(
+                path.relative(sourceRoot, file),
+            )
+        )
         .map((file) => path.resolve(file)).sort();
 }
 function mergeCoverage(target, coverage) {
