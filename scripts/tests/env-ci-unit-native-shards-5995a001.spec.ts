@@ -162,6 +162,9 @@ describe("unit CI native shard orchestration", () => {
 
     test("workflow retains the stable aggregate and runs base only after both shards", () => {
         const workflow = YAML.parse(fs.readFileSync(path.join(root, ".github/workflows/ci-test-unit.yml"), "utf8"));
+        expect(fs.readFileSync(path.join(root, "scripts/ci/verify-unit-shards.mjs"), "utf8")).toContain(
+            "--no-static-parse",
+        );
         expect(workflow.jobs["unit-test"].needs).toBe("unit-shard");
         expect(workflow.jobs["unit-test"].if).toBe("always()");
         expect(workflow.jobs["unit-test"].steps.some((step: any) => step.uses === "./.github/actions/setup-test-env"))

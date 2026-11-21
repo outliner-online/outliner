@@ -70,7 +70,7 @@ function mergeCoverage(target, coverage) {
     }
 }
 
-const listOutput = execFileSync(vitestBin, ["list", "--project", "unit"], {
+const listOutput = execFileSync(vitestBin, ["list", "--project", "unit", "--no-static-parse"], {
     cwd: clientDir,
     encoding: "utf8",
     env: { ...process.env, NODE_ENV: "test" },
