@@ -14,7 +14,7 @@ import { OutlinerReadService } from "../src/mcp/outliner-read-service.js";
 import { UpdateGridPresentationTool } from "../src/mcp/update-grid-presentation-tool.js";
 import { signAccessToken } from "../src/oauth/tokens.js";
 import { createDocumentStore, type DocumentStore } from "../src/persistence.js";
-import { refreshMcpLogStream } from "../src/utils/log-manager.js";
+import { acquireMcpLogDestination } from "./mcp-log-destination-fixture.js";
 import { AclStore, startTestServer, stopTestServer, tempDir, type TestServer } from "./server-create-table-fixture.js";
 import { PROJECT, seedGridProject } from "./server-grid-presentation-fixture.js";
 
@@ -54,102 +54,94 @@ export interface PresentationSeams {
     deliver?: (outcome: GridPresentationUpdateResult) => GridPresentationUpdateResult;
 }
 
-// refreshMcpLogStream replaces a process-global logger destination. Serialize
-// Grid fixtures so a later fixture cannot replace or close a destination that
-// an earlier fixture still owns.
-let fixtureOwnershipTail = Promise.resolve();
-
-async function acquireFixtureOwnership() {
-    const previousOwner = fixtureOwnershipTail;
-    let release!: () => void;
-    fixtureOwnershipTail = new Promise<void>(resolve => release = resolve);
-    await previousOwner;
-    return release;
-}
-
-export async function startGridMcpFixture() {
-    const releaseOwnership = await acquireFixtureOwnership();
-    const acl = new AclStore();
-    acl.grant("projectUsers", PROJECT, UID);
+export async function startGridMcpFixture(options: {
+    seed?: typeof seedGridProject;
+} = {}) {
+    const auditLease = await acquireMcpLogDestination();
     const dir = tempDir();
-    let server: TestServer;
+    let server: TestServer | undefined;
     try {
+        const acl = new AclStore();
+        acl.grant("projectUsers", PROJECT, UID);
         server = await startTestServer(dir, acl);
+        // This fixture owns the destination returned here.  Keeping the exact
+        // stream lets audit assertions queue a completion barrier on the same
+        // destination that pino writes, rather than relying on logger.flush().
+        const auditDestination = auditLease.destination;
+        await (options.seed ?? seedGridProject)(server.hocuspocus);
+        const context = new AsyncLocalStorage<string>();
+        const checks = new Map<string, number>();
+        let domainCalls = 0;
+        const seams: PresentationSeams = {};
+        const gatedAccess = async (uid: string, projectId: string) => {
+            const requestId = context.getStore() ?? "";
+            const check = (checks.get(requestId) ?? 0) + 1;
+            checks.set(requestId, check);
+            await seams.gate?.(requestId, check);
+            return acl.checkAccess(uid, projectId);
+        };
+        const realStore = createDocumentStore(server.persistence!);
+        const store: DocumentStore = async (room, doc) => {
+            await realStore(room, doc);
+            await seams.afterStore?.(room);
+        };
+        const service = new OutlinerGridPresentationService(server.hocuspocus, gatedAccess, store);
+        const domain = {
+            updatePresentation: async (
+                uid: string,
+                req: UpdateGridPresentationRequest,
+                options: GridPresentationUpdateOptions = {},
+            ) => {
+                if (!req.dryRun) {
+                    domainCalls++;
+                    await seams.beforeAttempt?.();
+                }
+                const outcome = await service.updatePresentation(uid, req, options);
+                return seams.deliver ? seams.deliver(outcome) : outcome;
+            },
+        };
+        const tool = new UpdateGridPresentationTool(domain, gatedAccess, () => (seams.now ?? Date.now)());
+        const app = express();
+        app.use(express.json());
+        app.use((req, _res, next) => context.run(req.header("x-request-id") ?? "", next));
+        const reads = new OutlinerReadService(server.hocuspocus, gatedAccess, async () => []);
+        app.use(createMcpRouter(reads, undefined, undefined, server.mcpRelations, undefined, undefined, tool));
+        const mcp = rpcClient(app);
+        let stopped = false;
+        return {
+            acl,
+            dir,
+            server,
+            seams,
+            checks,
+            mcp,
+            /** The unmodified production endpoint of the same server. */
+            production: rpcClient(server.server),
+            auditDestination,
+            waitForAuditDestination: auditLease.wait,
+            get domainCalls() {
+                return domainCalls;
+            },
+            async stop() {
+                if (stopped) return;
+                stopped = true;
+                try {
+                    await stopTestServer(server);
+                    await fs.remove(dir);
+                } finally {
+                    auditLease.release();
+                }
+            },
+        };
     } catch (error) {
-        releaseOwnership();
+        try {
+            if (server) await stopTestServer(server);
+            await fs.remove(dir);
+        } finally {
+            auditLease.release();
+        }
         throw error;
     }
-    // This fixture owns the destination returned here.  Keeping the exact
-    // stream lets audit assertions queue a completion barrier on the same
-    // destination that pino writes, rather than relying on logger.flush().
-    const auditDestination = refreshMcpLogStream();
-    await seedGridProject(server.hocuspocus);
-    const context = new AsyncLocalStorage<string>();
-    const checks = new Map<string, number>();
-    let domainCalls = 0;
-    const seams: PresentationSeams = {};
-    const gatedAccess = async (uid: string, projectId: string) => {
-        const requestId = context.getStore() ?? "";
-        const check = (checks.get(requestId) ?? 0) + 1;
-        checks.set(requestId, check);
-        await seams.gate?.(requestId, check);
-        return acl.checkAccess(uid, projectId);
-    };
-    const realStore = createDocumentStore(server.persistence!);
-    const store: DocumentStore = async (room, doc) => {
-        await realStore(room, doc);
-        await seams.afterStore?.(room);
-    };
-    const service = new OutlinerGridPresentationService(server.hocuspocus, gatedAccess, store);
-    const domain = {
-        updatePresentation: async (
-            uid: string,
-            req: UpdateGridPresentationRequest,
-            options: GridPresentationUpdateOptions = {},
-        ) => {
-            if (!req.dryRun) {
-                domainCalls++;
-                await seams.beforeAttempt?.();
-            }
-            const outcome = await service.updatePresentation(uid, req, options);
-            return seams.deliver ? seams.deliver(outcome) : outcome;
-        },
-    };
-    const tool = new UpdateGridPresentationTool(domain, gatedAccess, () => (seams.now ?? Date.now)());
-    const app = express();
-    app.use(express.json());
-    app.use((req, _res, next) => context.run(req.header("x-request-id") ?? "", next));
-    const reads = new OutlinerReadService(server.hocuspocus, gatedAccess, async () => []);
-    app.use(createMcpRouter(reads, undefined, undefined, server.mcpRelations, undefined, undefined, tool));
-    const mcp = rpcClient(app);
-    let stopped = false;
-    return {
-        acl,
-        dir,
-        server,
-        seams,
-        checks,
-        mcp,
-        /** The unmodified production endpoint of the same server. */
-        production: rpcClient(server.server),
-        auditDestination,
-        waitForAuditDestination: () => new Promise<void>((resolve, reject) => {
-            auditDestination.write("", error => error ? reject(error) : resolve());
-        }),
-        get domainCalls() {
-            return domainCalls;
-        },
-        async stop() {
-            if (stopped) return;
-            stopped = true;
-            try {
-                await stopTestServer(server);
-                await fs.remove(dir);
-            } finally {
-                releaseOwnership();
-            }
-        },
-    };
 }
 
 export type GridMcpFixture = Awaited<ReturnType<typeof startGridMcpFixture>>;

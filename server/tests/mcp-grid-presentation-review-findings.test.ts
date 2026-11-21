@@ -4,6 +4,7 @@ import path from "node:path";
 import * as Y from "yjs";
 import { orderColumns } from "../../shared/src/services/gridDefinition.js";
 import { mcpLogger, mcpLogPath } from "../src/utils/log-manager.js";
+import { startMcpTestServer } from "./mcp-create-table-fixture.js";
 import {
     type GridMcpFixture,
     rpcClient,
@@ -238,22 +239,46 @@ describe("MCP grid presentation review findings (#5436)", function() {
     it("keeps the audit destination exclusively owned across fixture lifetimes", async () => {
         const firstDestination = t.auditDestination;
         let secondStarted = false;
-        const secondStart = startGridMcpFixture().then(fixture => {
+        const secondStart = startMcpTestServer().then(fixture => {
             secondStarted = true;
             return fixture;
         });
-        await new Promise<void>(resolve => setImmediate(resolve));
-        expect(secondStarted, "a second fixture must not replace a live owner's destination").to.equal(false);
-        await t.waitForAuditDestination();
-        expect(firstDestination.destroyed).to.equal(false);
+        let second: Awaited<typeof secondStart> | undefined;
+        try {
+            await new Promise<void>(resolve => setImmediate(resolve));
+            expect(secondStarted, "another MCP fixture must not replace a live owner's destination").to.equal(false);
+            await t.waitForAuditDestination();
+            expect(firstDestination.destroyed).to.equal(false);
 
+            await t.stop();
+            second = await secondStart;
+            expect(firstDestination.writableEnded).to.equal(true);
+            await second.waitForAuditDestination();
+            expect(second.auditDestination.destroyed).to.equal(false);
+        } finally {
+            await t.stop();
+            second ??= await secondStart;
+            await second.stop();
+        }
+    });
+
+    it("rolls back a seeded startup failure before the next destination owner", async () => {
         await t.stop();
-        const second = await secondStart;
-        t = second;
-        expect(second.auditDestination).to.not.equal(firstDestination);
-        expect(firstDestination.writableEnded).to.equal(true);
-        await second.waitForAuditDestination();
-        expect(second.auditDestination.destroyed).to.equal(false);
+        let failure = "";
+        try {
+            await startGridMcpFixture({
+                seed: async () => {
+                    throw new Error("seed failed after server startup");
+                },
+            });
+        } catch (error) {
+            failure = error instanceof Error ? error.message : String(error);
+        }
+        expect(failure).to.equal("seed failed after server startup");
+
+        t = await startGridMcpFixture();
+        await t.waitForAuditDestination();
+        expect(t.auditDestination.destroyed).to.equal(false);
     });
 
     it("saved MCP settings are consumed by normal readers on both peers with stable identities", async () => {
