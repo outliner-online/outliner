@@ -120,6 +120,29 @@ sleep 5
     }
 });
 
+test("setup expiry kills and reaps a TERM-resistant build with no case marker", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "apt-build-watch-"));
+    const logPath = path.join(directory, "build.log");
+    const startedAt = Date.now();
+    try {
+        let status: number | undefined;
+        try {
+            execFileSync(boundedBuild, ["0.2", "1", logPath, "bash", "-ceu", `
+trap '' TERM
+sleep 5
+`], { stdio: "ignore", timeout: 3000 });
+        } catch (error) {
+            status = (error as { status?: number; }).status;
+        }
+        expect(status).toBe(124);
+        expect(Date.now() - startedAt).toBeLessThan(2500);
+        expect(fs.existsSync(`${logPath}.setup-expired`)).toBe(true);
+        expect(fs.existsSync(`${logPath}.case-expired`)).toBe(false);
+    } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
+});
+
 test("the actual build watcher bounds a TERM-ignoring full case phase and reaps it", () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "apt-build-watch-"));
     const logPath = path.join(directory, "build.log");
