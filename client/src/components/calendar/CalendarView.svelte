@@ -10,11 +10,12 @@
 
 import { onDestroy, onMount, untrack } from "svelte";
 import type { Project } from "$shared/app-schema";
-import type { CalendarObservationContextV1 } from "$shared/notifications/calendarProjection";
+import type { CalendarObservationContextV1, CalendarProjectionResult } from "$shared/notifications/calendarProjection";
 import * as Y from "yjs";
 import { analyzeCalendarEditability } from "../../services/calendar/calendarEditability";
 import { analyzeCalendarColumnWritability } from "../../services/calendar/calendarColumnWritability";
 import { buildCalendarEntries, type CalendarEntry } from "../../services/calendar/calendarEntries";
+import { deriveCalendarDayVisibleModel, type CalendarDayVisibleModel } from "../../services/calendar/calendarDayVisibleModel";
 import {
     resolveCalendarEntryWritability,
     writeCalendarEntryDuration,
@@ -87,9 +88,10 @@ interface Props {
     projectId?: string;
     calendarId: string;
     observationContext?: CalendarObservationContextV1;
+    onVisibleProjection?: (result: CalendarProjectionResult) => void;
 }
 
-let { project, projectId, calendarId, observationContext }: Props = $props();
+let { project, projectId, calendarId, observationContext, onVisibleProjection }: Props = $props();
 
 const EMPTY_SETTINGS: CalendarSettings = {
     name: "",
@@ -116,6 +118,7 @@ let result = $state<TableQueryResult>({ columns: [], rows: [] });
 let queryError = $state<string | undefined>(undefined);
 let writeError = $state<string | undefined>(undefined);
 let catalogResultCurrent = $state(false);
+let acceptedDayModel = $state<CalendarDayVisibleModel | undefined>(undefined);
 let anchorUtcMs = $state(untrack(() => observationContext?.anchorUtcMs) ?? Date.now());
 let optimisticOverrides = $state<OptimisticOverrides>(createOptimisticOverrides());
 let showCreateDialog = $state(false);
@@ -208,6 +211,8 @@ const isHourMap = $derived(!isGantt && viewType === "hours");
 const timeGridLayout = $derived(
     isGantt || isHourMap || viewType === "month" || groupingActive
         ? undefined
+        : viewType === "day" && optimisticOverrides.size === 0 && acceptedDayModel
+        ? acceptedDayModel.layout
         : layoutTimeGrid(placedEntries, range.start, range.end),
 );
 // The Hour Map (#4972) is a single-day projection of the *same* entries every
@@ -315,6 +320,21 @@ async function runQuery() {
     const currentTimeZone = timeZone;
     const currentSettings = settings;
     const currentRangeBounds = { startUtcMs: range.start, endUtcMs: range.end };
+    const currentViewType = effectiveViewType;
+    const currentDayContext: CalendarObservationContextV1 | undefined = currentViewType === "day"
+        ? {
+            version: 1,
+            locale: locale ?? new Intl.DateTimeFormat().resolvedOptions().locale,
+            timeZone: currentTimeZone,
+            weekStart,
+            viewType: "day",
+            anchorUtcMs,
+            rangeStartUtcMs: currentRangeBounds.startUtcMs,
+            rangeEndUtcMs: currentRangeBounds.endUtcMs,
+            monthLaneFilter: null,
+            collapsedEntryKeys: [],
+        }
+        : undefined;
 
     const outcome = await runCalendarQuery(
         session,
@@ -329,6 +349,24 @@ async function runQuery() {
         result = outcome.result;
         queryError = undefined;
         catalogResultCurrent = true;
+        if (currentDayContext) {
+            const derived = deriveCalendarDayVisibleModel({
+                current: true,
+                result: outcome.result,
+                settings: currentSettings,
+                project,
+                context: currentDayContext,
+                title: currentSettings.name,
+                rangeLabel,
+            });
+            if (derived.ready) {
+                acceptedDayModel = derived.model;
+                onVisibleProjection?.({ ready: true, projection: derived.model.projection });
+            } else {
+                acceptedDayModel = undefined;
+                onVisibleProjection?.(derived);
+            }
+        }
         // The query result is authoritative: drop any optimistic placement
         // whose row has now come back, whether or not it agrees with the
         // local guess (a concurrent remote move wins either way).
@@ -336,11 +374,21 @@ async function runQuery() {
     } else {
         catalogResultCurrent = false;
         queryError = outcome.error;
+        if (currentDayContext) {
+            acceptedDayModel = undefined;
+            onVisibleProjection?.({ ready: false, reason: "Accepted Calendar SQL evidence is stale or unavailable." });
+        }
     }
 }
 
 function scheduleRequery(invalidateCurrentResult = false) {
-    if (invalidateCurrentResult) catalogResultCurrent = false;
+    if (invalidateCurrentResult) {
+        catalogResultCurrent = false;
+        acceptedDayModel = undefined;
+        if (effectiveViewType === "day") {
+            onVisibleProjection?.({ ready: false, reason: "Accepted Calendar SQL evidence is stale or unavailable." });
+        }
+    }
     if (requeryTimer !== undefined) clearTimeout(requeryTimer);
     requeryTimer = setTimeout(() => {
         requeryTimer = undefined;
@@ -824,7 +872,9 @@ onDestroy(() => {
             rangeStart={range.start}
             workingHoursStartMinutes={workingHoursStart}
             workingHoursEndMinutes={workingHoursEnd}
-            dayHeaders={computeDayHeaders(range.start, timeGridLayout.dayCount, timeZone, locale)}
+            dayHeaders={viewType === "day" && acceptedDayModel
+                ? acceptedDayModel.dayHeaders
+                : computeDayHeaders(range.start, timeGridLayout.dayCount, timeZone, locale)}
             todayUtcMs={todayAnchor(timeZone, Date.now())}
             {isStartWritable}
             {isDurationWritable}
