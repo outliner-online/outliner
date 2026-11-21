@@ -52,7 +52,9 @@ for (const variant of variants) {
     // First record the updater's proposal intents, then replay the generated
     // smoke test through the official assertion interface. Neither command
     // calls GitHub's pull-request creation API.
-    execFileSync(cli, ["update", "-f", inputPath, "--local", fixture, "-o", smokePath], { stdio: "inherit" });
+    execFileSync(cli, ["update", "-f", inputPath, "--local", fixture, "-o", smokePath, "--timeout", "10m"], {
+        stdio: "inherit",
+    });
     const recorded = parse(fs.readFileSync(smokePath, "utf8"));
     const names = proposalNames(recorded);
     if (JSON.stringify(names) !== JSON.stringify(variant.wanted)) {
@@ -63,6 +65,11 @@ for (const variant of variants) {
     });
 
     const satisfiesWantedOutcome = JSON.stringify(names) === JSON.stringify(["node"]);
+    console.log(
+        `${variant.name}: proposal intents=${
+            JSON.stringify(names)
+        }; satisfies wanted outcome=${satisfiesWantedOutcome}`,
+    );
     if (satisfiesWantedOutcome !== variant.satisfiesWantedOutcome) {
         throw new Error(`${variant.name}: false-success classification was ${satisfiesWantedOutcome}`);
     }

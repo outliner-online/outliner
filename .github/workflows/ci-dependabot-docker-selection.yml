@@ -1,0 +1,46 @@
+name: Dependabot Docker Selection
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Install the pinned Dependabot CLI
+        env:
+          DEPENDABOT_CLI_SHA256: e8a383018fa44b1cbbbd543c9add601a187f962983e4c9fe3f55cd518f93cfa9
+        run: |
+          curl --fail --location --retry 3 \
+            --output /tmp/dependabot-cli.tar.gz \
+            https://github.com/dependabot/cli/releases/download/v1.97.0/dependabot-v1.97.0-linux-amd64.tar.gz
+          echo "$DEPENDABOT_CLI_SHA256  /tmp/dependabot-cli.tar.gz" | sha256sum --check --strict
+          mkdir -p "$RUNNER_TEMP/dependabot-cli"
+          tar -xzf /tmp/dependabot-cli.tar.gz -C "$RUNNER_TEMP/dependabot-cli"
+
+      - name: Run the official updater selection smoke test
+        env:
+          DEPENDABOT_CLI: ${{ runner.temp }}/dependabot-cli/dependabot
+        run: |
+          set -o pipefail
+          node scripts/tests/dependabot-docker-selection-smoke.mjs 2>&1 | tee dependabot-docker-selection.log
+
+      - name: Retain updater identities and proposal intents
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: dependabot-docker-selection-${{ github.run_attempt }}
+          path: dependabot-docker-selection.log
+          if-no-files-found: error
+          retention-days: 14
