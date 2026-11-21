@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const [root, runId, currentAttemptText, commit] = process.argv.slice(2);
+const [root, outcomesFile, runId, currentAttemptText, commit] = process.argv.slice(2);
 const currentAttempt = Number(currentAttemptText);
-if (!root || !runId || !Number.isInteger(currentAttempt) || currentAttempt < 1 || !commit) {
-    throw new Error("usage: verify-new4-shards.mjs ROOT RUN_ID CURRENT_ATTEMPT COMMIT");
+if (!root || !outcomesFile || !runId || !Number.isInteger(currentAttempt) || currentAttempt < 1 || !commit) {
+    throw new Error("usage: verify-new4-shards.mjs ROOT OUTCOMES RUN_ID CURRENT_ATTEMPT COMMIT");
 }
 
 function read(file, description) {
@@ -16,20 +16,22 @@ function read(file, description) {
 }
 const identity = test => JSON.stringify([test.file, test.line, ...test.titles]);
 const failures = [];
+const outcomes = read(outcomesFile, "native shard outcomes");
+if (outcomes.runId !== runId || outcomes.currentAttempt !== currentAttempt) {
+    failures.push("native shard outcomes belong to another workflow run or attempt");
+}
 let canonicalFull;
 const joined = [];
 
 for (const index of [1, 2]) {
     const prefix = `e2e-artifacts-chromium-new-4-${index}-${runId}-`;
-    const attempts = fs.readdirSync(root, { withFileTypes: true })
-        .filter(entry => entry.isDirectory() && entry.name.startsWith(prefix))
-        .map(entry => ({ entry: entry.name, attempt: Number(entry.name.slice(prefix.length)) }))
-        .filter(candidate => Number.isInteger(candidate.attempt) && candidate.attempt <= currentAttempt)
-        .sort((left, right) => right.attempt - left.attempt);
-    if (!attempts.length) throw new Error(`No new-4-${index} execution artifact exists for this run`);
-    const selected = attempts[0];
-    const executionId = `${runId}-${selected.attempt}`;
-    const directory = path.join(root, selected.entry, "job_logs");
+    const outcome = outcomes.shards?.[index];
+    if (!outcome || !Number.isInteger(outcome.attempt) || outcome.attempt > currentAttempt) {
+        throw new Error(`No authoritative new-4-${index} job outcome exists for this run`);
+    }
+    if (outcome.conclusion !== "success") failures.push(`new-4-${index} job concluded ${outcome.conclusion}`);
+    const executionId = `${runId}-${outcome.attempt}`;
+    const directory = path.join(root, `${prefix}${outcome.attempt}`, "job_logs");
     const context = read(path.join(directory, "execution-context.json"), "execution context");
     const full = read(path.join(directory, `new-4-full-${executionId}.json`), "unsharded inventory");
     const expected = read(path.join(directory, `new-4-${index}-expected-${executionId}.json`), "shard inventory");

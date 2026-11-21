@@ -712,6 +712,9 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
     steps:
       - name: Checkout verifier
         uses: actions/checkout@v7
@@ -720,12 +723,19 @@ jobs:
         with:
           pattern: e2e-artifacts-chromium-new-4-*-${{ github.run_id }}-*
           path: new-4-evidence
+      - name: Record native shard outcomes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/ci/collect-new4-shard-outcomes.mjs \
+            "${{ github.repository }}" "${{ github.run_id }}" "${{ github.run_attempt }}" \
+            new-4-evidence/outcomes.json
       - name: Require exact successful execution and collection
         env:
-          E2E_RESULT: ${{ needs.e2e-test.result }}
           COLLECTION_RESULT: ${{ needs.selection-coverage.result }}
         run: |
           set -euo pipefail
-          test "$E2E_RESULT" = success && test "$COLLECTION_RESULT" = success
+          test "$COLLECTION_RESULT" = success
           node scripts/ci/verify-new4-shards.mjs \
-            new-4-evidence "${{ github.run_id }}" "${{ github.run_attempt }}" "${{ github.sha }}"
+            new-4-evidence new-4-evidence/outcomes.json \
+            "${{ github.run_id }}" "${{ github.run_attempt }}" "${{ github.sha }}"
