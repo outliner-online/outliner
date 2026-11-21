@@ -98,22 +98,46 @@ test("rejects an unexpectedly successful image build", () => {
     expect(result.output).toContain("unexpectedly built successfully");
 });
 
+function writeDockerStub(directory: string): string {
+    const stub = path.join(directory, "docker-stub.sh");
+    fs.writeFileSync(stub, `#!/usr/bin/env bash
+set -euo pipefail
+control=\${4%%:*}
+image=\$5
+if [[ \$image == late ]]; then
+    sleep 2
+    touch "\$control/ready"
+    while [[ ! -e \$control/start ]]; do sleep 0.1; done
+    echo INSTALLER_ADMITTED
+    exit 1
+fi
+sleep 0.6
+touch "\$control/ready"
+while [[ ! -e \$control/start ]]; do sleep 0.1; done
+set +e
+timeout --signal=TERM --kill-after=0.3 0.4 bash -c "trap '' TERM; sleep 5"
+status=\$?
+set -e
+echo "INSTALLER_EXIT_STATUS=\$status"
+exit "\$status"
+`);
+    fs.chmodSync(stub, 0o755);
+    return stub;
+}
+
 test("the host wrapper preserves delayed startup and the full inner allowance", () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "apt-unavailable-runner-"));
     const logPath = path.join(directory, "run.log");
+    const dockerStub = writeDockerStub(directory);
     const startedAt = Date.now();
     try {
         let status: number | undefined;
         try {
-            execFileSync(unavailableRunner, ["1", "1", "1", logPath, "bash", "-ceu", `
-sleep 0.6
-set +e
-timeout --signal=TERM --kill-after=0.3 0.4 bash -c "trap '' TERM; sleep 5"
-status=$?
-set -e
-echo "INSTALLER_EXIT_STATUS=$status"
-exit "$status"
-`], { stdio: "ignore", timeout: 5000 });
+            execFileSync(unavailableRunner, ["1", "1", "1", logPath, "within"], {
+                env: { ...process.env, DOCKER_BIN: dockerStub },
+                stdio: "ignore",
+                timeout: 5000,
+            });
         } catch (error) {
             status = (error as { status?: number; }).status;
         }
@@ -123,6 +147,31 @@ exit "$status"
         // must all elapse; a pass-only early exit would not prove the bounds compose.
         expect(Date.now() - startedAt).toBeGreaterThanOrEqual(1200);
         expect(fs.readFileSync(logPath, "utf8")).toMatch(/INSTALLER_EXIT_STATUS=[1-9][0-9]*/);
+    } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
+});
+
+test("the host wrapper rejects late launch before installer admission", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "apt-unavailable-runner-"));
+    const logPath = path.join(directory, "run.log");
+    const dockerStub = writeDockerStub(directory);
+    try {
+        let status: number | undefined;
+        try {
+            execFileSync(unavailableRunner, ["1", "1", "1", logPath, "late"], {
+                env: { ...process.env, DOCKER_BIN: dockerStub },
+                stdio: "ignore",
+                timeout: 5000,
+            });
+        } catch (error) {
+            status = (error as { status?: number; }).status;
+        }
+        expect(status).toBe(124);
+        const log = fs.readFileSync(logPath, "utf8");
+        expect(log).toContain("launch exceeded its 1-second allowance before installer admission");
+        expect(log).not.toContain("INSTALLER_ADMITTED");
+        expect(log).not.toContain("INSTALLER_EXIT_STATUS");
     } finally {
         fs.rmSync(directory, { recursive: true, force: true });
     }

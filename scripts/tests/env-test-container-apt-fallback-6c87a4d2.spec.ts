@@ -43,13 +43,12 @@ test("the image uses the bounded installer and CI runs its Docker regression", (
     expect(integration).toContain(
         'timeout "$negative_case_setup_timeout_seconds" docker build --no-cache',
     );
-    expect(integration).toContain("docker run --rm outliner-apt-regression:unavailable");
     expect(integration).toContain("run-bounded-unavailable-case.sh");
     const unavailableSetup = integration.indexOf(
         '-f "$fixture/Dockerfile.unavailable" -t outliner-apt-regression:unavailable',
     );
     const unavailableInstaller = integration.indexOf(
-        "docker run --rm outliner-apt-regression:unavailable",
+        '"$repo_root/scripts/tests/run-bounded-unavailable-case.sh"',
     );
     expect(unavailableSetup).toBeGreaterThan(-1);
     expect(unavailableInstaller).toBeGreaterThan(unavailableSetup);
@@ -57,6 +56,8 @@ test("the image uses the bounded installer and CI runs its Docker regression", (
     expect(integration).not.toContain("run-bounded-docker-build.sh");
     expect(integration).toContain("APT::Update::Error-Mode");
     expect(integration).toContain("UNAVAILABLE_WATCHDOG_EXIT_STATUS");
+    expect(integration).toContain("/run/outliner-apt-control/ready");
+    expect(integration).toContain("/run/outliner-apt-control/start");
     expect(integration).toContain('verify-container-negative-case.sh" "$negative_case"');
     expect(integration).toContain('docker build --no-cache -f "$fixture/Dockerfile.success"');
     expect(integration).not.toContain(

@@ -51,7 +51,9 @@ FROM outliner-apt-regression:fixture
 RUN printf 'APT::Update::Error-Mode "any";\n' >/tmp/apt-fixture.conf && \
     find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
       -exec sed -Ei 's#https?://[^ /]+#http://127.0.0.1:18081#g' {} +
-CMD set +e; \
+CMD touch /run/outliner-apt-control/ready; \
+    while [ ! -e /run/outliner-apt-control/start ]; do sleep 0.1; done; \
+    set +e; \
     timeout --signal=TERM --kill-after=__OUTER_KILL_AFTER__ __OUTER_TIMEOUT__ \
       sh -c 'set +e; "$@"; status=$?; echo "INSTALLER_EXIT_STATUS=$status"; exit "$status"' sh \
         env APT_CONFIG=/tmp/apt-fixture.conf \
@@ -125,7 +127,7 @@ for negative_case in unavailable slow missing; do
         "$unavailable_launch_allowance_seconds" \
         "$unavailable_inner_watchdog_seconds" \
         "$unavailable_shutdown_grace_seconds" "$log" \
-        docker run --rm outliner-apt-regression:unavailable
+        outliner-apt-regression:unavailable
     status=$?
     set -e
     if ! "$repo_root/scripts/tests/verify-container-negative-case.sh" "$negative_case" "$status" "$log"; then
