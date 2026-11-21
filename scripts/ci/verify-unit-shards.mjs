@@ -12,6 +12,7 @@ const runAttempt = process.env.GITHUB_RUN_ATTEMPT;
 if (!runId || !runAttempt) throw new Error("GITHUB_RUN_ID and GITHUB_RUN_ATTEMPT are required");
 const clientDir = path.resolve("client");
 const vitestBin = process.env.UNIT_VITEST_BIN ?? path.join(clientDir, "node_modules/.bin/vitest");
+const configArgs = process.env.UNIT_VITEST_CONFIG ? [`--config=${process.env.UNIT_VITEST_CONFIG}`] : [];
 
 function relativeFile(file) {
     const withoutProject = file.trim().replace(/^\[unit\]\s+/, "");
@@ -52,6 +53,27 @@ function compareIdentities(actual, expected) {
         );
     }
 }
+function mapDefinitions(data) {
+    return JSON.stringify({
+        path: data.path,
+        statementMap: data.statementMap,
+        fnMap: data.fnMap,
+        branchMap: data.branchMap,
+    });
+}
+function repositoryCoverageInventory() {
+    if (process.env.UNIT_COVERAGE_MANIFEST) {
+        return JSON.parse(fs.readFileSync(process.env.UNIT_COVERAGE_MANIFEST, "utf8")).map((file) => path.resolve(file))
+            .sort();
+    }
+    const tracked = execFileSync("git", ["ls-files", "-z", "--", "client/src"], { encoding: "utf8" }).split("\0");
+    return tracked.filter((file) => /\.(?:js|ts|svelte)$/.test(file))
+        .filter((file) => !/\.(?:spec|test)\.(?:js|ts)$/.test(file))
+        .filter((file) => !/(?:^|\/)tests\//.test(file))
+        .filter((file) => !/(?:^|\/)(?:paraglide|stories)\//.test(file))
+        .filter((file) => !/(?:service-worker\.ts|\.d\.ts)$/.test(file))
+        .map((file) => path.resolve(file)).sort();
+}
 function mergeCoverage(target, coverage) {
     for (const [file, data] of Object.entries(coverage)) {
         if (!target[file]) {
@@ -68,7 +90,8 @@ function mergeCoverage(target, coverage) {
 }
 
 const nativeSelectionPath = path.join(os.tmpdir(), `unit-native-selection-${runId}-${runAttempt}.json`);
-execFileSync(vitestBin, ["list", "--project", "unit", "--no-static-parse", `--json=${nativeSelectionPath}`], {
+execFileSync(vitestBin, ["list", ...configArgs, "--project", "unit", "--no-static-parse",
+    `--json=${nativeSelectionPath}`], {
     cwd: clientDir,
     stdio: "inherit",
     env: { ...process.env, NODE_ENV: "test" },
@@ -78,7 +101,8 @@ fs.rmSync(nativeSelectionPath);
 if (!expected.length) throw new Error("native unit selection is empty");
 const executed = [];
 const mergedCoverage = {};
-let expectedCoverageFiles;
+const expectedCoverageFiles = repositoryCoverageInventory();
+let expectedCoverageDefinitions;
 for (let shard = 1; shard <= shardCount; shard++) {
     const shardDir = path.join(artifactDir, `unit-shard-${shard}-${runId}-${runAttempt}`);
     const reportPath = path.join(shardDir, "unit-evidence", `shard-${shard}.json`);
@@ -90,11 +114,25 @@ for (let shard = 1; shard <= shardCount; shard++) {
     if (!identities.length) throw new Error(`empty execution report for shard ${shard}`);
     executed.push(...identities);
     const coverage = JSON.parse(fs.readFileSync(coveragePath, "utf8"));
-    const coverageFiles = Object.keys(coverage).sort();
+    const coverageFiles = Object.keys(coverage).map((file) => path.resolve(file)).sort();
     if (!coverageFiles.length) throw new Error(`empty coverage for shard ${shard}`);
-    expectedCoverageFiles ??= coverageFiles;
     if (JSON.stringify(coverageFiles) !== JSON.stringify(expectedCoverageFiles)) {
-        throw new Error(`incomplete coverage file set for shard ${shard}`);
+        const missing = expectedCoverageFiles.filter((file) => !coverageFiles.includes(file));
+        const extra = coverageFiles.filter((file) => !expectedCoverageFiles.includes(file));
+        throw new Error(
+            `coverage differs from repository inventory for shard ${shard}; missing=${
+                missing.slice(0, 20).join(",")
+            } extra=${extra.slice(0, 20).join(",")}`,
+        );
+    }
+    const definitions = Object.fromEntries(
+        Object.entries(coverage).map(([file, data]) => [path.resolve(file), mapDefinitions(data)]),
+    );
+    expectedCoverageDefinitions ??= definitions;
+    for (const file of expectedCoverageFiles) {
+        if (definitions[file] !== expectedCoverageDefinitions[file]) {
+            throw new Error(`coverage map definitions differ for shard ${shard}: ${file}`);
+        }
     }
     mergeCoverage(mergedCoverage, coverage);
 }

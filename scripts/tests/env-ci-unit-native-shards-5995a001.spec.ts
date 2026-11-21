@@ -41,7 +41,34 @@ printf '{"/source.ts":{"path":"/source.ts","statementMap":{"0":{}},"fnMap":{},"b
 `);
     return file;
 }
+function realVitestFailureRunner(directory: string) {
+    const testFile = path.join(directory, "deliberate-failure.test.js");
+    const config = path.join(directory, "vitest.config.js");
+    fs.writeFileSync(testFile,
+        'import { test, expect } from "vitest"; test("deliberate native failure", () => expect(1).toBe(2));\n');
+    fs.writeFileSync(config,
+        `export default { test: { root: ${JSON.stringify(directory)}, include: ["*.test.js"], globals: true } };\n`);
+    const wrapper = path.join(directory, "real-vitest-wrapper");
+    const vitest = path.join(root, "scripts/tests/node_modules/.bin/vitest");
+    executable(wrapper, `#!/bin/bash
+args=()
+skip=false
+for arg in "$@"; do
+  if [[ "$skip" == true ]]; then skip=false; continue; fi
+  case "$arg" in
+    --project) skip=true ;;
+    --coverage|--coverage.reportsDirectory=*|--shard=*) ;;
+    --reporter=github-actions|--reporter=dot) ;;
+    *) args+=("$arg") ;;
+  esac
+done
+exec ${JSON.stringify(vitest)} "\${args[@]}" --config=${JSON.stringify(config)}
+`);
+    return { wrapper, config, vitest };
+}
+
 function artifactFixture(directory: string, run = "100", attempt = "2") {
+    fs.writeFileSync(path.join(directory, "coverage-manifest.json"), JSON.stringify(["/source.ts"]));
     for (const shard of [1, 2]) {
         const base = path.join(directory, `unit-shard-${shard}-${run}-${attempt}`);
         fs.mkdirSync(path.join(base, "unit-evidence"), { recursive: true });
@@ -88,17 +115,21 @@ describe("unit CI native shard orchestration", () => {
             }),
         });
         expect(fs.statSync(path.join(directory, "shard-1.json")).size).toBeGreaterThan(0);
+        const realFailure = realVitestFailureRunner(directory);
         const failed = spawnSync(path.join(root, "scripts/ci/run-unit-tests.sh"), [], {
             cwd: root,
             env: env({
                 UNIT_SHARD: "1/2",
-                UNIT_VITEST_BIN: vitest,
-                FAKE_UNIT_FAILURE: "true",
+                UNIT_VITEST_BIN: realFailure.wrapper,
                 UNIT_EVIDENCE_DIR: directory,
-                UNIT_COVERAGE_DIR: path.join(directory, "coverage"),
+                UNIT_COVERAGE_DIR: path.join(directory, "real-coverage"),
             }),
         });
-        expect(failed.status).toBe(23);
+        expect(failed.status).toBe(1);
+        expect(
+            JSON.parse(fs.readFileSync(path.join(directory, "shard-1.json"), "utf8")).testResults[0].assertionResults[0]
+                .status,
+        ).toBe("failed");
     });
 
     test("the real aggregate verifies exact identities and coverage before running base exactly once", () => {
@@ -110,7 +141,12 @@ describe("unit CI native shard orchestration", () => {
         executable(base, `#!/bin/sh\nprintf ran >> '${marker}'\n`);
         execFileSync(path.join(root, "scripts/ci/finalize-unit-tests.sh"), [], {
             cwd: root,
-            env: env({ UNIT_ARTIFACT_DIR: directory, UNIT_VITEST_BIN: vitest, UNIT_BASE_RUNNER: base }),
+            env: env({
+                UNIT_ARTIFACT_DIR: directory,
+                UNIT_VITEST_BIN: vitest,
+                UNIT_BASE_RUNNER: base,
+                UNIT_COVERAGE_MANIFEST: path.join(directory, "coverage-manifest.json"),
+            }),
         });
         expect(fs.readFileSync(marker, "utf8")).toBe("ran");
         expect(
@@ -124,8 +160,11 @@ describe("unit CI native shard orchestration", () => {
         const directory = temporaryDirectory();
         artifactFixture(directory);
         const vitest = fakeVitest(directory);
+        const realBaseFailure = realVitestFailureRunner(directory);
         const failingBase = path.join(directory, "base-fails");
-        executable(failingBase, "#!/bin/sh\nexit 29\n");
+        executable(failingBase, `#!/bin/sh
+exec ${JSON.stringify(realBaseFailure.vitest)} run --config=${JSON.stringify(realBaseFailure.config)}
+`);
         const run = (artifacts: string, extra: Record<string, string> = {}) =>
             spawnSync(
                 path.join(root, "scripts/ci/finalize-unit-tests.sh"),
@@ -136,11 +175,12 @@ describe("unit CI native shard orchestration", () => {
                         UNIT_ARTIFACT_DIR: artifacts,
                         UNIT_VITEST_BIN: vitest,
                         UNIT_BASE_RUNNER: failingBase,
+                        UNIT_COVERAGE_MANIFEST: path.join(directory, "coverage-manifest.json"),
                         ...extra,
                     }),
                 },
             );
-        expect(run(directory).status).toBe(29);
+        expect(run(directory).status).toBe(1);
         fs.rmSync(path.join(directory, "unit-shard-2-100-2/unit-evidence/shard-2.json"));
         expect(run(directory).stderr.toString()).toContain("missing current-attempt execution report");
         artifactFixture(directory);
@@ -155,6 +195,9 @@ describe("unit CI native shard orchestration", () => {
         artifactFixture(directory);
         fs.rmSync(coverage);
         expect(run(directory).stderr.toString()).toContain("missing current-attempt coverage");
+        artifactFixture(directory);
+        fs.writeFileSync(path.join(directory, "coverage-manifest.json"), JSON.stringify(["/source.ts", "/omitted.ts"]));
+        expect(run(directory).stderr.toString()).toContain("coverage differs from repository inventory");
         artifactFixture(directory);
         const first = path.join(directory, "unit-shard-1-100-2/unit-evidence/shard-1.json");
         fs.copyFileSync(first, path.join(directory, "unit-shard-2-100-2/unit-evidence/shard-2.json"));

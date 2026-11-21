@@ -12,7 +12,9 @@ evidence_dir="${UNIT_EVIDENCE_DIR:-../unit-evidence}"
 evidence_file="$evidence_dir/shard-${shard_index}.json"
 mkdir -p "$(dirname "$evidence_file")"
 vitest_bin="${UNIT_VITEST_BIN:-./node_modules/.bin/vitest}"
-"$vitest_bin" run --project unit --coverage --shard="$shard" \
+config_args=()
+[[ -z "${UNIT_VITEST_CONFIG:-}" ]] || config_args+=("--config=$UNIT_VITEST_CONFIG")
+"$vitest_bin" run "${config_args[@]}" --project unit --coverage --shard="$shard" \
   --reporter=github-actions --reporter=dot --reporter=json \
   --outputFile.json="$evidence_file" --coverage.reportsDirectory="$coverage_dir"
 test -s "$evidence_file"
