@@ -106,8 +106,9 @@ test("the build watcher ignores a Dockerfile heading until execution emits the m
         try {
             execFileSync(boundedBuild, ["0.3", "0.1", logPath, "bash", "-ceu", `
 echo "RUN printf 'NEGATIVE_CASE_PHASE_%s\\n' STARTED"
+trap '' TERM
 sleep 5
-`], { stdio: "ignore" });
+`], { stdio: "ignore", timeout: 3000 });
         } catch (error) {
             status = (error as { status?: number; }).status;
         }

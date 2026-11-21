@@ -42,7 +42,9 @@ while kill -0 "$build_pid" 2>/dev/null && \
 do
     sleep 0.1
 done
-kill "$setup_watchdog_pid" 2>/dev/null || true
+if [[ ! -e $setup_expired ]]; then
+    kill "$setup_watchdog_pid" 2>/dev/null || true
+fi
 wait "$setup_watchdog_pid" 2>/dev/null || true
 
 if grep -Fq 'NEGATIVE_CASE_PHASE_STARTED' "$log"; then
