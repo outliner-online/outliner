@@ -143,6 +143,26 @@ sleep 5
     }
 });
 
+test("a case marker near the setup deadline wins the transition arbitration", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "apt-build-watch-"));
+    const logPath = path.join(directory, "build.log");
+    try {
+        execFileSync(boundedBuild, ["0.4", "1", logPath, "bash", "-ceu", `
+sleep 0.35
+echo NEGATIVE_CASE_PHASE_STARTED
+sleep 0.15
+echo INSTALLER_EXIT_STATUS=1
+exit 1
+`], { stdio: "ignore", timeout: 3000 });
+    } catch (error) {
+        expect((error as { status?: number; }).status).toBe(1);
+    }
+    expect(fs.readFileSync(logPath, "utf8")).toContain("INSTALLER_EXIT_STATUS=1");
+    expect(fs.existsSync(`${logPath}.setup-expired`)).toBe(false);
+    expect(fs.existsSync(`${logPath}.case-expired`)).toBe(false);
+    fs.rmSync(directory, { recursive: true, force: true });
+});
+
 test("the actual build watcher allows the inner timeout and shutdown grace to finish", () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "apt-build-watch-"));
     const logPath = path.join(directory, "build.log");

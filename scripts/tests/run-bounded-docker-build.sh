@@ -27,45 +27,50 @@ terminate_build() {
 set +e
 "$@" >"$log" 2>&1 &
 build_pid=$!
-(
-    sleep "$setup_timeout"
-    if kill -0 "$build_pid" 2>/dev/null; then
-        : >"$setup_expired"
-        terminate_build "$build_pid"
-    fi
-) &
-setup_watchdog_pid=$!
+sleep "$setup_timeout" &
+setup_timer_pid=$!
 
-while kill -0 "$build_pid" 2>/dev/null && \
-    ! grep -Fq 'NEGATIVE_CASE_PHASE_STARTED' "$log" && \
-    [[ ! -e $setup_expired ]]
-do
+# The parent owns the setup-to-case transition. Check the execution receipt
+# before the timer on every pass (and once more after the timer expires), so a
+# case that has started can never be terminated by a competing watchdog.
+case_started=false
+while kill -0 "$build_pid" 2>/dev/null; do
+    if grep -Fq 'NEGATIVE_CASE_PHASE_STARTED' "$log"; then
+        case_started=true
+        break
+    fi
+    if ! kill -0 "$setup_timer_pid" 2>/dev/null; then
+        break
+    fi
     sleep 0.1
 done
-if [[ ! -e $setup_expired ]]; then
-    kill "$setup_watchdog_pid" 2>/dev/null || true
-fi
-wait "$setup_watchdog_pid" 2>/dev/null || true
+kill "$setup_timer_pid" 2>/dev/null || true
+wait "$setup_timer_pid" 2>/dev/null || true
 
-if grep -Fq 'NEGATIVE_CASE_PHASE_STARTED' "$log"; then
-    (
-        sleep "$case_timeout"
-        if kill -0 "$build_pid" 2>/dev/null; then
-            : >"$case_expired"
-            terminate_build "$build_pid"
-        fi
-    ) &
-    case_watchdog_pid=$!
-else
-    case_watchdog_pid=
+if [[ $case_started == false ]] && grep -Fq 'NEGATIVE_CASE_PHASE_STARTED' "$log"; then
+    case_started=true
+fi
+if [[ $case_started == false ]] && kill -0 "$build_pid" 2>/dev/null; then
+    : >"$setup_expired"
+    terminate_build "$build_pid"
+fi
+
+if [[ $case_started == true ]] && kill -0 "$build_pid" 2>/dev/null; then
+    sleep "$case_timeout" &
+    case_timer_pid=$!
+    while kill -0 "$build_pid" 2>/dev/null && kill -0 "$case_timer_pid" 2>/dev/null; do
+        sleep 0.1
+    done
+    if ! kill -0 "$case_timer_pid" 2>/dev/null && kill -0 "$build_pid" 2>/dev/null; then
+        : >"$case_expired"
+        terminate_build "$build_pid"
+    fi
+    kill "$case_timer_pid" 2>/dev/null || true
+    wait "$case_timer_pid" 2>/dev/null || true
 fi
 
 wait "$build_pid"
 status=$?
-if [[ -n $case_watchdog_pid ]]; then
-    kill "$case_watchdog_pid" 2>/dev/null || true
-    wait "$case_watchdog_pid" 2>/dev/null || true
-fi
 set -e
 
 if [[ -e $setup_expired || -e $case_expired ]]; then
