@@ -51,44 +51,48 @@ export type VerifyMcpCallbackInput = Readonly<{
     signal?: AbortSignal;
 }>;
 
-export async function verifyMcpCallback(input: VerifyMcpCallbackInput): Promise<
-    { kind: "verified"; } | { kind: "failed" | "unknown"; reason: string; }
-> {
-    const challenge = randomBytes(32).toString("base64url");
-    const post: HttpsPost = {
-        url: input.url,
-        headerProfile: "mcp-events",
-        responseMode: "bounded-body",
-        authorizationDeadlineMs: input.authorizationDeadlineMs,
-        signal: input.signal,
-        canStart: input.canStart,
-        beforeSend: async () => {
-            const authority = await input.revalidate();
-            if (!authority) return null;
-            const signed = signMcpWebhook({
-                body: { challenge },
-                eventId: randomUUID(),
-                subscriptionId: input.subscriptionId,
-                secret: input.secret,
-                timestampMs: Date.now(),
-            });
-            return { ...signed, isCurrent: authority.isCurrent };
-        },
-    };
-    const outcome = await sendNotificationHttps(post);
-    if (outcome.kind === "unknown") return { kind: "unknown", reason: outcome.reason };
-    if (outcome.kind !== "accepted" || !outcome.responseBody) return { kind: "failed", reason: outcome.kind };
-    try {
-        const text = new TextDecoder("utf-8", { fatal: true }).decode(outcome.responseBody);
-        const decoded: unknown = JSON.parse(text);
-        if (
-            typeof decoded === "object" && decoded !== null && !Array.isArray(decoded)
-            && (decoded as { challenge?: unknown; }).challenge === challenge
-        ) {
-            return { kind: "verified" };
+export function createMcpCallbackVerifier(sender: typeof sendNotificationHttps) {
+    return async function verify(input: VerifyMcpCallbackInput): Promise<
+        { kind: "verified"; } | { kind: "failed" | "unknown"; reason: string; }
+    > {
+        const challenge = randomBytes(32).toString("base64url");
+        const post: HttpsPost = {
+            url: input.url,
+            headerProfile: "mcp-events",
+            responseMode: "bounded-body",
+            authorizationDeadlineMs: input.authorizationDeadlineMs,
+            signal: input.signal,
+            canStart: input.canStart,
+            beforeSend: async () => {
+                const authority = await input.revalidate();
+                if (!authority) return null;
+                const signed = signMcpWebhook({
+                    body: { challenge },
+                    eventId: randomUUID(),
+                    subscriptionId: input.subscriptionId,
+                    secret: input.secret,
+                    timestampMs: Date.now(),
+                });
+                return { ...signed, isCurrent: authority.isCurrent };
+            },
+        };
+        const outcome = await sender(post);
+        if (outcome.kind === "unknown") return { kind: "unknown", reason: outcome.reason };
+        if (outcome.kind !== "accepted" || !outcome.responseBody) return { kind: "failed", reason: outcome.kind };
+        try {
+            const text = new TextDecoder("utf-8", { fatal: true }).decode(outcome.responseBody);
+            const decoded: unknown = JSON.parse(text);
+            if (
+                typeof decoded === "object" && decoded !== null && !Array.isArray(decoded)
+                && (decoded as { challenge?: unknown; }).challenge === challenge
+            ) {
+                return { kind: "verified" };
+            }
+        } catch {
+            // Public results intentionally do not expose response bytes or parser exceptions.
         }
-    } catch {
-        // Public results intentionally do not expose response bytes or parser exceptions.
-    }
-    return { kind: "failed", reason: "challenge" };
+        return { kind: "failed", reason: "challenge" };
+    };
 }
+
+export const verifyMcpCallback = createMcpCallbackVerifier(sendNotificationHttps);
