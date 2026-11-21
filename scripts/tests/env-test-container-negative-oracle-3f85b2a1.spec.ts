@@ -128,3 +128,31 @@ sleep 5
         fs.rmSync(directory, { recursive: true, force: true });
     }
 });
+
+test("the actual build watcher allows the inner timeout and shutdown grace to finish", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "apt-build-watch-"));
+    const logPath = path.join(directory, "build.log");
+    try {
+        let status: number | undefined;
+        try {
+            execFileSync(boundedBuild, ["1", "2", logPath, "bash", "-ceu", `
+echo NEGATIVE_CASE_PHASE_STARTED
+set +e
+timeout --signal=TERM --kill-after=0.2 0.3 bash -c "trap '' TERM; sleep 5"
+status=$?
+set -e
+echo "INSTALLER_EXIT_STATUS=$status"
+exit "$status"
+`], { stdio: "ignore", timeout: 3000 });
+        } catch (error) {
+            status = (error as { status?: number; }).status;
+        }
+        expect(status).not.toBe(124);
+        expect(status).toBeGreaterThan(0);
+        expect(fs.readFileSync(logPath, "utf8")).toMatch(/INSTALLER_EXIT_STATUS=[1-9][0-9]*/);
+        expect(fs.existsSync(`${logPath}.setup-expired`)).toBe(false);
+        expect(fs.existsSync(`${logPath}.case-expired`)).toBe(false);
+    } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
+});
