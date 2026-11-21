@@ -491,10 +491,10 @@ export class UserManager {
             return;
         }
         try {
-            // Disarm the browser-wide enrollment generation before replacing
-            // authenticated authority. Remote/unsubscribe cleanup may be
-            // incomplete, but an unconfirmed durable local disarm blocks logout.
-            if (typeof window !== "undefined") {
+            // The hint is not authority; it only avoids loading browser Push
+            // cleanup for accounts that never armed a durable binding. The
+            // IndexedDB disarm performed by the controller remains authoritative.
+            if (typeof window !== "undefined" && localStorage.getItem("outliner:web-push-armed") === "true") {
                 const { BrowserPushRegistration } = await import("../services/notifications/browserPushRegistration");
                 const enrollment = new BrowserPushRegistration();
                 await enrollment.disable();

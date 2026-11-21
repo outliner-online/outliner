@@ -8,6 +8,7 @@ import {
 } from "./pushDeviceClient";
 
 const DEVICE_KEY = "outliner:web-push-device";
+const ARMED_HINT_KEY = "outliner:web-push-armed";
 const DB = "outliner-web-push";
 const STORE = "enrollment";
 export type EnrollmentView =
@@ -47,6 +48,8 @@ function binding(value?: { generation: string; vapidKeyId: string; } | undefined
             if (value) store.put(value, "current");
             else store.delete("current");
             tx.oncomplete = () => {
+                if (value) localStorage.setItem(ARMED_HINT_KEY, "true");
+                else localStorage.removeItem(ARMED_HINT_KEY);
                 open.result.close();
                 resolve();
             };
@@ -149,7 +152,11 @@ export class BrowserPushRegistration {
             failed.push("server registration");
         }
         try {
-            const subscription = await (await worker()).pushManager.getSubscription();
+            // Ordinary E2E and development intentionally suppress automatic
+            // worker registration. Do not wait on `serviceWorker.ready` during
+            // logout: it never settles when no registration exists.
+            const registration = await navigator.serviceWorker?.getRegistration("/");
+            const subscription = await registration?.pushManager.getSubscription();
             if (subscription && !await subscription.unsubscribe()) failed.push("browser subscription");
         } catch {
             failed.push("browser subscription");
