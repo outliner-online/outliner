@@ -1,4 +1,5 @@
 import { expect } from "chai";
+import { spawnSync } from "node:child_process";
 import {
     getAuthorizePageContentSecurityPolicy,
     getOAuthFirebaseWebConfig,
@@ -34,6 +35,37 @@ describe("OAuth authorize-page Firebase Web configuration", () => {
         }
         originalEnv.clear();
     });
+
+    for (const mode of ["production", "emulator"] as const) {
+        it(`emits valid JavaScript for the ${mode} sign-in module`, () => {
+            if (mode === "production") {
+                process.env.NODE_ENV = "production";
+                process.env.VITE_FIREBASE_API_KEY = "shared-api-key";
+                process.env.VITE_FIREBASE_AUTH_DOMAIN = "shared.firebaseapp.com";
+                process.env.VITE_FIREBASE_PROJECT_ID = "shared-project";
+                process.env.VITE_FIREBASE_APP_ID = "1:42:web:shared";
+            } else {
+                process.env.NODE_ENV = "test";
+                process.env.FIREBASE_AUTH_EMULATOR_HOST = "127.0.0.1:59099";
+                process.env.FIREBASE_PROJECT_ID = "emulator-project";
+            }
+
+            const html = renderAuthorizePage({ requestId: "request", scope: "outliner.read", nonce: "nonce" });
+            const modules = [...html.matchAll(/<script\b[^>]*\btype="module"[^>]*>([\s\S]*?)<\/script>/g)];
+            expect(modules, "expected one complete sign-in module").to.have.length(1);
+
+            // Parse the emitted bytes unchanged: TypeScript compilation cannot check code inside a template string.
+            const result = spawnSync(process.execPath, ["--check", "--input-type=module"], {
+                input: modules[0][1],
+                encoding: "utf8",
+                timeout: 5000,
+                // Do not inherit the test runner's TypeScript loaders into the JavaScript syntax check.
+                env: { ...process.env, NODE_OPTIONS: "" },
+            });
+            expect(result.error, "JavaScript parser must start successfully").to.equal(undefined);
+            expect(result.status, result.stderr).to.equal(0);
+        });
+    }
 
     it("uses the same VITE_FIREBASE_* Web App values as the client", () => {
         process.env.VITE_FIREBASE_API_KEY = "shared-api-key";
