@@ -125,4 +125,10 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - 'dependencies'
+    ignore:
+      # The npm Playwright group is authoritative. Its CI correction updates
+      # this image on the same reviewable npm PR, so a second Docker proposal
+      # would compete with that synchronization path (and GitHub rejects the
+      # submission for this file). Keep every other Docker image covered.
+      - dependency-name: 'playwright'
 
