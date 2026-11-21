@@ -1,8 +1,9 @@
-import { before } from "mocha";
+import { after, before } from "mocha";
 import fs from "node:fs";
 import * as Y from "yjs";
-import { mcpLogPath, refreshMcpLogStream } from "../src/utils/log-manager.js";
+import { mcpLogPath } from "../src/utils/log-manager.js";
 import { httpGridFixture } from "./mcp-create-grid-http-fixture.js";
+import { acquireMcpLogDestination } from "./mcp-log-destination-fixture.js";
 export type Fixture = ReturnType<typeof httpGridFixture>;
 export function deferred() {
     let resolve!: () => void;
@@ -28,11 +29,15 @@ export function snapshot(f: Fixture) {
 }
 export function auditReader() {
     let stream: fs.WriteStream;
+    let release: () => void;
     // Mocha loads every suite before running any. Own the active destination
     // at suite startup, after other suites have finished rotating their logs.
-    before(() => {
-        stream = refreshMcpLogStream();
+    before(async () => {
+        const lease = await acquireMcpLogDestination();
+        stream = lease.destination;
+        release = lease.release;
     });
+    after(() => release());
     return async (operationId: string) => {
         await new Promise<void>((resolve, reject) => stream.write("", error => error ? reject(error) : resolve()));
         return fs.readFileSync(mcpLogPath, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line))

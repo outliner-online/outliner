@@ -18,6 +18,7 @@ describe("MCP ENUM cold reconstruction (#5534 REQ-008)", function() {
     it("reconstructs catalog types and records from persistence after a server restart", async () => {
         const fixture = await startMcpTestServer();
         let restarted: Awaited<ReturnType<typeof startTestServer>> | undefined;
+        let originalStopAttempted = false;
         try {
             const catalog = new SqlCatalogMutationService(
                 fixture.server.hocuspocus,
@@ -48,7 +49,9 @@ describe("MCP ENUM cold reconstruction (#5534 REQ-008)", function() {
             const tableId = created.payload.tableId;
             await withRoom(fixture.server.hocuspocus, `projects/${PROJECT}/tables/${tableId}`, () => {});
 
+            originalStopAttempted = true;
             await stopTestServer(fixture.server);
+            fixture.releaseAuditDestination();
             restarted = await startTestServer(fixture.dir, fixture.acl);
             const cold = rpcClient(restarted.server);
             const schema = await cold.call("get_relation_schema", { projectId: PROJECT, relation: "cold_rows" });
@@ -66,8 +69,20 @@ describe("MCP ENUM cold reconstruction (#5534 REQ-008)", function() {
             });
             expect(ordered.payload.rows).to.deep.equal([{ state: "a" }]);
         } finally {
-            await stopTestServer(restarted);
-            await fs.remove(fixture.dir);
+            // Release first so an assertion or shutdown failure cannot strand
+            // every later audit fixture behind this process-global owner.
+            fixture.releaseAuditDestination();
+            try {
+                await stopTestServer(restarted);
+            } finally {
+                try {
+                    // Do not call stop twice after the explicit restart
+                    // boundary, even if that original stop rejected midway.
+                    if (!originalStopAttempted) await stopTestServer(fixture.server);
+                } finally {
+                    await fs.remove(fixture.dir);
+                }
+            }
         }
     });
 });

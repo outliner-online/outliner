@@ -22,7 +22,8 @@ import {
 } from "../src/mcp/table-creation.js";
 import { signAccessToken } from "../src/oauth/tokens.js";
 import { createDocumentStore, type DocumentStore } from "../src/persistence.js";
-import { mcpLogger, mcpLogPath, refreshMcpLogStream } from "../src/utils/log-manager.js";
+import { mcpLogger, mcpLogPath } from "../src/utils/log-manager.js";
+import { acquireMcpLogDestination } from "./mcp-log-destination-fixture.js";
 import {
     AclStore,
     seedProject,
@@ -91,12 +92,25 @@ export async function startMcpTestServer(options: {
     dir?: string;
     acl?: AclStore;
 } = {}) {
+    const auditLease = await acquireMcpLogDestination();
     const acl = options.acl ?? new AclStore();
     acl.grant("projectUsers", PROJECT, UID);
-    const dir = options.dir ?? tempDir();
-    const server = options.server ?? await startTestServer(dir, acl);
-    mcpLogStream = refreshMcpLogStream();
-    if (!options.server) await seedProject(server.hocuspocus, PROJECT);
+    let dir: string | undefined;
+    let server: TestServer | undefined;
+    try {
+        dir = options.dir ?? tempDir();
+        server = options.server ?? await startTestServer(dir, acl);
+        mcpLogStream = auditLease.destination;
+        if (!options.server) await seedProject(server.hocuspocus, PROJECT);
+    } catch (error) {
+        try {
+            if (server && !options.server) await stopTestServer(server);
+            if (dir && !options.dir) await fs.remove(dir);
+        } finally {
+            auditLease.release();
+        }
+        throw error;
+    }
     const context = new AsyncLocalStorage<string>();
     const checks = new Map<string, number>();
     let domainCalls = 0;
@@ -203,6 +217,9 @@ export async function startMcpTestServer(options: {
         observations,
         /** The unmodified production endpoint of the same server. */
         production: rpcClient(server.server),
+        auditDestination: auditLease.destination,
+        waitForAuditDestination: auditLease.wait,
+        releaseAuditDestination: auditLease.release,
         get domainCalls() {
             return domainCalls;
         },
@@ -211,9 +228,13 @@ export async function startMcpTestServer(options: {
         },
         tables: () => withRoom(server.hocuspocus, `projects/${PROJECT}`, registry),
         async stop() {
-            if (options.controlledObservationClock) await observations.dispose();
-            await stopTestServer(server);
-            await fs.remove(dir);
+            try {
+                if (options.controlledObservationClock) await observations.dispose();
+                await stopTestServer(server);
+                await fs.remove(dir);
+            } finally {
+                auditLease.release();
+            }
         },
     };
 }

@@ -1,16 +1,21 @@
 import { expect } from "chai";
 import fs from "node:fs";
-import { mcpLogPath, refreshMcpLogStream } from "../src/utils/log-manager.js";
+import { mcpLogPath } from "../src/utils/log-manager.js";
 import { childKeys, gridIds, gridPlacements } from "./mcp-create-grid-fixture.js";
 import { httpGridFixture } from "./mcp-create-grid-http-fixture.js";
+import { acquireMcpLogDestination } from "./mcp-log-destination-fixture.js";
 
 describe("create_grid audit and publication failure (#5350)", function() {
     this.timeout(30000);
 
     let logStream: fs.WriteStream;
-    before(() => {
-        logStream = refreshMcpLogStream();
+    let releaseLogStream: () => void;
+    before(async () => {
+        const lease = await acquireMcpLogDestination();
+        logStream = lease.destination;
+        releaseLogStream = lease.release;
     });
+    after(() => releaseLogStream());
 
     async function readAuditRecords(operationIds: string[]) {
         // Pino's multistream flush does not await fs.WriteStream writes. Queue a

@@ -4,6 +4,7 @@ import path from "node:path";
 import * as Y from "yjs";
 import { orderColumns } from "../../shared/src/services/gridDefinition.js";
 import { mcpLogger, mcpLogPath } from "../src/utils/log-manager.js";
+import { startMcpTestServer } from "./mcp-create-table-fixture.js";
 import {
     type GridMcpFixture,
     rpcClient,
@@ -69,18 +70,127 @@ describe("MCP grid presentation review findings (#5436)", function() {
 
     it("audits presentation success with prior/resulting revisions and no private payload", async () => {
         const operationId = `audit-pres-${Date.now()}`;
-        const grid = (await t.production.call("get_grid", { projectId: PROJECT, gridId: "grid-tasks" })).payload;
-        const applied = await t.production.call(
-            "update_grid_presentation",
-            updateArgs({
-                expectedPresentationRevision: grid.presentationRevision,
-                changes: { components: { title: { label: "件名" } } },
-                operationId,
-            }),
-        );
-        expect(applied.payload).to.include({ applied: true, replayed: false });
-        await new Promise<void>((resolve, reject) => mcpLogger.flush(error => error ? reject(error) : resolve()));
-        const records = fs.readFileSync(mcpLogPath, "utf8").split("\n").filter(Boolean).map(line => {
+        const destination = t.auditDestination as fs.WriteStream & {
+            _write: (
+                chunk: string | Buffer,
+                encoding: BufferEncoding,
+                callback: (error?: Error | null) => void,
+            ) => void;
+        };
+        const originalWrite = destination._write.bind(destination);
+        let releaseWrite!: () => void;
+        let auditWriteHeld!: () => void;
+        let released = false;
+        let writeCompleted = false;
+        let signalWriteCompleted!: () => void;
+        const completedWrite = new Promise<void>(resolve => signalWriteCompleted = resolve);
+        const held = new Promise<void>(resolve => auditWriteHeld = resolve);
+        const release = new Promise<void>(resolve => releaseWrite = resolve);
+        destination._write = (chunk, encoding, callback) => {
+            if (chunk.toString().includes(operationId)) {
+                auditWriteHeld();
+                void release.then(() =>
+                    originalWrite(chunk, encoding, error => {
+                        writeCompleted = true;
+                        signalWriteCompleted();
+                        callback(error);
+                    })
+                );
+                return;
+            }
+            originalWrite(chunk, encoding, callback);
+        };
+        const releaseHeldWrite = () => {
+            if (!released) {
+                released = true;
+                releaseWrite();
+            }
+        };
+        const readAfter = (barrier: () => Promise<void>) => {
+            let completed = false;
+            let destinationCompletedAtRead: boolean | undefined;
+            let signalEntered!: () => void;
+            const entered = new Promise<void>(resolve => signalEntered = resolve);
+            const result = (async () => {
+                signalEntered();
+                await barrier();
+                destinationCompletedAtRead = writeCompleted;
+                const contents = fs.readFileSync(mcpLogPath, "utf8");
+                completed = true;
+                return contents;
+            })();
+            return {
+                entered,
+                result,
+                completed: () => completed,
+                destinationCompletedAtRead: () => destinationCompletedAtRead,
+            };
+        };
+        const requirePendingRead = async (read: ReturnType<typeof readAfter>) => {
+            await read.entered;
+            await new Promise<void>(resolve => setImmediate(resolve));
+            if (read.completed()) throw new Error("audit read completed before the held destination write");
+        };
+        const expectOrderingRejection = async (read: ReturnType<typeof readAfter>) => {
+            let message = "";
+            try {
+                await requirePendingRead(read);
+            } catch (error) {
+                message = error instanceof Error ? error.message : String(error);
+            }
+            expect(message).to.equal("audit read completed before the held destination write");
+        };
+
+        let applied;
+        let auditFile: string;
+        try {
+            const grid = (await t.production.call("get_grid", { projectId: PROJECT, gridId: "grid-tasks" })).payload;
+            applied = await t.production.call(
+                "update_grid_presentation",
+                updateArgs({
+                    expectedPresentationRevision: grid.presentationRevision,
+                    changes: { components: { title: { label: "件名" } } },
+                    operationId,
+                }),
+            );
+            expect(applied.payload).to.include({ applied: true, replayed: false });
+
+            const emissionOrDestination = await Promise.race([
+                held.then(() => "emitted" as const),
+                t.waitForAuditDestination().then(() => "missing" as const),
+            ]);
+            expect(emissionOrDestination, "the original audit must reach its file destination").to.equal("emitted");
+
+            // Vary only the boundary in the same barrier-then-file-read path.
+            // Both historical controls read too early and therefore fail the
+            // ordering oracle; the real destination barrier remains pending.
+            const flushOnlyRead = readAfter(() =>
+                new Promise<void>((resolve, reject) => {
+                    mcpLogger.flush(error => error ? reject(error) : resolve());
+                })
+            );
+            await expectOrderingRejection(flushOnlyRead);
+            await flushOnlyRead.result;
+            expect(flushOnlyRead.destinationCompletedAtRead()).to.equal(false);
+
+            const noOpRead = readAfter(() => Promise.resolve());
+            await expectOrderingRejection(noOpRead);
+            await noOpRead.result;
+            expect(noOpRead.destinationCompletedAtRead()).to.equal(false);
+
+            const destinationRead = readAfter(t.waitForAuditDestination);
+            await requirePendingRead(destinationRead);
+            expect(writeCompleted, "the actual destination write must still be incomplete").to.equal(false);
+            releaseHeldWrite();
+            await completedWrite;
+            auditFile = await destinationRead.result;
+            expect(destinationRead.destinationCompletedAtRead(), "the reader must observe destination completion")
+                .to.equal(true);
+        } finally {
+            releaseHeldWrite();
+            destination._write = originalWrite;
+        }
+        const records = auditFile.split("\n").filter(Boolean).map(line => {
             try {
                 return JSON.parse(line);
             } catch {
@@ -103,6 +213,124 @@ describe("MCP grid presentation review findings (#5436)", function() {
         expect(record.uidFingerprint).to.be.a("string");
         expect(JSON.stringify(record)).to.not.contain("件名");
         expect(JSON.stringify(record)).to.not.contain(UID);
+    });
+
+    it("rejects a missing audit emission without leaving the destination gated", async () => {
+        const destination = t.auditDestination as fs.WriteStream & {
+            _write: (
+                chunk: string | Buffer,
+                encoding: BufferEncoding,
+                callback: (error?: Error | null) => void,
+            ) => void;
+        };
+        const originalWrite = destination._write.bind(destination);
+        let held = false;
+        let signalHeld!: () => void;
+        const heldWrite = new Promise<void>(resolve => signalHeld = resolve);
+        let captured: {
+            chunk: string | Buffer;
+            encoding: BufferEncoding;
+            callback: (error?: Error | null) => void;
+        } | undefined;
+        destination._write = (chunk, encoding, callback) => {
+            if (chunk.toString().includes("audit-that-was-not-emitted")) {
+                held = true;
+                captured = { chunk, encoding, callback };
+                signalHeld();
+                return;
+            }
+            originalWrite(chunk, encoding, callback);
+        };
+        try {
+            const requireEmission = async () => {
+                const observed = await Promise.race([
+                    heldWrite.then(() => "emitted" as const),
+                    t.waitForAuditDestination().then(() => "missing" as const),
+                ]);
+                if (observed === "missing") throw new Error("expected audit emission did not reach the destination");
+            };
+            let message = "";
+            try {
+                await requireEmission();
+            } catch (error) {
+                message = error instanceof Error ? error.message : String(error);
+            }
+            expect(message).to.equal("expected audit emission did not reach the destination");
+            expect(held).to.equal(false);
+
+            destination.write(`${JSON.stringify({ control: "audit-that-was-not-emitted" })}\n`, () => undefined);
+            await heldWrite;
+            expect(held).to.equal(true);
+        } finally {
+            destination._write = originalWrite;
+            if (captured) originalWrite(captured.chunk, captured.encoding, captured.callback);
+        }
+        await t.waitForAuditDestination();
+        expect(destination.destroyed).to.equal(false);
+    });
+
+    it("keeps the audit destination exclusively owned across fixture lifetimes", async () => {
+        const firstDestination = t.auditDestination;
+        let secondStarted = false;
+        const secondStart = startMcpTestServer().then(fixture => {
+            secondStarted = true;
+            return fixture;
+        });
+        let second: Awaited<typeof secondStart> | undefined;
+        try {
+            await new Promise<void>(resolve => setImmediate(resolve));
+            expect(secondStarted, "another MCP fixture must not replace a live owner's destination").to.equal(false);
+            await t.waitForAuditDestination();
+            expect(firstDestination.destroyed).to.equal(false);
+
+            await t.stop();
+            let releasedWait = "";
+            try {
+                await t.waitForAuditDestination();
+            } catch (error) {
+                releasedWait = error instanceof Error ? error.message : String(error);
+            }
+            expect(releasedWait).to.equal("MCP audit destination lease has been released");
+            second = await secondStart;
+            expect(firstDestination.writableEnded).to.equal(true);
+            await second.waitForAuditDestination();
+            expect(second.auditDestination.destroyed).to.equal(false);
+        } finally {
+            await t.stop();
+            second ??= await secondStart;
+            await second.stop();
+        }
+    });
+
+    it("rolls back a seeded startup failure before the next destination owner", async () => {
+        await t.stop();
+        let tempFailure = "";
+        try {
+            await startGridMcpFixture({
+                tempDir: () => {
+                    throw new Error("temporary directory setup failed");
+                },
+            });
+        } catch (error) {
+            tempFailure = error instanceof Error ? error.message : String(error);
+        }
+        expect(tempFailure).to.equal("temporary directory setup failed");
+
+        let failure = "";
+        try {
+            await startGridMcpFixture({
+                seed: async () => {
+                    throw new Error("seed failed after server startup");
+                },
+            });
+        } catch (error) {
+            failure = error instanceof Error ? error.message : String(error);
+        }
+        expect(failure).to.equal("seed failed after server startup");
+
+        t = await startGridMcpFixture();
+        await t.waitForAuditDestination();
+        expect(t.auditDestination.destroyed).to.equal(false);
     });
 
     it("saved MCP settings are consumed by normal readers on both peers with stable identities", async () => {
