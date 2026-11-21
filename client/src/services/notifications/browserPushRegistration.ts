@@ -44,7 +44,8 @@ function binding(value?: { generation: string; vapidKeyId: string; } | undefined
         open.onsuccess = () => {
             const tx = open.result.transaction(STORE, "readwrite");
             const store = tx.objectStore(STORE);
-            value ? store.put(value, "current") : store.delete("current");
+            if (value) store.put(value, "current");
+            else store.delete("current");
             tx.oncomplete = () => {
                 open.result.close();
                 resolve();

@@ -18,7 +18,7 @@ export class PushRequestError extends Error {
     }
 }
 
-async function request(path: string, init?: RequestInit): Promise<Response> {
+async function request(path: string, init?: Parameters<typeof fetch>[1]): Promise<Response> {
     const token = await userManager.auth.currentUser?.getIdToken();
     if (!token) throw new PushRequestError(401, "unauthorized");
     const response = await fetch(`${resolveApiBaseUrl().replace(/\/$/u, "")}/api/notifications/push${path}`, {
