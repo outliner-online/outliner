@@ -1,10 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
-const require = createRequire(import.meta.url);
-const libCoverage = require("../../client/node_modules/istanbul-lib-coverage");
 const artifactDir = path.resolve(process.argv[2] ?? "unit-artifacts");
 const shardCount = Number(process.argv[3] ?? 2);
 if (!Number.isInteger(shardCount) || shardCount < 1) throw new Error("invalid shard count");
