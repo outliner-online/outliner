@@ -137,9 +137,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p job_logs
-          RUNNER_TRACKING_ID= nohup python3 scripts/tests/fixtures/direct-runner-os/deadline-control/observe-build.py \
-            job_logs/delayed-build-observer.json > job_logs/delayed-build-observer.log 2>&1 &
-          echo "$!" > job_logs/delayed-build-observer.pid
+          builder_container=$(docker ps --filter name=buildx_buildkit --format '{{.ID}}' | head -1)
+          test -n "$builder_container"
+          observer="direct-runner-deadline-observer-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "$observer" > job_logs/delayed-build-observer-container
+          docker run --detach --rm --name "$observer" --network "container:$builder_container" \
+            --volume "$PWD:/workspace" --workdir /workspace python:3.14-slim \
+            python scripts/tests/fixtures/direct-runner-os/deadline-control/observe-build.py \
+            job_logs/delayed-build-observer.json
           for attempt in {1..100}; do
             grep -q '"event": "observer-ready"' job_logs/delayed-build-observer.json && break
             sleep .1
@@ -160,7 +165,7 @@ jobs:
           context: scripts/tests/fixtures/direct-runner-os/deadline-control
           load: true
           tags: outliner-direct-os-regression:deadline-control
-          add-host: host.docker.internal=host-gateway
+          network: host
           no-cache: true
       - name: Acquisition must stay blocked after deadline expiry
         if: steps.delayed-build.outcome == 'success'
@@ -174,7 +179,7 @@ jobs:
           BUILD_OUTCOME: ${{ steps.delayed-build.outcome }}
         run: |
           set -euo pipefail
-          trap 'kill "$(cat job_logs/delayed-build-observer.pid)" 2>/dev/null || true' EXIT
+          trap 'docker rm --force "$(cat job_logs/delayed-build-observer-container)" >/dev/null 2>&1 || true' EXIT
           test "$BUILD_OUTCOME" = failure
           for attempt in {1..100}; do
             grep -q '"event": "client-closed"' job_logs/delayed-build-observer.json && break
