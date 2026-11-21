@@ -1,0 +1,16 @@
+id: ENV-9cf14e62
+title: Daily CI duration review issues
+title-ja: CI実行時間を毎日監視してレビュー用Issueを作成する
+description: The scheduled CI duration monitor reads completed GitHub Actions attempts, distinguishes runner work from queueing, and reconciles one review issue per configured workflow and logical job family when runner work reaches ten minutes. New complete English issue bodies are submitted with review-ready in a final operation. Existing reviewer edits and consumed readiness labels are preserved.
+category: environment
+status: implemented
+components:
+- .github/workflows/ci-duration-monitor.yml
+- .github/ci-duration-monitor.json
+- .github/ci-duration-issue.md
+- scripts/ci_duration_monitor.py
+- scripts/ci_duration_github.py
+tests:
+- scripts/tests/test_ci_duration_monitor.py
+- scripts/tests/test_ci_duration_monitor_config.py
+- scripts/tests/test_ci_duration_monitor_http.py
