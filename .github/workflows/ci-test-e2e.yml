@@ -35,8 +35,32 @@ jobs:
         run: npm ci --prefix scripts/tests --include=dev --no-audit --no-fund
       - name: Verify mirror-only control and owned-child cleanup
         run: python3 -m unittest discover -s scripts/tests -p 'test_ubuntu_mirror*.py' -v
+      - name: Enable fixture layer cache
+        uses: docker/setup-buildx-action@v4
+      - name: Start shared fixture provisioning deadline
+        shell: python
+        run: |
+          import os
+          import time
+          deadline = time.monotonic_ns() + 900_000_000_000
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              env.write(f"DIRECT_RUNNER_OS_PROVISIONING_DEADLINE_NS={deadline}\n")
+      - name: Build cached direct-runner fixture
+        id: direct-runner-fixture
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: scripts/tests/fixtures/direct-runner-os/Dockerfile
+          load: true
+          tags: outliner-direct-os-regression:ci
+          cache-from: type=gha,scope=direct-runner-os-fixture-v1
+          cache-to: type=gha,mode=max,scope=direct-runner-os-fixture-v1
       - name: Exercise real isolated package acquisition
         shell: bash
+        env:
+          # The supported Docker action above authenticates cache import/export.
+          # The ENV suite still creates one fresh container per scenario.
+          DIRECT_RUNNER_OS_PREBUILT_IMAGE: outliner-direct-os-regression:ci
         run: |
           set -euo pipefail
           mkdir -p job_logs
@@ -48,6 +72,94 @@ jobs:
           name: direct-runner-os-regression-${{ github.run_id }}-${{ github.run_attempt }}
           path: job_logs/direct-runner-os-regression.log
           retention-days: 2
+
+  direct-runner-os-provisioning-failure:
+    name: Verify fixture failure blocks scenario acquisition
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+      - name: Enable fixture builder
+        uses: docker/setup-buildx-action@v4
+      - name: Exercise failing fixture provisioning
+        id: fixture-build
+        continue-on-error: true
+        uses: docker/build-push-action@v7
+        with:
+          context: scripts/tests/fixtures/direct-runner-os/failure-control
+          load: true
+          tags: outliner-direct-os-regression:failure-control
+      - name: Acquisition must stay blocked
+        if: steps.fixture-build.outcome == 'success'
+        run: |
+          mkdir -p job_logs
+          touch job_logs/unexpected-scenario-launch
+          bash scripts/run-env-tests.sh --isolated env-direct-runner-os-acquisition-5921b0ad.spec.ts
+      - name: Verify provisioning failure propagation
+        if: always()
+        env:
+          BUILD_OUTCOME: ${{ steps.fixture-build.outcome }}
+        run: |
+          set -euo pipefail
+          test "$BUILD_OUTCOME" = failure
+          test ! -e job_logs/unexpected-scenario-launch
+
+  direct-runner-os-provisioning-deadline:
+    name: Verify fixture build shares the provisioning deadline
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+      - name: Use Node.js 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Install ENV test dependencies
+        run: npm ci --prefix scripts/tests --include=dev --no-audit --no-fund
+      - name: Enable fixture builder
+        uses: docker/setup-buildx-action@v4
+      - name: Start controlled shared provisioning deadline
+        shell: python
+        run: |
+          import os
+          import time
+          deadline = time.monotonic_ns() + 1_000_000_000
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              env.write(f"DIRECT_RUNNER_OS_PROVISIONING_DEADLINE_NS={deadline}\n")
+      - name: Build deliberately delayed fixture
+        uses: docker/build-push-action@v7
+        with:
+          context: scripts/tests/fixtures/direct-runner-os/deadline-control
+          load: true
+          tags: outliner-direct-os-regression:deadline-control
+      - name: Reject acquisition after the shared deadline
+        id: acquisition
+        continue-on-error: true
+        env:
+          DIRECT_RUNNER_OS_PREBUILT_IMAGE: outliner-direct-os-regression:deadline-control
+        run: |
+          set -o pipefail
+          mkdir -p job_logs
+          bash scripts/run-env-tests.sh --isolated env-direct-runner-os-acquisition-5921b0ad.spec.ts \
+            2>&1 | tee job_logs/deadline-control.log
+      - name: Verify deadline failure blocked every scenario
+        if: always()
+        env:
+          ACQUISITION_OUTCOME: ${{ steps.acquisition.outcome }}
+        run: |
+          set -euo pipefail
+          test "$ACQUISITION_OUTCOME" = failure
+          grep -F 'Fixture provisioning deadline exceeded' job_logs/deadline-control.log
+          if grep -F ': elapsed=' job_logs/deadline-control.log; then
+            echo 'scenario acquisition unexpectedly started after the provisioning deadline' >&2
+            exit 1
+          fi
 
   artifact-roundtrip:
     name: Verify E2E artifact round trip
