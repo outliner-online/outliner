@@ -146,6 +146,19 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
             await waitFor(() => expect(view.container.querySelectorAll("td[data-col='value'] button")).toHaveLength(2));
             expect(view.container.querySelector("td[data-col='value'] select")).toBeNull();
             await waitFor(() => expect(getGridProjection(grid.gridId)).toMatchObject({ status: "ready" }));
+
+            // The UI deliberately retains the last successful rows while a
+            // replacement query is invalid, but comparable content must not
+            // retain the superseded authority. A subsequent accepted result
+            // restores publication without remounting the Grid.
+            setGridQuery(grid, "SELECT missing_column AS value FROM choices");
+            await waitFor(() => expect(getGridProjection(grid.gridId)).toMatchObject({ status: "unavailable" }));
+            expect(view.container.querySelectorAll("tbody tr")).toHaveLength(2);
+            setGridQuery(
+                grid,
+                "SELECT status AS value FROM choices UNION ALL SELECT status AS value FROM notes ORDER BY value",
+            );
+            await waitFor(() => expect(getGridProjection(grid.gridId)).toMatchObject({ status: "ready" }));
         } finally {
             view.unmount();
             projectDoc.destroy();

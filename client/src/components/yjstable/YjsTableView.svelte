@@ -537,7 +537,9 @@ onDestroy(() => {
                         locale: globalThis.navigator?.language ?? "en-US",
                         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
                     }}
-                    projectionMetadataStatus={displayMetadata?.status}
+                    projectionMetadataStatus={guardedAuthority?.metadata.status}
+                    projectionPhysicalColumns={guardedAuthority?.metadata.physicalColumns}
+                    projectionResultColumns={guardedAuthority?.metadata.columns}
                 />
                 {#if insertOutcome}
                     <p

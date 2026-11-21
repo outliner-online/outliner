@@ -156,6 +156,9 @@ interface Props {
     projectionTitle?: string;
     observationContext?: GridObservationContextV1;
     projectionMetadataStatus?: "resolved" | "relation-free" | "partial" | "unsupported" | "unavailable";
+    /** Current accepted metadata for projection publication; display metadata may intentionally be stale. */
+    projectionPhysicalColumns?: readonly GridPhysicalColumnMetadata[];
+    projectionResultColumns?: readonly GridResultColumnMetadata[];
 }
 
 let gridContainer: HTMLElement | undefined = $state();
@@ -195,6 +198,8 @@ let {
     projectionTitle,
     observationContext,
     projectionMetadataStatus = "unavailable",
+    projectionPhysicalColumns = [],
+    projectionResultColumns = [],
 }: Props = $props();
 
 interface PendingRowDeletion {
@@ -723,8 +728,8 @@ function currentGridProjection(): GridProjectionResult {
         hiddenColumns,
         columnLabels,
         componentTypes,
-        resultColumns: resultColumnMetadata,
-        physicalColumns: mutationPhysicalColumns,
+        resultColumns: projectionResultColumns,
+        physicalColumns: projectionPhysicalColumns,
         metadataStatus: projectionMetadataStatus,
     });
 }
