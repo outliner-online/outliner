@@ -45,7 +45,6 @@ jobs:
           VITE_DISABLE_FLUID_TELEMETRY: true
           UNIT_SHARD: ${{ matrix.shard }}/2
           UNIT_SHARD_INDEX: ${{ matrix.shard }}
-          UNIT_RUN_BASE: ${{ matrix.shard == 1 && 'true' || 'false' }}
       - name: Upload shard evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -53,7 +52,7 @@ jobs:
           name: unit-shard-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             job_logs/unit-test-shard-${{ matrix.shard }}.log
-            unit-evidence/shard-${{ matrix.shard }}.txt
+            unit-evidence/shard-${{ matrix.shard }}.json
             coverage/unit-shard-${{ matrix.shard }}/coverage-final.json
           archive: true
           if-no-files-found: error
@@ -82,13 +81,15 @@ jobs:
         env:
           SHARD_RESULT: ${{ needs.unit-shard.result }}
         run: test "$SHARD_RESULT" = success
+      - name: Setup Test Environment
+        uses: ./.github/actions/setup-test-env
       - name: Download current-attempt shard evidence
         uses: actions/download-artifact@v8
         with:
           pattern: unit-shard-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: unit-artifacts
-      - name: Verify complete selection and merge coverage
-        run: node scripts/ci/verify-unit-shards.mjs unit-artifacts 2
+      - name: Verify complete selection, merge coverage, and run base tests
+        run: scripts/ci/finalize-unit-tests.sh
       - name: Summarise failures
         if: failure()
         run: |
