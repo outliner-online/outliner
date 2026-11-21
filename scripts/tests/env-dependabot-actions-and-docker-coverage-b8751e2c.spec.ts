@@ -18,6 +18,7 @@ type Update = {
     directory?: string;
     directories?: string[];
     "exclude-paths"?: string[];
+    ignore?: { "dependency-name"?: string; }[];
 };
 
 type DependabotConfig = {
@@ -102,6 +103,25 @@ test("the v2 config covers Actions and every maintained Dockerfile", () => {
         expect(fs.existsSync(path.join(repoRoot, file)), `${file} must remain in the maintained inventory`).toBe(true);
     }
     expect(uncoveredDockerfiles(config)).toEqual([]);
+});
+
+test("only the npm-authoritative Playwright image is excluded from Docker proposals", () => {
+    const dockerUpdates = (config.updates ?? []).filter(update => update["package-ecosystem"] === "docker");
+    const ignoredDependencies = dockerUpdates.flatMap(update =>
+        (update.ignore ?? []).map(condition => condition["dependency-name"])
+    );
+
+    expect(ignoredDependencies).toEqual(["playwright"]);
+    expect(uncoveredDockerfiles(config)).toEqual([]);
+});
+
+test("a missing or broad Docker ignore cannot masquerade as the scoped Playwright exclusion", () => {
+    const fixture = structuredClone(config);
+    const docker = (fixture.updates ?? []).find(update => update["package-ecosystem"] === "docker");
+    docker!.ignore = [{ "dependency-name": "*" }];
+
+    const ignoredDependencies = (docker!.ignore ?? []).map(condition => condition["dependency-name"]);
+    expect(ignoredDependencies).not.toEqual(["playwright"]);
 });
 
 test.each(dockerfiles)("missing coverage for %s fails validation", file => {
