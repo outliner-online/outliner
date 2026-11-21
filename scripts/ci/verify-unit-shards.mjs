@@ -66,8 +66,11 @@ function repositoryCoverageInventory() {
         return JSON.parse(fs.readFileSync(process.env.UNIT_COVERAGE_MANIFEST, "utf8")).map((file) => path.resolve(file))
             .sort();
     }
-    const tracked = execFileSync("git", ["ls-files", "-z", "--", "client/src"], { encoding: "utf8" }).split("\0");
-    return tracked.filter((file) => /\.(?:js|ts|svelte)$/.test(file))
+    const sourceRoot = path.join(clientDir, "src");
+    const sourceFiles = fs.readdirSync(sourceRoot, { recursive: true, withFileTypes: true })
+        .filter((entry) => entry.isFile())
+        .map((entry) => path.join(entry.parentPath, entry.name));
+    return sourceFiles.filter((file) => /\.(?:js|ts|svelte)$/.test(file))
         .filter((file) => !/\.(?:spec|test)\.(?:js|ts)$/.test(file))
         .filter((file) => !/(?:^|\/)tests\//.test(file))
         .filter((file) => !/(?:^|\/)(?:paraglide|stories)\//.test(file))
