@@ -57,8 +57,12 @@ import {
     gridColumnLabel,
     gridFieldFor,
     gridVisibleColumns,
+    projectGridTable,
+    type GridObservationContextV1,
+    type GridProjectionResult,
     type GridProjectionRowTarget,
 } from "../../../../shared/src/notifications/gridProjection";
+import { registerGridProjectionSource } from "../../services/yjstable/gridProjectionRegistry";
 import { draftHasLineBreak, textLineBreakPolicy, type TextLineBreakPolicy } from "./textCellLineBreakPolicy";
 import { unambiguousPhysicalColumn, unambiguousRowSource, type ProjectQueryProvenance } from "../../../../shared/src/services/projectQueryProvenance";
 import ConfirmDialog from "../ConfirmDialog.svelte";
@@ -148,6 +152,10 @@ interface Props {
      * shown. The preview is never saved state (issue #5459).
      */
     onColumnWidthPreview?: (preview: { column: string; width: number; } | undefined) => void;
+    /** Committed Grid identity/context used by the live notification projection source. */
+    projectionTitle?: string;
+    observationContext?: GridObservationContextV1;
+    projectionMetadataStatus?: "resolved" | "relation-free" | "partial" | "unsupported" | "unavailable";
 }
 
 let gridContainer: HTMLElement | undefined = $state();
@@ -184,6 +192,9 @@ let {
     confirmRowDelete = false,
     isReadOnly = false,
     onColumnWidthPreview,
+    projectionTitle,
+    observationContext,
+    projectionMetadataStatus = "unavailable",
 }: Props = $props();
 
 interface PendingRowDeletion {
@@ -684,6 +695,35 @@ const commandContext = $derived<GridCommandContext>({
     guardedSourceWrites: mutationBoundary !== undefined,
 });
 
+function currentGridProjection(): GridProjectionResult {
+    if (!grid || !projectionTitle || !observationContext) {
+        return { status: "unavailable", reason: "Grid observation context is unavailable" };
+    }
+    const rowTargets = result.rows.flatMap((row, rowIndex): GridProjectionRowTarget[] => {
+        const target = commandContext.rowTargets.get(selectionRowId(row, rowIndex));
+        return target ? [{ logicalRowId: selectionRowId(row, rowIndex), source: target.source }] : [];
+    });
+    return projectGridTable({
+        title: projectionTitle,
+        context: observationContext,
+        columns: result.columns,
+        rows: result.rows,
+        rowTargets,
+        columnOrder,
+        hiddenColumns,
+        columnLabels,
+        componentTypes,
+        resultColumns: resultColumnMetadata,
+        physicalColumns: mutationPhysicalColumns,
+        metadataStatus: projectionMetadataStatus,
+    });
+}
+
+let unregisterProjection: (() => void) | undefined;
+onMount(() => {
+    if (grid) unregisterProjection = registerGridProjectionSource(grid.gridId, currentGridProjection);
+});
+
 const selectionSummary = $derived.by(() => {
     void selectionRevision;
     return summarizeSelection(selection, commandContext);
@@ -954,6 +994,7 @@ onMount(() => {
 onDestroy(() => {
     stopHandleDrag();
     unregisterSearch?.();
+    unregisterProjection?.();
 });
 
 function rowIdsOf(rows: TableQueryResult["rows"]): string[] {

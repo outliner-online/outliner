@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { type GridProjectionInput, parseGridObservationContext, projectGridTable } from "./gridProjection";
+import {
+    type GridProjectionInput,
+    parseGridObservationContext,
+    projectGridTable,
+} from "../../../../shared/src/notifications/gridProjection";
 
 const base = (): GridProjectionInput => ({
     title: "People",
@@ -55,14 +59,8 @@ describe("Grid table projection", () => {
                 title: "People",
                 columns: [{ label: "Enabled" }, { label: "birthday" }, { label: "id" }],
                 rows: [
-                    [{ kind: "checkbox", checked: true }, { kind: "date", value: "2026-11-21" }, {
-                        kind: "text",
-                        value: "same",
-                    }],
-                    [{ kind: "checkbox", checked: true }, { kind: "date", value: "2026-11-21" }, {
-                        kind: "text",
-                        value: "same",
-                    }],
+                    [{ checked: true }, { value: "2026-11-21" }, { value: "same" }],
+                    [{ checked: true }, { value: "2026-11-21" }, { value: "same" }],
                 ],
             },
         });
@@ -78,6 +76,17 @@ describe("Grid table projection", () => {
         changed.rows = changed.rows.slice(0, 1);
         changed.rowTargets = changed.rowTargets.slice(0, 1);
         expect(projectGridTable(changed)).not.toEqual(first);
+    });
+
+    it("excludes renderer identity when displayed text is unchanged", () => {
+        const text: any = base();
+        text.columns = ["id"];
+        text.rows = [{ id: 42 }];
+        text.rowTargets = [{ logicalRowId: "one" }];
+        text.resultColumns = [{ name: "id", typeId: 25 }];
+        text.componentTypes = { id: "text" };
+        const number = { ...text, componentTypes: { id: "number" } };
+        expect(projectGridTable(number)).toEqual(projectGridTable(text));
     });
 
     it("refuses incomplete evidence but distinguishes an authoritative empty result", () => {
@@ -119,8 +128,8 @@ describe("Grid table projection", () => {
             status: "ready",
             projection: {
                 rows: [
-                    [{ kind: "checkbox", checked: true }],
-                    [{ kind: "text", value: "true" }],
+                    [{ checked: true }],
+                    [{ value: "true" }],
                 ],
             },
         });

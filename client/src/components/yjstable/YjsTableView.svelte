@@ -24,7 +24,6 @@ import { createGridExistingRowMutationBoundary } from "../../services/yjstable/g
 import { createGridInsertController, type GridInsertOutcome, type GridInsertState } from "../../services/yjstable/gridInsertController";
 import { createGridMetadataResolver, type GridMetadataResolution } from "../../services/yjstable/gridMetadataResolver";
 import { buildGridRenderTrace } from "../../services/yjstable/gridRenderTrace";
-import { registerGridProjectionSource } from "../../services/yjstable/gridProjectionRegistry";
 import { registerGridRenderTraceSource } from "../../services/yjstable/gridRenderTraceRegistry";
 import { publishGridResultBeforeAuthority } from "../../services/yjstable/gridResultPublication";
 import {
@@ -51,9 +50,7 @@ import TableChartPanel from "./TableChartPanel.svelte";
 import TableGrid from "./TableGrid.svelte";
 import TableUiDefEditor from "./TableUiDefEditor.svelte";
 import {
-    projectGridTable,
     type GridObservationContextV1,
-    type GridProjectionResult,
 } from "../../../../shared/src/notifications/gridProjection";
 
 interface Props {
@@ -325,40 +322,9 @@ function getGridRenderTrace() {
         hiddenColumns,
     });
 }
-function currentGridProjection(): GridProjectionResult {
-    if (!guardedAuthority || selectState.status !== "success" || !guardedSelect.isEvidenceCurrent(guardedAuthority.evidence)) {
-        return { status: "unavailable", reason: "Grid accepted result is unavailable or stale" };
-    }
-    const hasSourceIdentity = result.columns.includes("source_kind") && result.columns.includes("source_id");
-    return projectGridTable({
-        title: gridName,
-        context: observationContext ?? {
-            version: 1,
-            surface: "table",
-            locale: globalThis.navigator?.language ?? "en-US",
-            timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
-        },
-        columns: result.columns,
-        rows: result.rows,
-        rowTargets: result.rows.map((row, index) => ({
-            logicalRowId: typeof row.id === "string" ? row.id : `result:${index}`,
-            source: hasSourceIdentity && typeof row.source_kind === "string" && typeof row.source_id === "string"
-                ? { sourceKind: row.source_kind, sourceId: row.source_id }
-                : undefined,
-        })),
-        columnOrder,
-        hiddenColumns,
-        columnLabels,
-        componentTypes,
-        resultColumns: guardedAuthority.metadata.columns,
-        physicalColumns: guardedAuthority.metadata.physicalColumns,
-        metadataStatus: guardedAuthority.metadata.status,
-    });
-}
 let unsubscribe: (() => void) | undefined;
 let cleanupWebMCP: (() => void) | undefined;
 let unregisterTrace: (() => void) | undefined;
-let unregisterProjection: (() => void) | undefined;
 let unsubscribeInsert: (() => void) | undefined;
 onMount(() => {
     refreshGridMirror();
@@ -379,7 +345,6 @@ onMount(() => {
         getGridRenderTrace,
     );
     unregisterTrace = registerGridRenderTraceSource(mountedGrid.gridId, getGridRenderTrace);
-    unregisterProjection = registerGridProjectionSource(mountedGrid.gridId, currentGridProjection);
 });
 onDestroy(() => {
     destroyed = true;
@@ -395,7 +360,6 @@ onDestroy(() => {
     insertController.dispose();
     cleanupWebMCP?.();
     unregisterTrace?.();
-    unregisterProjection?.();
 });
 </script>
 
@@ -566,6 +530,14 @@ onDestroy(() => {
                     onColumnWidthPreview={(preview) => {
                         widthPreview = preview;
                     }}
+                    projectionTitle={gridName}
+                    observationContext={observationContext ?? {
+                        version: 1,
+                        surface: "table",
+                        locale: globalThis.navigator?.language ?? "en-US",
+                        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+                    }}
+                    projectionMetadataStatus={displayMetadata?.status}
                 />
                 {#if insertOutcome}
                     <p

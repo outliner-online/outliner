@@ -1,4 +1,4 @@
-import { orderColumns } from "../services/gridDefinition";
+import { orderColumns } from "../services/gridDefinition.js";
 
 export interface GridObservationContextV1 {
     readonly version: 1;
@@ -69,9 +69,14 @@ export interface GridProjectionRowTarget {
     readonly source?: { readonly sourceKind: string; readonly sourceId: string; };
 }
 
-export type GridVisibleCell =
+export type GridRenderedCell =
     | { readonly kind: "checkbox"; readonly checked: boolean; }
     | { readonly kind: "text" | "number" | "date" | "select"; readonly value: string; };
+
+/** Equality content deliberately excludes renderer identity when the displayed text is unchanged. */
+export type GridVisibleCell =
+    | { readonly checked: boolean; }
+    | { readonly value: string; };
 
 export interface GridVisibleProjection {
     readonly kind: "grid";
@@ -112,10 +117,14 @@ export function gridCellType(configuredType: string | undefined, field: GridProj
     return "text";
 }
 
-export function gridDisplayedCell(type: GridCellType, value: unknown): GridVisibleCell {
+export function gridDisplayedCell(type: GridCellType, value: unknown): GridRenderedCell {
     if (type === "checkbox") return { kind: "checkbox", checked: value === true || value === "true" };
     const text = value === null || value === undefined ? "" : String(value);
     return { kind: type, value: type === "date" ? text.slice(0, 10) : text };
+}
+
+export function gridComparableCell(cell: GridRenderedCell): GridVisibleCell {
+    return cell.kind === "checkbox" ? { checked: cell.checked } : { value: cell.value };
 }
 
 export function gridVisibleColumns(
@@ -201,7 +210,9 @@ export function projectGridTable(input: GridProjectionInput): GridProjectionResu
         ),
         rows: Object.freeze(input.rows.map((row, rowIndex) => Object.freeze(columns.map(column => {
             const field = gridFieldFor(column, input.rowTargets[rowIndex], input.physicalColumns, input.resultColumns);
-            return Object.freeze(gridDisplayedCell(gridCellType(input.componentTypes[column], field), row[column]));
+            return Object.freeze(
+                gridComparableCell(gridDisplayedCell(gridCellType(input.componentTypes[column], field), row[column])),
+            );
         })))),
     });
     return { status: "ready", projection };
