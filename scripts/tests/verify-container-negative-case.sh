@@ -33,13 +33,19 @@ fi
 case "$case_name" in
     unavailable)
         for evidence in \
-            'APT acquisition attempt: primary host 127.0.0.1:18081' \
-            'APT acquisition failure: primary host 127.0.0.1:18081' \
-            'APT acquisition attempt: fallback host 127.0.0.1:18082' \
-            'APT acquisition failure: fallback host 127.0.0.1:18082'
+            'APT fetch attempt: primary host 127.0.0.1:18081' \
+            'APT fetch failure: primary host 127.0.0.1:18081' \
+            'APT fetch attempt: fallback host 127.0.0.1:18082' \
+            'APT fetch failure: fallback host 127.0.0.1:18082'
         do
             if ! grep -Fq "$evidence" "$log"; then
                 echo "Unavailable control lacks endpoint evidence: ${evidence}" >&2
+                exit 1
+            fi
+        done
+        for endpoint in '127.0.0.1:18081' '127.0.0.1:18082'; do
+            if ! grep -Eq "Err:[^[:space:]]*[[:space:]]+http://${endpoint}([/[:space:]]|$)" "$log"; then
+                echo "Unavailable control lacks native failed-fetch evidence for ${endpoint}" >&2
                 exit 1
             fi
         done

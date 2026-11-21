@@ -34,5 +34,9 @@ test("the image uses the bounded installer and CI runs its Docker regression", (
     expect(integration).toContain("verify-missing-netcat-openbsd");
     expect(integration).toContain("verify-missing-python3-pip");
     expect(integration).toContain("unavailable_outer_watchdog_seconds=45");
+    expect(integration).toContain("Dockerfile.fixture");
+    expect(integration).toContain("outliner-apt-regression:fixture");
+    expect(integration).toContain("negative_build_transport_timeout_seconds=180");
+    expect(integration).toContain("APT::Update::Error-Mode");
     expect(integration).toContain('verify-container-negative-case.sh" "$negative_case"');
 });

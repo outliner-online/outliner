@@ -14,10 +14,12 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../
 const verifier = path.join(repoRoot, "scripts", "tests", "verify-container-negative-case.sh");
 
 const unavailableEvidence = `
-APT acquisition attempt: primary host 127.0.0.1:18081
-APT acquisition failure: primary host 127.0.0.1:18081
-APT acquisition attempt: fallback host 127.0.0.1:18082
-APT acquisition failure: fallback host 127.0.0.1:18082
+APT fetch attempt: primary host 127.0.0.1:18081
+APT fetch failure: primary host 127.0.0.1:18081
+Err:1 http://127.0.0.1:18081 jammy InRelease
+APT fetch attempt: fallback host 127.0.0.1:18082
+APT fetch failure: fallback host 127.0.0.1:18082
+Err:2 http://127.0.0.1:18082 jammy InRelease
 INSTALLER_EXIT_STATUS=1
 `;
 
@@ -59,8 +61,43 @@ test("rejects a skipped installer and missing installer failure evidence", () =>
     expect(missingEndpointFailure.output).toContain("lacks endpoint evidence");
 });
 
+test("rejects package-install failure after both endpoint indexes were fetched", () => {
+    const indexesSucceeded = `
+APT fetch attempt: primary host 127.0.0.1:18081
+Get:1 http://127.0.0.1:18081 jammy InRelease
+APT fetch succeeded: primary host 127.0.0.1:18081
+APT package installation failure: primary host 127.0.0.1:18081
+APT fetch attempt: fallback host 127.0.0.1:18082
+Get:2 http://127.0.0.1:18082 jammy InRelease
+APT fetch succeeded: fallback host 127.0.0.1:18082
+APT package installation failure: fallback host 127.0.0.1:18082
+INSTALLER_EXIT_STATUS=1
+`;
+    const result = verify(1, indexesSucceeded);
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain("lacks endpoint evidence");
+});
+
 test("rejects an unexpectedly successful image build", () => {
     const result = verify(0, unavailableEvidence);
     expect(result.ok).toBe(false);
     expect(result.output).toContain("unexpectedly built successfully");
+});
+
+test("a separately delayed fixture cannot consume the inner watchdog allowance", () => {
+    const output = execFileSync("bash", [
+        "-ceu",
+        `
+timeout 1 sleep 0.2
+timeout 1.2 bash -ceu '
+  set +e
+  timeout --signal=TERM --kill-after=0.2 0.3 bash -c "trap \"\" TERM; sleep 5"
+  status=$?
+  set -e
+  echo INSTALLER_EXIT_STATUS=$status
+'
+`,
+    ], { encoding: "utf8" });
+
+    expect(output).toContain("INSTALLER_EXIT_STATUS=124");
 });

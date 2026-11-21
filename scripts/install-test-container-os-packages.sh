@@ -62,18 +62,23 @@ replace_archive_host() {
 install_from_current_source() {
     local label=$1
     shift
-    echo "APT acquisition attempt: ${label}" >&2
+    echo "APT fetch attempt: ${label}" >&2
     rm -rf /var/lib/apt/lists/*
-    apt-get "${apt_options[@]}" update
-    apt-get "${apt_options[@]}" install -y --no-install-recommends "$@"
+    if ! apt-get "${apt_options[@]}" update; then
+        echo "APT fetch failure: ${label}" >&2
+        return 1
+    fi
+    echo "APT fetch succeeded: ${label}" >&2
+    if ! apt-get "${apt_options[@]}" install -y --no-install-recommends "$@"; then
+        echo "APT package installation failure: ${label}" >&2
+        return 1
+    fi
 }
 
 if ! install_from_current_source "primary host ${primary_host}" "$@"; then
-    echo "APT acquisition failure: primary host ${primary_host}" >&2
     echo "Primary APT source failed; retrying once through ${fallback_host}." >&2
     replace_archive_host "$primary_host" "$fallback_host"
     if ! install_from_current_source "fallback host ${fallback_host}" "$@"; then
-        echo "APT acquisition failure: fallback host ${fallback_host}" >&2
         echo "APT package acquisition exhausted the bounded primary and fallback attempts." >&2
         exit 1
     fi
