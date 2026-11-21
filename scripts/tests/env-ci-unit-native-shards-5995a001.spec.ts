@@ -1,6 +1,5 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
@@ -20,7 +19,8 @@ describe("unit CI native shard orchestration", () => {
         expect(workflow.jobs["unit-test"].steps.find((step: any) => step.name.includes("Reject")).run)
             .toContain('test "$SHARD_RESULT" = success');
         expect(packageJson.scripts["github:test:unit"]).toBe("bash ../scripts/ci/run-unit-tests.sh");
-        expect(runner).toContain("--reporter=json --outputFile.json");
+        expect(runner).toContain("--reporter=json");
+        expect(runner).toContain("--outputFile.json=");
         expect(runner).toContain("vitest run --project unit --coverage");
     });
 
