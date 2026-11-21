@@ -101,6 +101,7 @@ test("rejects an unexpectedly successful image build", () => {
 test("the host wrapper preserves delayed startup and the full inner allowance", () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "apt-unavailable-runner-"));
     const logPath = path.join(directory, "run.log");
+    const startedAt = Date.now();
     try {
         let status: number | undefined;
         try {
@@ -118,6 +119,9 @@ exit "$status"
         }
         expect(status).toBeGreaterThan(0);
         expect(status).not.toBe(124);
+        // Startup (0.6s), the inner timeout (0.4s), and its kill grace (0.3s)
+        // must all elapse; a pass-only early exit would not prove the bounds compose.
+        expect(Date.now() - startedAt).toBeGreaterThanOrEqual(1200);
         expect(fs.readFileSync(logPath, "utf8")).toMatch(/INSTALLER_EXIT_STATUS=[1-9][0-9]*/);
     } finally {
         fs.rmSync(directory, { recursive: true, force: true });
