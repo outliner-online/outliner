@@ -183,6 +183,14 @@ export function createNotificationHttpsSender(dependencies: NotificationTranspor
                     });
                     incoming.once("error", () => finish({ kind: "unknown", reason: "transport", writeInitiated }));
                     incoming.once("end", () => {
+                        if (input.signal?.aborted || Date.now() >= deadline) {
+                            finish({
+                                kind: "unknown",
+                                reason: input.signal?.aborted ? "cancelled" : "deadline",
+                                writeInitiated,
+                            });
+                            return;
+                        }
                         const status = incoming.statusCode ?? 0;
                         if (status >= 300 && status < 400) {
                             finish({ kind: "rejected", reason: "redirect", status, writeInitiated: true });

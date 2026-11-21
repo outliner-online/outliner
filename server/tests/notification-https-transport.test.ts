@@ -42,8 +42,9 @@ class ControlledRequest extends EventEmitter {
     destroyed = false;
     ended = false;
     body?: Buffer;
-    private readonly respond: (body: Buffer) => { status: number; body?: Buffer; };
-    constructor(respond: (body: Buffer) => { status: number; body?: Buffer; }) {
+    response?: ControlledResponse;
+    private readonly respond: (body: Buffer) => { status: number; body?: Buffer; deferEnd?: boolean; };
+    constructor(respond: (body: Buffer) => { status: number; body?: Buffer; deferEnd?: boolean; }) {
         super();
         this.respond = respond;
     }
@@ -51,11 +52,11 @@ class ControlledRequest extends EventEmitter {
         this.ended = true;
         this.body = Buffer.from(body);
         const result = this.respond(this.body);
-        const response = new ControlledResponse(result.status);
-        this.emit("response", response);
+        this.response = new ControlledResponse(result.status);
+        this.emit("response", this.response);
         queueMicrotask(() => {
-            if (result.body) response.emit("data", result.body);
-            response.emit("end");
+            if (result.body) this.response!.emit("data", result.body);
+            if (!result.deferEnd) this.response!.emit("end");
         });
         return this;
     }
@@ -68,7 +69,9 @@ class ControlledRequest extends EventEmitter {
 type FixtureOptions = {
     authorized?: boolean;
     remoteAddress?: string;
-    response?: (body: Buffer) => { status: number; body?: Buffer; };
+    response?: (body: Buffer) => { status: number; body?: Buffer; deferEnd?: boolean; };
+    resolve4?: NotificationTransportDependencies["resolve4"];
+    connectTls?: NotificationTransportDependencies["connectTls"];
 };
 
 function transportFixture(options: FixtureOptions = {}) {
@@ -77,9 +80,10 @@ function transportFixture(options: FixtureOptions = {}) {
     socket.remoteAddress = options.remoteAddress ?? PUBLIC_ADDRESS;
     let request: ControlledRequest | undefined;
     let requestOptions: https.RequestOptions | undefined;
+    let handedOffSocket: TLSSocket | undefined;
     const dependencies: NotificationTransportDependencies = {
-        resolve4: async () => [PUBLIC_ADDRESS],
-        connectTls: (tlsOptions) => {
+        resolve4: options.resolve4 ?? (async () => [PUBLIC_ADDRESS]),
+        connectTls: options.connectTls ?? ((tlsOptions) => {
             expect(tlsOptions).to.include({
                 host: PUBLIC_ADDRESS,
                 port: 443,
@@ -88,9 +92,20 @@ function transportFixture(options: FixtureOptions = {}) {
             });
             queueMicrotask(() => socket.emit("secureConnect"));
             return socket as unknown as TLSSocket;
-        },
+        }),
         requestHttps: ((httpsOptions: https.RequestOptions, callback: (response: IncomingMessage) => void) => {
             requestOptions = httpsOptions;
+            const pinnedAgent = httpsOptions.agent as unknown as {
+                createConnection: (
+                    options: https.RequestOptions,
+                    callback: (error: Error | null, stream?: TLSSocket) => void,
+                ) => TLSSocket;
+            };
+            const returnedSocket = pinnedAgent.createConnection(httpsOptions, (error, stream) => {
+                expect(error).to.equal(null);
+                handedOffSocket = stream;
+            });
+            expect(returnedSocket).to.equal(socket);
             request = new ControlledRequest(options.response ?? (() => ({ status: 204 })));
             request.once("response", (response) => callback(response as unknown as IncomingMessage));
             return request as unknown as ClientRequest;
@@ -104,6 +119,9 @@ function transportFixture(options: FixtureOptions = {}) {
         },
         get requestOptions() {
             return requestOptions;
+        },
+        get handedOffSocket() {
+            return handedOffSocket;
         },
     };
 }
@@ -169,6 +187,55 @@ describe("notification HTTPS exported transport boundary", () => {
         });
         expect(responses).to.equal(1);
         expect(fixture.request?.ended).to.equal(true);
+    });
+
+    it("hands the verified TLS socket to the HTTP request agent", async () => {
+        const fixture = transportFixture();
+        expect((await fixture.send(post("mcp-events", () => prepared()))).kind).to.equal("accepted");
+        expect(fixture.handedOffSocket).to.equal(fixture.socket);
+        expect(fixture.socket.destroyed).to.equal(true);
+    });
+
+    it("does not accept a response completed after the absolute deadline", async () => {
+        const realNow = Date.now;
+        let now = realNow();
+        Date.now = () => now;
+        try {
+            const fixture = transportFixture({ response: () => ({ status: 204, deferEnd: true }) });
+            const outcomePromise = fixture.send(post("mcp-events", () => prepared(), now + 1_000));
+            while (!fixture.request?.response) await new Promise((resolve) => setImmediate(resolve));
+            now += 1_001;
+            fixture.request.response.emit("end");
+            expect(await outcomePromise).to.deep.equal({ kind: "unknown", reason: "deadline", writeInitiated: true });
+            expect(fixture.request.destroyed).to.equal(true);
+            expect(fixture.request.response.destroyed).to.equal(true);
+            expect(fixture.socket.destroyed).to.equal(true);
+        } finally {
+            Date.now = realNow;
+        }
+    });
+
+    it("ignores late DNS and TLS completion after the deadline and disposes resources", async () => {
+        let resolveDns!: (addresses: string[]) => void;
+        const dnsFixture = transportFixture({
+            resolve4: () => new Promise((resolve) => resolveDns = resolve),
+        });
+        const dnsOutcome = dnsFixture.send(post("mcp-events", () => prepared(), Date.now() + 20));
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        resolveDns([PUBLIC_ADDRESS]);
+        expect(await dnsOutcome).to.deep.equal({ kind: "unknown", reason: "deadline", writeInitiated: false });
+        expect(dnsFixture.request).to.equal(undefined);
+
+        const tlsSocket = new ControlledSocket();
+        const tlsFixture = transportFixture({
+            connectTls: () => tlsSocket as unknown as TLSSocket,
+        });
+        const tlsOutcome = tlsFixture.send(post("mcp-events", () => prepared(), Date.now() + 20));
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        tlsSocket.emit("secureConnect");
+        expect(await tlsOutcome).to.deep.equal({ kind: "unknown", reason: "deadline", writeInitiated: false });
+        expect(tlsFixture.request).to.equal(undefined);
+        expect(tlsSocket.destroyed).to.equal(true);
     });
 
     it("rechecks final authorization immediately before the first write", async () => {
