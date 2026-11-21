@@ -268,6 +268,7 @@ export class KanbanQueryRunner {
         const resolved = Intl.DateTimeFormat().resolvedOptions();
         const visible = createKanbanVisibleProjection({
             ...renderInput,
+            columns,
             readiness: { status: "ready", complete: true, current: true },
         }, this.options.context ?? {
             version: 1,

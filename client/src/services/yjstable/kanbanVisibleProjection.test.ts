@@ -14,6 +14,7 @@ const settings = {
     laneOrder: ["doing", null],
 };
 const ready = { status: "ready" as const, complete: true as const, current: true as const };
+const columns = ["lane", "title", "points"];
 
 describe("Kanban visible projection", () => {
     it("preserves display order, empty lanes, special values, details, and duplicate occurrences", () => {
@@ -25,6 +26,7 @@ describe("Kanban visible projection", () => {
         ];
         const result = createKanbanVisibleProjection({
             rows,
+            columns,
             settings,
             declaredGroupingChoices: ["todo", "doing", ""],
             readiness: ready,
@@ -66,6 +68,7 @@ describe("Kanban visible projection", () => {
     it("ignores hidden data and execution identity while retaining visible multiplicity", () => {
         const input = (rows: Record<string, unknown>[]) => ({
             rows,
+            columns,
             settings,
             declaredGroupingChoices: [],
             readiness: ready,
@@ -86,13 +89,17 @@ describe("Kanban visible projection", () => {
 
     it("returns non-ready content for unsupported context or invalid grouping evidence", () => {
         expect(
-            createKanbanVisibleProjection({ rows: [], settings, declaredGroupingChoices: [], readiness: ready }, {
-                ...context,
-                surface: "notification" as "board",
-            }),
+            createKanbanVisibleProjection({
+                rows: [],
+                columns,
+                settings,
+                declaredGroupingChoices: [],
+                readiness: ready,
+            }, { ...context, surface: "notification" as "board" }),
         ).toEqual({ status: "non-ready", reason: "Unsupported Kanban observation context" });
         expect(createKanbanVisibleProjection({
             rows: [{ lane: 7 }],
+            columns,
             settings,
             declaredGroupingChoices: [],
             readiness: ready,
@@ -104,10 +111,47 @@ describe("Kanban visible projection", () => {
         })).toThrow("Kanban grouping column is required");
         expect(createKanbanVisibleProjection({
             rows: [],
+            columns,
             settings,
             declaredGroupingChoices: [],
             readiness: { status: "non-ready", reason: "stale evidence" },
         }, context)).toEqual({ status: "non-ready", reason: "stale evidence" });
+    });
+
+    it("rejects missing or duplicated configured columns even when accepted results have no rows", () => {
+        const project = (resultColumns: string[], configured = settings) =>
+            createKanbanVisibleProjection({
+                rows: [],
+                columns: resultColumns,
+                settings: configured,
+                declaredGroupingChoices: [],
+                readiness: ready,
+            }, context);
+
+        expect(project(["title", "points"])).toEqual({
+            status: "non-ready",
+            reason: 'Grouping result column "lane" is missing',
+        });
+        expect(project(["lane", "lane", "title", "points"])).toEqual({
+            status: "non-ready",
+            reason: 'Grouping result column "lane" is duplicated',
+        });
+        expect(project(["lane", "points"])).toEqual({
+            status: "non-ready",
+            reason: 'Configured result column "title" is missing',
+        });
+        expect(project(["lane", "title"])).toEqual({
+            status: "non-ready",
+            reason: 'Configured result column "points" is missing',
+        });
+        expect(project(["lane", "title", "title", "points"])).toEqual({
+            status: "non-ready",
+            reason: 'Configured result column "title" is duplicated',
+        });
+        expect(project(["lane", "title", "points", "points"])).toEqual({
+            status: "non-ready",
+            reason: 'Configured result column "points" is duplicated',
+        });
     });
 
     it("uses strict shared parsing for explicit route contexts", () => {

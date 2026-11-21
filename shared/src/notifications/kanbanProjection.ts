@@ -49,6 +49,8 @@ export interface KanbanRenderInput {
 }
 
 export interface KanbanProjectionInput extends KanbanRenderInput {
+    /** Ordered result-column names from the accepted query evidence; duplicates are preserved. */
+    readonly columns: readonly string[];
     /** Authoritative query boundary: only an accepted complete/current result is comparable. */
     readonly readiness:
         | { readonly status: "ready"; readonly complete: true; readonly current: true; }
@@ -125,6 +127,7 @@ export function createKanbanVisibleProjection(
         return Object.freeze({ status: "non-ready", reason: "Unsupported Kanban observation context" });
     }
     try {
+        validateConfiguredColumns(input.columns, input.settings);
         const model = deriveKanbanRenderModel(input);
         return Object.freeze({
             status: "ready",
@@ -143,6 +146,26 @@ export function createKanbanVisibleProjection(
             status: "non-ready",
             reason: error instanceof Error ? error.message : "Kanban projection is unavailable",
         });
+    }
+}
+
+function validateConfiguredColumns(
+    columns: readonly string[],
+    settings: KanbanRenderInput["settings"],
+): void {
+    const groupMatches = columns.filter(column => column === settings.groupField).length;
+    if (groupMatches !== 1) {
+        throw new Error(groupMatches
+            ? `Grouping result column "${settings.groupField}" is duplicated`
+            : `Grouping result column "${settings.groupField}" is missing`);
+    }
+    for (const field of [settings.titleField, ...settings.detailFields].filter((value): value is string => !!value)) {
+        const matches = columns.filter(column => column === field).length;
+        if (matches !== 1) {
+            throw new Error(matches
+                ? `Configured result column "${field}" is duplicated`
+                : `Configured result column "${field}" is missing`);
+        }
     }
 }
 
