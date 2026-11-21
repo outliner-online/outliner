@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 const artifactDir = path.resolve(process.argv[2] ?? "unit-artifacts");
@@ -16,12 +17,8 @@ function relativeFile(file) {
     const withoutProject = file.trim().replace(/^\[unit\]\s+/, "");
     return path.isAbsolute(withoutProject) ? path.relative(clientDir, withoutProject) : withoutProject;
 }
-function expectedIdentities(output) {
-    return output.split(/\r?\n/).map((line) => line.trim()).filter((line) => /^\[unit\]\s+/.test(line)).map((line) => {
-        const parts = line.replace(/^\[unit\]\s+/, "").split(" > ");
-        parts[0] = relativeFile(parts[0]);
-        return parts.join(" > ");
-    });
+function expectedIdentities(report) {
+    return report.map((test) => `${relativeFile(test.file)} > ${test.name}`);
 }
 function executedIdentities(report) {
     const identities = [];
@@ -70,12 +67,14 @@ function mergeCoverage(target, coverage) {
     }
 }
 
-const listOutput = execFileSync(vitestBin, ["list", "--project", "unit", "--no-static-parse"], {
+const nativeSelectionPath = path.join(os.tmpdir(), `unit-native-selection-${runId}-${runAttempt}.json`);
+execFileSync(vitestBin, ["list", "--project", "unit", "--no-static-parse", `--json=${nativeSelectionPath}`], {
     cwd: clientDir,
-    encoding: "utf8",
+    stdio: "inherit",
     env: { ...process.env, NODE_ENV: "test" },
 });
-const expected = expectedIdentities(listOutput);
+const expected = expectedIdentities(JSON.parse(fs.readFileSync(nativeSelectionPath, "utf8")));
+fs.rmSync(nativeSelectionPath);
 if (!expected.length) throw new Error("native unit selection is empty");
 const executed = [];
 const mergedCoverage = {};

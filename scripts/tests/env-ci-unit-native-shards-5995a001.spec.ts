@@ -22,7 +22,8 @@ function fakeVitest(directory: string) {
     executable(file, `#!/bin/bash
 set -euo pipefail
 if [[ "\${1}" == list ]]; then
-  printf '%s\\n' '[unit] src/a.test.ts > suite > first' '[unit] src/b.test.ts > suite > second'
+  for arg in "$@"; do [[ "$arg" == --json=* ]] && output="\${arg#*=}"; done
+  printf '[{"file":"%s/src/a.test.ts","name":"suite > first"},{"file":"%s/src/b.test.ts","name":"suite > second"}]' "$PWD" "$PWD" > "$output"
   exit 0
 fi
 [[ "\${FAKE_UNIT_FAILURE:-}" != true ]] || exit 23
