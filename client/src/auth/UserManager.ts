@@ -491,10 +491,10 @@ export class UserManager {
             return;
         }
         try {
-            // The hint is not authority; it only avoids loading browser Push
-            // cleanup for accounts that never armed a durable binding. The
-            // IndexedDB disarm performed by the controller remains authoritative.
-            if (typeof window !== "undefined" && localStorage.getItem("outliner:web-push-armed") === "true") {
+            // Every app-managed cloud logout crosses the durable enrollment
+            // boundary. The localStorage hint is only informational and must
+            // never decide whether the authoritative IndexedDB disarm runs.
+            if (typeof window !== "undefined") {
                 const { BrowserPushRegistration } = await import("../services/notifications/browserPushRegistration");
                 const enrollment = new BrowserPushRegistration();
                 await enrollment.disable();

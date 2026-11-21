@@ -1,6 +1,8 @@
 import "fake-indexeddb/auto";
+import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { userManager } from "../../auth/UserManager";
+import PushDeviceSettings from "../../components/notifications/PushDeviceSettings.svelte";
 import { BrowserPushRegistration } from "./browserPushRegistration";
 
 const publicKey = Uint8Array.from([4, ...Array.from({ length: 64 }, (_, index) => index + 1)]);
@@ -114,6 +116,34 @@ describe("browser Web Push enrollment lifecycle", () => {
         const reopenedSettings = new BrowserPushRegistration();
         await reopenedSettings.reconcile();
         expect(reopenedSettings.status).toBe("registered");
+        expect(subscribeCalls).toBe(1);
+    });
+
+    it("shows a stale Settings binding as inactive until a fresh button gesture repairs it", async () => {
+        subscription = {
+            endpoint: "https://push.example.test/stale-subscription",
+            options: { applicationServerKey: new Uint8Array([1, 2, 3]).buffer },
+            unsubscribe: async () => {
+                subscription = undefined;
+                return true;
+            },
+            toJSON: () => ({}),
+        } as PushSubscription;
+        serverStatus = {
+            deviceId: "browser",
+            revision: 1,
+            state: "registered",
+            vapidKeyId: "key-1",
+            endpointHash: await sha256("https://push.example.test/stale-subscription"),
+        };
+
+        render(PushDeviceSettings);
+        await waitFor(() => expect(screen.getByTestId("push-status")).toHaveTextContent("not enrolled"));
+        await waitFor(() => expect(subscription).toBeUndefined());
+        expect(subscribeCalls).toBe(0);
+
+        await fireEvent.click(screen.getByRole("button", { name: "Enable notifications" }));
+        await waitFor(() => expect(screen.getByTestId("push-status")).toHaveTextContent("registered"));
         expect(subscribeCalls).toBe(1);
     });
 

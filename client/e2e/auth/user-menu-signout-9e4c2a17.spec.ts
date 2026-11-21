@@ -35,6 +35,31 @@ test("opens user menu and signs out from toolbar indicator", async ({ page }, te
         await expect(indicator).toHaveAttribute("data-status", "authenticated", { timeout: 20000 });
     }
 
+    // Seed the same browser-wide binding read by Settings and the production
+    // worker, deliberately without the convenience localStorage hint. Logout
+    // must still advance and clear this durable authority.
+    const armedFence = await page.evaluate(async () => {
+        localStorage.removeItem("outliner:web-push-armed");
+        return new Promise<number>((resolve, reject) => {
+            const open = indexedDB.open("outliner-web-push", 1);
+            open.onupgradeneeded = () => open.result.createObjectStore("enrollment");
+            open.onerror = () => reject(open.error);
+            open.onsuccess = () => {
+                const tx = open.result.transaction("enrollment", "readwrite");
+                tx.objectStore("enrollment").put({
+                    fence: 7,
+                    generation: "logout_generation_0001",
+                    vapidKeyId: "key-1",
+                }, "current");
+                tx.oncomplete = () => {
+                    open.result.close();
+                    resolve(7);
+                };
+                tx.onerror = () => reject(tx.error);
+            };
+        });
+    });
+
     // 1) Click the indicator to open the dropdown menu
     await indicator.click();
     const menu = page.getByTestId("user-menu");
@@ -48,4 +73,20 @@ test("opens user menu and signs out from toolbar indicator", async ({ page }, te
 
     await expect(indicator).toHaveAttribute("data-status", "unauthenticated", { timeout: 20000 });
     await expect(menu).toBeHidden({ timeout: 10000 });
+
+    await page.reload();
+    const bindingAfterRestart = await page.evaluate(async () =>
+        new Promise<{ fence: number; generation?: string; }>((resolve, reject) => {
+            const open = indexedDB.open("outliner-web-push", 1);
+            open.onerror = () => reject(open.error);
+            open.onsuccess = () => {
+                const tx = open.result.transaction("enrollment", "readonly");
+                const read = tx.objectStore("enrollment").get("current");
+                read.onsuccess = () => resolve(read.result);
+                read.onerror = () => reject(read.error);
+            };
+        })
+    );
+    expect(bindingAfterRestart).toEqual({ fence: armedFence + 1 });
+    expect(await page.evaluate(() => localStorage.getItem("outliner:web-push-armed"))).toBeNull();
 });
