@@ -1,0 +1,266 @@
+{
+    "workflows": [
+        {
+            "path": ".github/workflows/ci.yml",
+            "families": [
+                {
+                    "key": "unit-tests",
+                    "name": "Unit tests",
+                    "job_pattern": "^(?:unit-test / )?unit-test$",
+                    "test_step_pattern": "^Run unit tests$",
+                    "source_paths": [
+                        ".github/workflows/ci-test-unit.yml",
+                        "client/package.json",
+                        "client/vite.config.ts",
+                        ".github/actions/setup-test-env/action.yml"
+                    ],
+                    "guidance": "Inspect the unit Vitest project and native test durations. Split or rebalance complete test selections only when the test step is the bottleneck; preserve the unit and base-path coverage checks and failure propagation."
+                },
+                {
+                    "key": "integration-tests",
+                    "name": "Integration tests",
+                    "job_pattern": "^(?:integration-test / )?integration-test$",
+                    "test_step_pattern": "^Run integration tests$",
+                    "source_paths": [
+                        ".github/workflows/ci-test-integration.yml",
+                        "client/package.json",
+                        "client/vite.config.ts",
+                        ".github/actions/setup-test-env/action.yml"
+                    ],
+                    "guidance": "Inspect integration test durations and fixture requirements before partitioning the selection. Preserve every integration test, emulator-backed behavior and native failure propagation."
+                },
+                {
+                    "key": "server-tests",
+                    "name": "Server tests",
+                    "job_pattern": "^(?:server-test / )?server-test$",
+                    "test_step_pattern": "^Run server tests$",
+                    "source_paths": [
+                        ".github/workflows/ci-test-server.yml",
+                        "server/package.json",
+                        ".github/actions/setup-test-env/action.yml"
+                    ],
+                    "guidance": "Inspect the Mocha server test command and native file durations. Preserve test discovery, required service setup and original failures when splitting or rebalancing the suite."
+                },
+                {
+                    "key": "project-directory-tests",
+                    "name": "Project directory tests",
+                    "job_pattern": "^(?:server-test / )?project-directory-test$",
+                    "test_step_pattern": "^Run canonical project directory tests$",
+                    "source_paths": [
+                        ".github/workflows/ci-test-server.yml",
+                        "server/package.json"
+                    ],
+                    "guidance": "Inspect the canonical project directory, provider, websocket and cloud entrypoint tests. Preserve all four explicitly selected files and their real emulator behavior."
+                },
+                {
+                    "key": "e2e-chromium",
+                    "name": "Chromium E2E tests",
+                    "job_pattern": "^(?:e2e-test / )?e2e-test \\((?!firefox-)(?!new-[23]\\))[^)]+\\)$",
+                    "test_step_pattern": "^Run E2E tests \\(",
+                    "source_paths": [
+                        ".github/workflows/ci-test-e2e.yml",
+                        "client/playwright.config.ts",
+                        "client/package.json",
+                        ".github/actions/setup-e2e-deps/action.yml",
+                        "scripts/ci/run-e2e-startup.sh"
+                    ],
+                    "guidance": "Compare native Playwright durations across every Chromium project. Existing new-2, new-3 and tables partitions already have coverage and completion guards; preserve the exact collected selection, browser coverage, artifact identity and failure aggregation. Separate dependency/service startup from test execution before choosing further sharding."
+                },
+                {
+                    "key": "e2e-firefox",
+                    "name": "Firefox E2E tests",
+                    "job_pattern": "^(?:e2e-test / )?e2e-test \\(firefox-[^)]+\\)$",
+                    "test_step_pattern": "^Run E2E tests \\(",
+                    "source_paths": [
+                        ".github/workflows/ci-test-e2e.yml",
+                        "client/playwright.config.ts",
+                        "client/package.json",
+                        ".github/actions/setup-e2e-deps/action.yml",
+                        "scripts/ci/run-e2e-startup.sh",
+                        "scripts/run-firefox-selection.mjs"
+                    ],
+                    "guidance": "Inspect the Firefox selection runner and actual browser execution receipts. Keep Firefox separate from Chromium; preserve its complete curated selection, zero-test rejection and failure evidence when balancing work."
+                }
+            ]
+        },
+        {
+            "path": ".github/workflows/ci-test-unit.yml",
+            "families": [
+                {
+                    "key": "unit-tests",
+                    "name": "Unit tests",
+                    "job_pattern": "^(?:unit-test / )?unit-test$",
+                    "test_step_pattern": "^Run unit tests$",
+                    "source_paths": [
+                        ".github/workflows/ci-test-unit.yml",
+                        "client/package.json",
+                        "client/vite.config.ts",
+                        ".github/actions/setup-test-env/action.yml"
+                    ],
+                    "guidance": "Inspect the unit Vitest project and native test durations. Split or rebalance complete test selections only when the test step is the bottleneck; preserve the unit and base-path coverage checks and failure propagation."
+                }
+            ]
+        },
+        {
+            "path": ".github/workflows/ci-test-integration.yml",
+            "families": [
+                {
+                    "key": "integration-tests",
+                    "name": "Integration tests",
+                    "job_pattern": "^(?:integration-test / )?integration-test$",
+                    "test_step_pattern": "^Run integration tests$",
+                    "source_paths": [
+                        ".github/workflows/ci-test-integration.yml",
+                        "client/package.json",
+                        "client/vite.config.ts",
+                        ".github/actions/setup-test-env/action.yml"
+                    ],
+                    "guidance": "Inspect integration test durations and fixture requirements before partitioning the selection. Preserve every integration test, emulator-backed behavior and native failure propagation."
+                }
+            ]
+        },
+        {
+            "path": ".github/workflows/ci-test-server.yml",
+            "families": [
+                {
+                    "key": "server-tests",
+                    "name": "Server tests",
+                    "job_pattern": "^(?:server-test / )?server-test$",
+                    "test_step_pattern": "^Run server tests$",
+                    "source_paths": [
+                        ".github/workflows/ci-test-server.yml",
+                        "server/package.json",
+                        ".github/actions/setup-test-env/action.yml"
+                    ],
+                    "guidance": "Inspect the Mocha server test command and native file durations. Preserve test discovery, required service setup and original failures when splitting or rebalancing the suite."
+                },
+                {
+                    "key": "project-directory-tests",
+                    "name": "Project directory tests",
+                    "job_pattern": "^(?:server-test / )?project-directory-test$",
+                    "test_step_pattern": "^Run canonical project directory tests$",
+                    "source_paths": [
+                        ".github/workflows/ci-test-server.yml",
+                        "server/package.json"
+                    ],
+                    "guidance": "Inspect the canonical project directory, provider, websocket and cloud entrypoint tests. Preserve all four explicitly selected files and their real emulator behavior."
+                }
+            ]
+        },
+        {
+            "path": ".github/workflows/ci-test-e2e.yml",
+            "families": [
+                {
+                    "key": "e2e-chromium",
+                    "name": "Chromium E2E tests",
+                    "job_pattern": "^(?:e2e-test / )?e2e-test \\((?!firefox-)(?!new-[23]\\))[^)]+\\)$",
+                    "test_step_pattern": "^Run E2E tests \\(",
+                    "source_paths": [
+                        ".github/workflows/ci-test-e2e.yml",
+                        "client/playwright.config.ts",
+                        "client/package.json",
+                        ".github/actions/setup-e2e-deps/action.yml",
+                        "scripts/ci/run-e2e-startup.sh"
+                    ],
+                    "guidance": "Compare native Playwright durations across every Chromium project. Existing new-2, new-3 and tables partitions already have coverage and completion guards; preserve the exact collected selection, browser coverage, artifact identity and failure aggregation. Separate dependency/service startup from test execution before choosing further sharding."
+                },
+                {
+                    "key": "e2e-firefox",
+                    "name": "Firefox E2E tests",
+                    "job_pattern": "^(?:e2e-test / )?e2e-test \\(firefox-[^)]+\\)$",
+                    "test_step_pattern": "^Run E2E tests \\(",
+                    "source_paths": [
+                        ".github/workflows/ci-test-e2e.yml",
+                        "client/playwright.config.ts",
+                        "client/package.json",
+                        ".github/actions/setup-e2e-deps/action.yml",
+                        "scripts/ci/run-e2e-startup.sh",
+                        "scripts/run-firefox-selection.mjs"
+                    ],
+                    "guidance": "Inspect the Firefox selection runner and actual browser execution receipts. Keep Firefox separate from Chromium; preserve its complete curated selection, zero-test rejection and failure evidence when balancing work."
+                }
+            ]
+        },
+        {
+            "path": ".github/workflows/ci-onprem.yml",
+            "families": [
+                {
+                    "key": "onprem-compose",
+                    "name": "On-premises Compose tests",
+                    "job_pattern": "^production-compose$",
+                    "test_step_pattern": "^Run isolated production Compose browser and recovery test$",
+                    "source_paths": [
+                        ".github/workflows/ci-onprem.yml",
+                        "scripts/test-onprem-compose.sh",
+                        "compose.onprem.test.yml"
+                    ],
+                    "guidance": "Inspect the workflow and slow step to distinguish dependency acquisition, service startup, build work and native tests. Only split independently verifiable work, retaining all existing checks and failure propagation."
+                }
+            ]
+        },
+        {
+            "path": ".github/workflows/ci-devcontainer-firebase.yml",
+            "families": [
+                {
+                    "key": "devcontainer-firebase",
+                    "name": "Devcontainer Firebase smoke",
+                    "job_pattern": "^Firebase Auth, Firestore, and Storage$",
+                    "test_step_pattern": "^Start and probe real Firebase emulators$",
+                    "source_paths": [
+                        ".github/workflows/ci-devcontainer-firebase.yml",
+                        ".devcontainer/Dockerfile"
+                    ],
+                    "guidance": "Inspect the workflow and slow step to distinguish dependency acquisition, service startup, build work and native tests. Only split independently verifiable work, retaining all existing checks and failure propagation."
+                }
+            ]
+        },
+        {
+            "path": ".github/workflows/ci-test-container-build.yml",
+            "families": [
+                {
+                    "key": "test-container",
+                    "name": "Test container build",
+                    "job_pattern": "^build$",
+                    "test_step_pattern": "^(?:Test cleanup and Tinylicious absence guards|Check installed tools and absence of Tinylicious)$",
+                    "source_paths": [
+                        ".github/workflows/ci-test-container-build.yml",
+                        ".github/container/Dockerfile"
+                    ],
+                    "guidance": "Inspect the workflow and slow step to distinguish dependency acquisition, service startup, build work and native tests. Only split independently verifiable work, retaining all existing checks and failure propagation."
+                }
+            ]
+        },
+        {
+            "path": ".github/workflows/ci-schedule-hosting-page.yml",
+            "families": [
+                {
+                    "key": "schedule-hosting-page",
+                    "name": "Schedule page Hosting tests",
+                    "job_pattern": "^schedule-hosting-page$",
+                    "test_step_pattern": "^Verify real private Hosting and Functions boundary$",
+                    "source_paths": [
+                        ".github/workflows/ci-schedule-hosting-page.yml",
+                        "client/playwright.schedule-page-hosting.config.ts"
+                    ],
+                    "guidance": "Inspect the workflow and slow step to distinguish dependency acquisition, service startup, build work and native tests. Only split independently verifiable work, retaining all existing checks and failure propagation."
+                }
+            ]
+        },
+        {
+            "path": ".github/workflows/ci-schedule-hosting-service.yml",
+            "families": [
+                {
+                    "key": "schedule-hosting-service",
+                    "name": "Schedule service Hosting tests",
+                    "job_pattern": "^schedule-hosting-service$",
+                    "test_step_pattern": "^Verify real private Hosting and Functions boundary$",
+                    "source_paths": [
+                        ".github/workflows/ci-schedule-hosting-service.yml",
+                        "client/playwright.schedule-service-hosting.config.ts"
+                    ],
+                    "guidance": "Inspect the workflow and slow step to distinguish dependency acquisition, service startup, build work and native tests. Only split independently verifiable work, retaining all existing checks and failure propagation."
+                }
+            ]
+        }
+    ]
+}

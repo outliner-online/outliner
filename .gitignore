@@ -179,3 +179,7 @@ client/unit_test_output.txt
 *.rej
 *.orig
 .devcontainer/*.deb
+
+# Scheduled CI duration monitor evidence
+/ci-duration-monitor-output/
+__pycache__/
