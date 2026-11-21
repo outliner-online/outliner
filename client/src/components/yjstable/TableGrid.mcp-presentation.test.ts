@@ -90,8 +90,14 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
             await waitFor(() => expect(view.container.querySelectorAll("tbody tr")).toHaveLength(2), {
                 timeout: 30000,
             });
+            // Both UNION branches expose the same alias and PostgreSQL text
+            // OID, but accepted source schemas select a constrained option
+            // versus free text. Assert the rendered controls, not only helper
+            // metadata, before comparing their displayed semantic values.
             await waitFor(() => expect(view.container.querySelectorAll("td[data-col='value'] select")).toHaveLength(1));
             expect(view.container.querySelectorAll("td[data-col='value'] button")).toHaveLength(1);
+            expect(view.container.querySelector<HTMLSelectElement>("td[data-col='value'] select")).toHaveValue("true");
+            expect(view.container.querySelector("td[data-col='value'] button")).toHaveTextContent("true");
             await waitFor(() => expect(getGridProjection(grid.gridId).status).toBe("ready"));
             const initial = getGridProjection(grid.gridId);
             expect(initial).toMatchObject({
@@ -99,18 +105,26 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
                 projection: { columns: [{ label: "value" }], rows: [[{ value: "true" }], [{ value: "true" }]] },
             });
 
-            // Renderer identity and hidden backing data do not change comparable visible semantics.
+            // Select and text display the same semantic value; changing only
+            // renderer identity or hidden backing data remains neutral.
             setGridComponentField(grid, "value", "type", "text");
             await waitFor(() => expect(view.container.querySelectorAll("td[data-col='value'] button")).toHaveLength(2));
+            await waitFor(() =>
+                expect(getGridProjection(grid.gridId)).toMatchObject({
+                    status: "ready",
+                    projection: { rows: [[{ value: "true" }], [{ value: "true" }]] },
+                })
+            );
             setRecordValue(choices, "same", "hidden", "changed-secret");
-            await waitFor(() => expect(getGridProjection(grid.gridId)).toEqual(initial));
+            const textProjection = getGridProjection(grid.gridId);
+            await waitFor(() => expect(getGridProjection(grid.gridId)).toEqual(textProjection));
 
             setRecordValue(notes, "same", "status", "changed-visible");
-            await waitFor(() => expect(getGridProjection(grid.gridId)).not.toEqual(initial));
+            await waitFor(() => expect(getGridProjection(grid.gridId)).not.toEqual(textProjection));
             expect([...view.container.querySelectorAll("td[data-col='value'] button")].map(cell => cell.textContent))
                 .toContain("changed-visible");
             setRecordValue(notes, "same", "status", "true");
-            await waitFor(() => expect(getGridProjection(grid.gridId)).toEqual(initial));
+            await waitFor(() => expect(getGridProjection(grid.gridId)).toEqual(textProjection));
 
             // A duplicate occurrence remains independently represented.
             setGridQuery(grid, `${branchA} UNION ALL ${branchA} UNION ALL ${branchB} ORDER BY source_kind`);

@@ -678,6 +678,20 @@ const rowTargetEntries = $derived(
     }),
 );
 
+/**
+ * The occurrence-aligned projection targets are adapted from the exact map
+ * consumed by cell rendering and commands.  Keeping this adapter beside the
+ * map producer prevents a second reconstruction from result identity columns
+ * from silently losing an authoritative source (while an entry with no
+ * `source` remains an authoritative relation-free occurrence).
+ */
+const projectionRowTargets = $derived(
+    rowTargetEntries.map(([logicalRowId, target]): GridProjectionRowTarget => ({
+        logicalRowId,
+        source: target.source,
+    })),
+);
+
 const commandContext = $derived<GridCommandContext>({
     handles,
     session,
@@ -699,16 +713,12 @@ function currentGridProjection(): GridProjectionResult {
     if (!grid || !projectionTitle || !observationContext) {
         return { status: "unavailable", reason: "Grid observation context is unavailable" };
     }
-    const rowTargets = result.rows.flatMap((row, rowIndex): GridProjectionRowTarget[] => {
-        const target = commandContext.rowTargets.get(selectionRowId(row, rowIndex));
-        return target ? [{ logicalRowId: selectionRowId(row, rowIndex), source: target.source }] : [];
-    });
     return projectGridTable({
         title: projectionTitle,
         context: observationContext,
         columns: result.columns,
         rows: result.rows,
-        rowTargets,
+        rowTargets: projectionRowTargets,
         columnOrder,
         hiddenColumns,
         columnLabels,
