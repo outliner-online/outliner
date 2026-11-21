@@ -78,6 +78,12 @@ for (const variant of variants) {
     if (JSON.stringify(names) !== JSON.stringify(variant.wanted)) {
         throw new Error(`${variant.name}: expected ${variant.wanted}, received ${names}`);
     }
+    // `update -o` adds upper-bound ignore conditions to freeze discovered
+    // versions. Docker's v-prefixed compound Playwright tag is not a valid
+    // RubyGems requirement (for example, `>v1.65.1-jammy`), so restore the
+    // variant's real selection input before replaying the recorded intents.
+    recorded.input.job["ignore-conditions"] = variant.ignore;
+    fs.writeFileSync(smokePath, stringify(recorded));
     execFileSync(cli, ["test", "-f", smokePath, "--local", fixture, "--cache", cachePath], {
         stdio: "inherit",
     });
