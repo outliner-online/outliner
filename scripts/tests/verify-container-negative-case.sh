@@ -32,6 +32,13 @@ fi
 
 case "$case_name" in
     unavailable)
+        watchdog_status=$(sed -n 's/.*UNAVAILABLE_WATCHDOG_EXIT_STATUS=\([0-9][0-9]*\).*/\1/p' "$log" | tail -n 1)
+        if [[ -z "$watchdog_status" || "$watchdog_status" == 124 || "$watchdog_status" == 137 ||
+            "$watchdog_status" != "$installer_status" ]]
+        then
+            echo "Unavailable control ended at its in-container watchdog instead of the installer." >&2
+            exit 1
+        fi
         for evidence in \
             'APT fetch attempt: primary host 127.0.0.1:18081' \
             'APT fetch failure: primary host 127.0.0.1:18081' \

@@ -22,6 +22,7 @@ APT fetch attempt: fallback host 127.0.0.1:18082
 APT fetch failure: fallback host 127.0.0.1:18082
 Err:2 http://127.0.0.1:18082 jammy InRelease
 INSTALLER_EXIT_STATUS=1
+UNAVAILABLE_WATCHDOG_EXIT_STATUS=1
 `;
 
 function verify(status: number, log: string): { ok: boolean; output: string; } {
@@ -52,12 +53,23 @@ test("rejects outer-watchdog termination", () => {
     expect(result.output).toContain("timed out before unavailable reported its own failure");
 });
 
+test("rejects an in-container watchdog result despite complete endpoint evidence", () => {
+    const result = verify(1, unavailableEvidence
+        .replace("INSTALLER_EXIT_STATUS=1", "INSTALLER_EXIT_STATUS=124")
+        .replace("UNAVAILABLE_WATCHDOG_EXIT_STATUS=1", "UNAVAILABLE_WATCHDOG_EXIT_STATUS=124"));
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain("ended at its in-container watchdog instead of the installer");
+});
+
 test("rejects a skipped installer and missing installer failure evidence", () => {
     const skipped = verify(1, "docker setup failed before RUN\n");
     expect(skipped.ok).toBe(false);
     expect(skipped.output).toContain("lacks a nonzero installer-reported status");
 
-    const missingEndpointFailure = verify(1, "INSTALLER_EXIT_STATUS=1\n");
+    const missingEndpointFailure = verify(
+        1,
+        "INSTALLER_EXIT_STATUS=1\nUNAVAILABLE_WATCHDOG_EXIT_STATUS=1\n",
+    );
     expect(missingEndpointFailure.ok).toBe(false);
     expect(missingEndpointFailure.output).toContain("lacks endpoint evidence");
 });
@@ -73,6 +85,7 @@ Get:2 http://127.0.0.1:18082 jammy InRelease
 APT fetch succeeded: fallback host 127.0.0.1:18082
 APT package installation failure: fallback host 127.0.0.1:18082
 INSTALLER_EXIT_STATUS=1
+UNAVAILABLE_WATCHDOG_EXIT_STATUS=1
 `;
     const result = verify(1, indexesSucceeded);
     expect(result.ok).toBe(false);

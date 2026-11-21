@@ -35,12 +35,13 @@ RUN printf 'NEGATIVE_CASE_PHASE_%s\n' STARTED; \
           -exec sed -Ei 's#https?://[^ /]+#http://127.0.0.1:18081#g' {} +; \
         set +e; \
         timeout --signal=TERM --kill-after=__OUTER_KILL_AFTER__ __OUTER_TIMEOUT__ \
-          env APT_CONFIG=/tmp/apt-fixture.conf \
-          APT_ACQUISITION_BUDGET_SECONDS=__UNAVAILABLE_FETCH_TIMEOUT__ \
-          APT_ACQUISITION_SHUTDOWN_GRACE_SECONDS=__UNAVAILABLE_SHUTDOWN_GRACE__ \
-          APT_PRIMARY_HOST=127.0.0.1:18081 APT_FALLBACK_HOST=127.0.0.1:18082 \
-          /usr/local/bin/install-test-container-os-packages outliner-fixture-unavailable; \
-        status=$?; echo "INSTALLER_EXIT_STATUS=$status"; exit "$status" ;; \
+          sh -c 'set +e; "$@"; status=$?; echo "INSTALLER_EXIT_STATUS=$status"; exit "$status"' sh \
+            env APT_CONFIG=/tmp/apt-fixture.conf \
+            APT_ACQUISITION_BUDGET_SECONDS=__UNAVAILABLE_FETCH_TIMEOUT__ \
+            APT_ACQUISITION_SHUTDOWN_GRACE_SECONDS=__UNAVAILABLE_SHUTDOWN_GRACE__ \
+            APT_PRIMARY_HOST=127.0.0.1:18081 APT_FALLBACK_HOST=127.0.0.1:18082 \
+            /usr/local/bin/install-test-container-os-packages outliner-fixture-unavailable; \
+        status=$?; echo "UNAVAILABLE_WATCHDOG_EXIT_STATUS=$status"; exit "$status" ;; \
       slow) python3 -c 'import socket,time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(("127.0.0.1",18080)); s.listen(); c,_=s.accept(); time.sleep(300)' & \
         sleep 1; \
         find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \

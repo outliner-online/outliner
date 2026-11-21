@@ -44,6 +44,7 @@ test("the image uses the bounded installer and CI runs its Docker regression", (
     expect(boundedBuild).toContain("setup_expired");
     expect(boundedBuild).toContain('kill -KILL "$pid"');
     expect(integration).toContain("APT::Update::Error-Mode");
+    expect(integration).toContain("UNAVAILABLE_WATCHDOG_EXIT_STATUS");
     expect(integration).toContain('verify-container-negative-case.sh" "$negative_case"');
     expect(integration).toContain('docker build --no-cache -f "$fixture/Dockerfile.success"');
     expect(integration).not.toContain(
