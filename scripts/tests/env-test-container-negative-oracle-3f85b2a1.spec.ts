@@ -151,7 +151,7 @@ test("the actual build watcher bounds a TERM-ignoring full case phase and reaps 
         try {
             execFileSync(boundedBuild, ["1", "0.2", logPath, "bash", "-ceu", `
 sleep 0.2
-echo NEGATIVE_CASE_PHASE_STARTED
+echo "NEGATIVE_CASE_PHASE_STARTED=$(date +%s%N)"
 trap '' TERM
 sleep 5
 `], { stdio: "ignore", timeout: 3000 });
@@ -166,13 +166,14 @@ sleep 5
     }
 });
 
-test("a case marker near the setup deadline wins the transition arbitration", () => {
+test("a pre-deadline case receipt delivered after setup expiry wins arbitration", () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "apt-build-watch-"));
     const logPath = path.join(directory, "build.log");
     try {
         execFileSync(boundedBuild, ["0.4", "1", logPath, "bash", "-ceu", `
-sleep 0.35
-echo NEGATIVE_CASE_PHASE_STARTED
+started=$(date +%s%N)
+sleep 0.45
+echo "NEGATIVE_CASE_PHASE_STARTED=$started"
 sleep 0.15
 echo INSTALLER_EXIT_STATUS=1
 exit 1
@@ -193,7 +194,7 @@ test("the actual build watcher allows the inner timeout and shutdown grace to fi
         let status: number | undefined;
         try {
             execFileSync(boundedBuild, ["1", "2", logPath, "bash", "-ceu", `
-echo NEGATIVE_CASE_PHASE_STARTED
+echo "NEGATIVE_CASE_PHASE_STARTED=$(date +%s%N)"
 set +e
 timeout --signal=TERM --kill-after=0.2 0.3 bash -c "trap '' TERM; sleep 5"
 status=$?

@@ -13,6 +13,8 @@ log=$3
 shift 3
 setup_expired="${log}.setup-expired"
 case_expired="${log}.case-expired"
+setup_deadline="${log}.setup-deadline"
+readonly receipt_delivery_grace_seconds=0.5
 
 terminate_build() {
     local pid=$1
@@ -27,15 +29,19 @@ terminate_build() {
 set +e
 "$@" >"$log" 2>&1 &
 build_pid=$!
-sleep "$setup_timeout" &
+(sleep "$setup_timeout"; date +%s%N >"$setup_deadline") &
 setup_timer_pid=$!
+
+case_receipt_timestamp() {
+    sed -n 's/^NEGATIVE_CASE_PHASE_STARTED=\([0-9][0-9]*\)$/\1/p' "$log" | tail -n 1
+}
 
 # The parent owns the setup-to-case transition. Check the execution receipt
 # before the timer on every pass (and once more after the timer expires), so a
 # case that has started can never be terminated by a competing watchdog.
 case_started=false
 while kill -0 "$build_pid" 2>/dev/null; do
-    if grep -Fq 'NEGATIVE_CASE_PHASE_STARTED' "$log"; then
+    if [[ -n $(case_receipt_timestamp) ]]; then
         case_started=true
         break
     fi
@@ -47,8 +53,16 @@ done
 kill "$setup_timer_pid" 2>/dev/null || true
 wait "$setup_timer_pid" 2>/dev/null || true
 
-if [[ $case_started == false ]] && grep -Fq 'NEGATIVE_CASE_PHASE_STARTED' "$log"; then
-    case_started=true
+if [[ $case_started == false && -e $setup_deadline ]]; then
+    # BuildKit may relay output after the process that produced it has already
+    # started. Allow a short, bounded delivery interval, then use the producer's
+    # timestamp—not log arrival order—to arbitrate admission at the deadline.
+    sleep "$receipt_delivery_grace_seconds"
+    receipt_timestamp=$(case_receipt_timestamp)
+    deadline_timestamp=$(<"$setup_deadline")
+    if [[ -n $receipt_timestamp ]] && (( receipt_timestamp <= deadline_timestamp )); then
+        case_started=true
+    fi
 fi
 if [[ $case_started == false ]] && kill -0 "$build_pid" 2>/dev/null; then
     : >"$setup_expired"

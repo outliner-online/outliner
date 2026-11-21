@@ -32,7 +32,7 @@ RUN case "$CASE" in \
       unavailable) printf 'APT::Update::Error-Mode "any";\n' >/tmp/apt-fixture.conf; \
         find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
           -exec sed -Ei 's#https?://[^ /]+#http://127.0.0.1:18081#g' {} +; \
-        printf 'NEGATIVE_CASE_PHASE_%s\n' STARTED; \
+        printf 'NEGATIVE_CASE_PHASE_%s=%s\n' STARTED "$(date +%s%N)"; \
         set +e; \
         timeout --signal=TERM --kill-after=__OUTER_KILL_AFTER__ __OUTER_TIMEOUT__ \
           sh -c 'set +e; "$@"; status=$?; echo "INSTALLER_EXIT_STATUS=$status"; exit "$status"' sh \
