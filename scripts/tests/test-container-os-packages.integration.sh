@@ -14,9 +14,10 @@ readonly unavailable_shutdown_grace_seconds=5
 # This watchdog is started inside the already-provisioned fixture, immediately
 # before the case. It leaves ten seconds beyond the inner timeout and grace.
 readonly unavailable_outer_watchdog_seconds=45
-# The host watchdog bounds Docker/BuildKit transport separately and cannot
-# pre-empt the case's inner watchdog after the fixture has started running.
-readonly negative_build_transport_timeout_seconds=180
+# Docker/BuildKit must reach the case RUN instruction inside this separately
+# enforced preparation phase. The case watchdog starts only after that marker,
+# composing a 75-second maximum for unavailable setup plus case execution.
+readonly negative_case_setup_timeout_seconds=30
 
 cat > "$fixture/Dockerfile.fixture" <<'EOF_DOCKER'
 FROM mcr.microsoft.com/playwright:v1.64.1-jammy
@@ -30,7 +31,8 @@ timeout "$fixture_setup_timeout_seconds" docker build --no-cache \
 cat > "$fixture/Dockerfile" <<'EOF_DOCKER'
 FROM outliner-apt-regression:fixture
 ARG CASE
-RUN case "$CASE" in \
+RUN echo 'NEGATIVE_CASE_PHASE_STARTED'; \
+    case "$CASE" in \
       success) /usr/local/bin/install-test-container-os-packages \
           openjdk-21-jre-headless xvfb lsof netcat-openbsd curl sudo \
           python3-venv python3-pip git-lfs ;; \
@@ -87,10 +89,55 @@ grep -q 'Required OS package is not installed: python3-pip' "$fixture/verify-mis
 
 for negative_case in unavailable slow missing; do
     log="$fixture/${negative_case}.log"
+    setup_expired="$fixture/${negative_case}.setup-expired"
+    case_expired="$fixture/${negative_case}.case-expired"
     set +e
-    timeout "$negative_build_transport_timeout_seconds" docker build --build-arg "CASE=${negative_case}" \
-        "$fixture" >"$log" 2>&1
+    docker build --progress=plain --build-arg "CASE=${negative_case}" "$fixture" >"$log" 2>&1 &
+    build_pid=$!
+    (
+        sleep "$negative_case_setup_timeout_seconds"
+        if kill -0 "$build_pid" 2>/dev/null; then
+            : >"$setup_expired"
+            kill -TERM "$build_pid" 2>/dev/null || true
+        fi
+    ) &
+    setup_watchdog_pid=$!
+
+    while kill -0 "$build_pid" 2>/dev/null && \
+        ! grep -Fq 'NEGATIVE_CASE_PHASE_STARTED' "$log" && \
+        [[ ! -e $setup_expired ]]
+    do
+        sleep 0.1
+    done
+    kill "$setup_watchdog_pid" 2>/dev/null || true
+    wait "$setup_watchdog_pid" 2>/dev/null || true
+
+    if grep -Fq 'NEGATIVE_CASE_PHASE_STARTED' "$log"; then
+        case_watchdog_seconds=$fixture_setup_timeout_seconds
+        if [[ $negative_case == unavailable ]]; then
+            case_watchdog_seconds=$unavailable_outer_watchdog_seconds
+        fi
+        (
+            sleep "$case_watchdog_seconds"
+            if kill -0 "$build_pid" 2>/dev/null; then
+                : >"$case_expired"
+                kill -TERM "$build_pid" 2>/dev/null || true
+            fi
+        ) &
+        case_watchdog_pid=$!
+    else
+        case_watchdog_pid=
+    fi
+
+    wait "$build_pid"
     status=$?
+    if [[ -n $case_watchdog_pid ]]; then
+        kill "$case_watchdog_pid" 2>/dev/null || true
+        wait "$case_watchdog_pid" 2>/dev/null || true
+    fi
+    if [[ -e $setup_expired || -e $case_expired ]]; then
+        status=124
+    fi
     set -e
     if ! "$repo_root/scripts/tests/verify-container-negative-case.sh" "$negative_case" "$status" "$log"; then
         cat "$log" >&2
