@@ -82,9 +82,12 @@ class PlaywrightBoundaryTest(unittest.TestCase):
                 workflow = (ROOT / '.github/workflows/ci-test-e2e.yml').read_text()
                 branch = workflow.split('elif [[ "$project" =~ ^new-4-([12])$ ]]; then')[1].split('elif ')[0]
                 command = branch.split('-- npm run github:test:e2e -- ', 1)[1].strip()
-                cli_arguments = shlex.split(command.replace('"$shard"', new4_shard))
+                command = command.replace('../scripts/ci/new4-execution-reporter.mjs',
+                                          str(ROOT / 'scripts/ci/new4-execution-reporter.mjs'))
+                cli_arguments = shlex.split(command.replace('"$shard"', new4_shard).replace('\\\n', ' '))
                 self.assertEqual(cli_arguments, ['--project=new-4', '--shard=' + new4_shard,
-                                                 '--reporter=line,list,json,html'])
+                                                 '--reporter=line,list,json,html,'
+                                                 + str(ROOT / 'scripts/ci/new4-execution-reporter.mjs')])
                 other = 'zzz-other.spec.mjs' if new4_shard == '1/2' else 'aaa-other.spec.mjs'
                 (root / other).write_text(f"""
                     import {{test}} from {json.dumps(MODULE)};
@@ -100,6 +103,10 @@ class PlaywrightBoundaryTest(unittest.TestCase):
             ], cwd=root, capture_output=True, text=True, timeout=20, env={
                 **os.environ, 'PLAYWRIGHT_JSON_OUTPUT_NAME': str(root / 'report.json'),
                 'PLAYWRIGHT_HTML_OPEN': 'never',
+                'NEW4_EXECUTION_REPORT': str(root / 'new4-execution.json'),
+                'NEW4_CI_SHARD': 'new-4-1' if new4_shard == '1/2' else 'new-4-2',
+                'NEW4_NATIVE_SHARD': new4_shard or '', 'E2E_BROWSER': 'chromium',
+                'E2E_PROJECT': 'new-4', 'E2E_EXECUTION_ID': 'fixture-run', 'GITHUB_SHA': 'fixture-sha',
             })
             status = json.loads((root / 'status.json').read_text())
             self.assertEqual(result.returncode, {'pass': 0, 'failure': 1, 'incomplete': 1, 'timeout': 124}[mode], result.stderr)

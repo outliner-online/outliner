@@ -458,13 +458,23 @@ jobs:
                 -- npm run github:test:e2e -- --project=new-2 --shard="$shard" --reporter=line,list,json,html
             elif [[ "$project" =~ ^new-4-([12])$ ]]; then
               shard="${BASH_REMATCH[1]}/2"
+              export NEW4_CI_SHARD="$project" NEW4_NATIVE_SHARD="$shard"
+              PLAYWRIGHT_COLLECTION_E2E_DIR="$PWD/e2e" \
+                PLAYWRIGHT_COLLECTION_OUTPUT="../job_logs/new-4-full-${E2E_EXECUTION_ID}.json" \
+                node node_modules/playwright/cli.js test --list --project=new-4 \
+                --reporter=../scripts/ci/playwright-collection-reporter.mjs
+              PLAYWRIGHT_COLLECTION_E2E_DIR="$PWD/e2e" \
+                PLAYWRIGHT_COLLECTION_OUTPUT="../job_logs/${project}-expected-${E2E_EXECUTION_ID}.json" \
+                node node_modules/playwright/cli.js test --list --project=new-4 --shard="$shard" \
+                --reporter=../scripts/ci/playwright-collection-reporter.mjs
               PLAYWRIGHT_HTML_OPEN=never python3 ../scripts/ci/run-bounded-e2e.py \
                 --context=../job_logs/execution-context.json \
                 --status="../job_logs/${project}-command-status.json" \
                 --log="../job_logs/e2e-${E2E_BROWSER}-${project}-${E2E_EXECUTION_ID}.log" \
                 --report="${PLAYWRIGHT_JSON_OUTPUT_NAME}" \
                 --timeout-seconds=1200 --job-budget-seconds=1320 --grace-seconds=10 \
-                -- npm run github:test:e2e -- --project=new-4 --shard="$shard" --reporter=line,list,json,html
+                -- npm run github:test:e2e -- --project=new-4 --shard="$shard" \
+                --reporter=line,list,json,html,../scripts/ci/new4-execution-reporter.mjs
             elif [[ "$project" =~ ^new-3[ab]$ ]]; then
               # Bound the command before the job deadline so timeout evidence
               # can upload. Line output identifies started, unfinished cases.
@@ -495,6 +505,7 @@ jobs:
           TEST_ENV: localhost
           DISPLAY: :99
           PLAYWRIGHT_JSON_OUTPUT_NAME: ../job_logs/e2e-${{ env.E2E_BROWSER }}-${{ matrix.project }}-${{ github.run_id }}-${{ github.run_attempt }}.json
+          NEW4_EXECUTION_REPORT: ../job_logs/${{ matrix.project }}-execution-${{ github.run_id }}-${{ github.run_attempt }}.json
           E2E_ATTACH_BROWSER_CONSOLE: '1'
           DISABLE_POSTHOG: true
           VITE_DISABLE_FLUID_TELEMETRY: true
@@ -642,7 +653,7 @@ jobs:
         # Retain Playwright command evidence, reports and attachments. Raw service
         # files may still contain startup-origin bytes after readiness succeeds;
         # omit them entirely rather than infer a safe byte boundary or mutate logs.
-        if: steps.tests.outputs.startup_verified == 'true' && (failure() || startsWith(matrix.project, 'firefox-') || startsWith(matrix.project, 'new-2-') || startsWith(matrix.project, 'new-3') || matrix.project == 'tables-1' || matrix.project == 'utils')
+        if: steps.tests.outputs.startup_verified == 'true' && (failure() || startsWith(matrix.project, 'firefox-') || startsWith(matrix.project, 'new-2-') || startsWith(matrix.project, 'new-3') || startsWith(matrix.project, 'new-4-') || matrix.project == 'tables-1' || matrix.project == 'utils')
         uses: actions/upload-artifact@v7
         with:
           name: e2e-artifacts-${{ env.E2E_BROWSER }}-${{ matrix.project }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -702,8 +713,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require complete E2E matrix and collection
+      - name: Checkout verifier
+        uses: actions/checkout@v7
+      - name: Download new-4 shard 1 evidence
+        uses: actions/download-artifact@v8
+        with:
+          name: e2e-artifacts-chromium-new-4-1-${{ github.run_id }}-${{ github.run_attempt }}
+          path: new-4-evidence/new-4-1
+      - name: Download new-4 shard 2 evidence
+        uses: actions/download-artifact@v8
+        with:
+          name: e2e-artifacts-chromium-new-4-2-${{ github.run_id }}-${{ github.run_attempt }}
+          path: new-4-evidence/new-4-2
+      - name: Require exact successful execution and collection
         env:
           E2E_RESULT: ${{ needs.e2e-test.result }}
           COLLECTION_RESULT: ${{ needs.selection-coverage.result }}
-        run: test "$E2E_RESULT" = success && test "$COLLECTION_RESULT" = success
+        run: |
+          set -euo pipefail
+          test "$E2E_RESULT" = success && test "$COLLECTION_RESULT" = success
+          node scripts/ci/verify-new4-shards.mjs \
+            new-4-evidence "${{ github.run_id }}-${{ github.run_attempt }}" "${{ github.sha }}"

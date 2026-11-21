@@ -32,7 +32,8 @@ const chromiumProjects = [
     "new-2-2",
     "new-3a",
     "new-3b",
-    "new-4",
+    "new-4-1",
+    "new-4-2",
     "new-5",
     "auth",
     "utils",
@@ -78,7 +79,7 @@ describe("ENV-934d0f2a: Firefox promotion to ordinary E2E CI", () => {
             value.uses?.startsWith("actions/upload-artifact@")
         );
         expect(upload.if).toBe(
-            "steps.tests.outputs.startup_verified == 'true' && (failure() || startsWith(matrix.project, 'firefox-') || startsWith(matrix.project, 'new-2-') || startsWith(matrix.project, 'new-3') || matrix.project == 'tables-1' || matrix.project == 'utils')",
+            "steps.tests.outputs.startup_verified == 'true' && (failure() || startsWith(matrix.project, 'firefox-') || startsWith(matrix.project, 'new-2-') || startsWith(matrix.project, 'new-3') || startsWith(matrix.project, 'new-4-') || matrix.project == 'tables-1' || matrix.project == 'utils')",
         );
         for (const identity of ["env.E2E_BROWSER", "matrix.project", "github.run_id", "github.run_attempt"]) {
             expect(upload.with.name).toContain(`\${{ ${identity} }}`);
@@ -105,7 +106,7 @@ describe("ENV-934d0f2a: Firefox promotion to ordinary E2E CI", () => {
             value.uses?.startsWith("actions/upload-artifact@")
         );
         expect(upload.with["if-no-files-found"]).toBe(
-            "${{ (startsWith(matrix.project, 'new-2-') || startsWith(matrix.project, 'new-3') || matrix.project == 'tables-1' || matrix.project == 'utils') && 'error' || 'warn' }}",
+            "${{ (startsWith(matrix.project, 'new-2-') || startsWith(matrix.project, 'new-3') || startsWith(matrix.project, 'new-4-') || matrix.project == 'tables-1' || matrix.project == 'utils') && 'error' || 'warn' }}",
         );
     });
 
@@ -119,7 +120,7 @@ describe("ENV-934d0f2a: Firefox promotion to ordinary E2E CI", () => {
         expect(tables).toContain("--status=../job_logs/tables-1-command-status.json");
         expect(tables).toContain("--timeout-seconds=1200 --job-budget-seconds=1320 --grace-seconds=10");
         expect(tables).toContain("-- npm run github:test:e2e -- --project=tables --shard=1/2");
-        expect(run.match(/python3 \.\.\/scripts\/ci\/run-bounded-e2e\.py/g)).toHaveLength(3);
+        expect(run.match(/python3 \.\.\/scripts\/ci\/run-bounded-e2e\.py/g)).toHaveLength(4);
         expect(run).toContain('--project=tables --shard="${BASH_REMATCH[1]}/2"');
     });
 
