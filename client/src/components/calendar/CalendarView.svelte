@@ -11,7 +11,6 @@
 import { onDestroy, onMount, untrack } from "svelte";
 import type { Project } from "$shared/app-schema";
 import type { CalendarObservationContextV1 } from "$shared/notifications/calendarProjection";
-import { utcMsToFloatingDate } from "$shared/utils/zonedTime";
 import * as Y from "yjs";
 import { analyzeCalendarEditability } from "../../services/calendar/calendarEditability";
 import { analyzeCalendarColumnWritability } from "../../services/calendar/calendarColumnWritability";
@@ -138,6 +137,7 @@ const writableColumns = $derived(analyzeCalendarColumnWritability(settings.query
 // and the grid range below is computed in it, so two collaborators viewing a
 // calendar with a fixed timezone see the same window regardless of either
 // viewer's own local zone.
+const locale = $derived(observationContext?.locale);
 const timeZone = $derived(observationContext?.timeZone ?? resolveCalendarTimezone(settings.timezone));
 const timeZoneOptions = listSupportedTimeZones();
 const weekStart = $derived(observationContext?.weekStart ?? settings.weekStart ?? resolveDefaultWeekStart());
@@ -421,7 +421,7 @@ function goNext() {
 // the label must read them back in that zone; `toISOString` would name the
 // UTC day, which is the previous one for any zone ahead of UTC.
 const rangeLabel = $derived(
-    `${utcMsToFloatingDate(range.start, timeZone)} – ${utcMsToFloatingDate(range.end - 1, timeZone)} (${timeZone})`,
+    `${new Intl.DateTimeFormat(locale, { timeZone, dateStyle: "medium" }).format(new Date(range.start))} – ${new Intl.DateTimeFormat(locale, { timeZone, dateStyle: "medium" }).format(new Date(range.end - 1))} (${timeZone})`,
 );
 
 // --- Write dispatch: drag/resize/keyboard all funnel through here. ---
@@ -739,7 +739,7 @@ onDestroy(() => {
         <CalendarHourMinuteGrid
             layout={hourMinuteLayout}
             {timeZone}
-            dayHeader={computeDayHeaders(range.start, 1, timeZone)[0]}
+            dayHeader={computeDayHeaders(range.start, 1, timeZone, locale)[0]}
             {isStartWritable}
             {isDurationWritable}
             onDragMove={previewStart}
@@ -778,6 +778,7 @@ onDestroy(() => {
             cells={monthCells}
             {weekStart}
             {timeZone}
+            {locale}
             todayUtcMs={todayAnchor(timeZone, Date.now())}
             {isStartWritable}
             onDragEnd={commitStart}
@@ -797,7 +798,7 @@ onDestroy(() => {
             rangeEnd={range.end}
             workingHoursStartMinutes={workingHoursStart}
             workingHoursEndMinutes={workingHoursEnd}
-            dayHeaders={computeDayHeaders(range.start, Math.round((range.end - range.start) / 86_400_000), timeZone)}
+            dayHeaders={computeDayHeaders(range.start, Math.round((range.end - range.start) / 86_400_000), timeZone, locale)}
             todayUtcMs={todayAnchor(timeZone, Date.now())}
             {isStartWritable}
             {isDurationWritable}
@@ -823,7 +824,7 @@ onDestroy(() => {
             rangeStart={range.start}
             workingHoursStartMinutes={workingHoursStart}
             workingHoursEndMinutes={workingHoursEnd}
-            dayHeaders={computeDayHeaders(range.start, timeGridLayout.dayCount, timeZone)}
+            dayHeaders={computeDayHeaders(range.start, timeGridLayout.dayCount, timeZone, locale)}
             todayUtcMs={todayAnchor(timeZone, Date.now())}
             {isStartWritable}
             {isDurationWritable}

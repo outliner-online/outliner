@@ -263,7 +263,9 @@ export function projectCalendarObservationRoute(
     calendarId: string,
     context: CalendarObservationContextV1,
 ): ResolvedPathname {
-    return `${projectCalendarRoute(projectName, calendarId)}?context=${encodeCalendarObservationContext(context)}`;
+    return `${projectCalendarRoute(projectName, calendarId)}?context=${
+        encodeURIComponent(encodeCalendarObservationContext(context))
+    }`;
 }
 
 /** The Schedule list as a typed SvelteKit resolution. */

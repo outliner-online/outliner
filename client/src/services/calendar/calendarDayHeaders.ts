@@ -9,13 +9,21 @@ export interface DayHeader {
     weekday: number;
     /** "2026-08-17" — floating date, already zone-resolved. */
     isoDate: string;
-    /** Day-of-month for the compact label. */
+    /** Locale-specific compact weekday and day label. */
+    label: string;
+    /** Day-of-month for placement and tests. */
     dayOfMonth: number;
     /** First column of a new month, so the header can show the month name once. */
     isMonthStart: boolean;
 }
 
-export function computeDayHeaders(rangeStart: number, dayCount: number, timeZone: string): DayHeader[] {
+export function computeDayHeaders(
+    rangeStart: number,
+    dayCount: number,
+    timeZone: string,
+    locale?: string,
+): DayHeader[] {
+    const formatter = new Intl.DateTimeFormat(locale, { timeZone, weekday: "short", day: "numeric" });
     const headers: DayHeader[] = [];
     let currentUtcMs = rangeStart;
     for (let dayIndex = 0; dayIndex < dayCount; dayIndex++) {
@@ -26,6 +34,7 @@ export function computeDayHeaders(rangeStart: number, dayCount: number, timeZone
             dateUtcMs: currentUtcMs,
             weekday: wallWeekday(currentUtcMs, timeZone),
             isoDate,
+            label: formatter.format(new Date(currentUtcMs)),
             dayOfMonth: wallTime.day,
             isMonthStart: wallTime.day === 1,
         });

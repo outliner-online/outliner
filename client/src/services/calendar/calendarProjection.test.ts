@@ -1,11 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { computeGanttRange, computeViewRange } from "../services/calendarGridRange";
 import {
     decodeCalendarObservationContext,
     encodeCalendarObservationContext,
     projectCalendarVisibleState,
     validateCalendarObservationContext,
-} from "./calendarProjection";
+} from "$shared/notifications/calendarProjection";
+import { describe, expect, it } from "vitest";
+import { computeGanttRange, computeViewRange } from "./calendarGridRange";
 
 function context(viewType: "week" | "month" | "gantt" = "week") {
     const anchorUtcMs = Date.UTC(2026, 2, 8, 16);
@@ -32,6 +32,15 @@ describe("Calendar observation context", () => {
         const original = context();
         const decoded = decodeCalendarObservationContext(encodeCalendarObservationContext(original));
         expect(decoded).toEqual({ valid: true, context: original });
+    });
+
+    it("survives the URLSearchParams decoding boundary exactly once", () => {
+        const original = { ...context("month"), monthLaneFilter: "Sales 100% / %20" };
+        const query = `context=${encodeURIComponent(encodeCalendarObservationContext(original))}`;
+        const valueAfterBrowserDecode = new URLSearchParams(query).get("context");
+        expect(valueAfterBrowserDecode).not.toBeNull();
+        expect(decodeCalendarObservationContext(valueAfterBrowserDecode!)).toEqual({ valid: true, context: original });
+        expect(decodeCalendarObservationContext("")).toMatchObject({ valid: false });
     });
 
     it("rejects an altered endpoint and mode-inapplicable state", () => {

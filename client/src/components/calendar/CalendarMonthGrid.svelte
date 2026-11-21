@@ -13,7 +13,6 @@ import type { MonthCell } from "../../services/calendar/calendarMonthGridLayout"
 import CalendarDragTooltip from "./CalendarDragTooltip.svelte";
 
 const DAY_MS = 86_400_000;
-const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 interface Props {
     cells: MonthCell[];
@@ -21,6 +20,7 @@ interface Props {
     todayUtcMs?: number;
     /** The calendar's own timezone (§6.5) — the drag tooltip formats in it, never viewer-local. */
     timeZone: string;
+    locale?: string;
     isStartWritable: (entry: CalendarEntry) => boolean;
     onDragEnd: (entry: CalendarEntry, newStartMs: number) => void;
     onKeyboardMove: (entry: CalendarEntry, newStartMs: number) => void;
@@ -44,6 +44,7 @@ let {
     weekStart,
     todayUtcMs,
     timeZone,
+    locale,
     isStartWritable,
     onDragEnd,
     onKeyboardMove,
@@ -56,7 +57,10 @@ let {
 }: Props = $props();
 
 const weekdayHeaders = $derived(
-    Array.from({ length: 7 }, (_, i) => WEEKDAY_LABELS[(weekStart + i) % 7]),
+    Array.from({ length: 7 }, (_, i) => {
+        const sundayUtcMs = Date.UTC(2026, 0, 4 + ((weekStart + i) % 7));
+        return new Intl.DateTimeFormat(locale, { timeZone: "UTC", weekday: "short" }).format(new Date(sundayUtcMs));
+    }),
 );
 
 function timeOfDayMs(startMs: number): number {

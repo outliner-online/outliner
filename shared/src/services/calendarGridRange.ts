@@ -10,7 +10,12 @@
 // already built for recurrence expansion (#4343), rather than the runtime's
 // own `Date` methods (which are always in the *runtime's* local zone).
 
-import { floatingDateToWallTime, utcMsToWallTime, wallTimeToFloatingDate, wallTimeToUtcMs } from "../utils/zonedTime";
+import {
+    floatingDateToWallTime,
+    utcMsToWallTime,
+    wallTimeToFloatingDate,
+    wallTimeToUtcMs,
+} from "../utils/zonedTime.js";
 
 /**
  * `hours` is the single-day Hour Map (#4972): the same one-local-day window as

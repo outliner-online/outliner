@@ -1,4 +1,4 @@
-import { computeGanttRange, computeViewRange, type GanttScale } from "../services/calendarGridRange";
+import { computeGanttRange, computeViewRange, type GanttScale } from "../services/calendarGridRange.js";
 
 export const CALENDAR_OBSERVATION_CONTEXT_VERSION = 1 as const;
 export type CalendarObservationViewType = "day" | "hours" | "days" | "week" | "month" | "gantt";
@@ -107,12 +107,12 @@ function invalid(error: string): CalendarContextValidationResult {
 export function encodeCalendarObservationContext(context: CalendarObservationContextV1): string {
     const result = validateCalendarObservationContext(context);
     if (!result.valid) throw new Error(result.error);
-    return encodeURIComponent(JSON.stringify(result.context));
+    return JSON.stringify(result.context);
 }
 
 export function decodeCalendarObservationContext(encoded: string): CalendarContextValidationResult {
     try {
-        return validateCalendarObservationContext(JSON.parse(decodeURIComponent(encoded)));
+        return validateCalendarObservationContext(JSON.parse(encoded));
     } catch {
         return invalid("Calendar observation context is malformed.");
     }

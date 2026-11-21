@@ -6,8 +6,8 @@ import CalendarDetailView from "../../../../../components/management/CalendarDet
 let projectName = $derived(page.params.project ?? "");
 let calendarName = $derived(page.params.calendar ?? "");
 let contextResult = $derived.by(() => {
-    const encoded = page.url.searchParams.get("context");
-    return encoded ? decodeCalendarObservationContext(encoded) : undefined;
+    if (!page.url.searchParams.has("context")) return undefined;
+    return decodeCalendarObservationContext(page.url.searchParams.get("context") ?? "");
 });
 </script>
 
