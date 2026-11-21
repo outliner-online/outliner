@@ -18,6 +18,9 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Install smoke harness dependencies
+        run: npm ci --prefix scripts/tests --ignore-scripts --no-audit --no-fund
+
       - name: Install the pinned Dependabot CLI
         env:
           DEPENDABOT_CLI_SHA256: e8a383018fa44b1cbbbd543c9add601a187f962983e4c9fe3f55cd518f93cfa9
