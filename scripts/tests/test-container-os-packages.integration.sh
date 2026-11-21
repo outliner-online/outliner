@@ -25,17 +25,11 @@ COPY install.sh /usr/local/bin/install-test-container-os-packages
 COPY verify.sh /usr/local/bin/verify-test-container-os-tools
 EOF_DOCKER
 
-timeout "$fixture_setup_timeout_seconds" docker build --no-cache \
-    -f "$fixture/Dockerfile.fixture" -t outliner-apt-regression:fixture "$fixture"
-
 cat > "$fixture/Dockerfile" <<'EOF_DOCKER'
 FROM outliner-apt-regression:fixture
 ARG CASE
 RUN echo 'NEGATIVE_CASE_PHASE_STARTED'; \
     case "$CASE" in \
-      success) /usr/local/bin/install-test-container-os-packages \
-          openjdk-21-jre-headless xvfb lsof netcat-openbsd curl sudo \
-          python3-venv python3-pip git-lfs ;; \
       unavailable) printf 'APT::Update::Error-Mode "any";\n' >/tmp/apt-fixture.conf; \
         find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
           -exec sed -Ei 's#https?://[^ /]+#http://127.0.0.1:18081#g' {} +; \
@@ -67,7 +61,16 @@ sed -i \
     -e "s/__OUTER_KILL_AFTER__/${unavailable_shutdown_grace_seconds}/g" \
     "$fixture/Dockerfile"
 
-timeout "$fixture_setup_timeout_seconds" docker build --no-cache --build-arg CASE=success \
+cat > "$fixture/Dockerfile.success" <<'EOF_DOCKER'
+FROM mcr.microsoft.com/playwright:v1.64.1-jammy
+COPY install.sh /usr/local/bin/install-test-container-os-packages
+COPY verify.sh /usr/local/bin/verify-test-container-os-tools
+RUN /usr/local/bin/install-test-container-os-packages \
+    openjdk-21-jre-headless xvfb lsof netcat-openbsd curl sudo \
+    python3-venv python3-pip git-lfs
+EOF_DOCKER
+
+docker build --no-cache -f "$fixture/Dockerfile.success" \
     -t outliner-apt-regression:success "$fixture"
 docker run --rm outliner-apt-regression:success /usr/local/bin/verify-test-container-os-tools
 
@@ -87,8 +90,23 @@ done
 grep -q 'Required OS package is not installed: netcat-openbsd' "$fixture/verify-missing-netcat-openbsd.log"
 grep -q 'Required OS package is not installed: python3-pip' "$fixture/verify-missing-python3-pip.log"
 
+timeout "$fixture_setup_timeout_seconds" docker build --no-cache \
+    -f "$fixture/Dockerfile.fixture" -t outliner-apt-regression:fixture "$fixture"
+
 for negative_case in unavailable slow missing; do
     log="$fixture/${negative_case}.log"
+    if [[ $negative_case != unavailable ]]; then
+        set +e
+        timeout 180 docker build --build-arg "CASE=${negative_case}" "$fixture" >"$log" 2>&1
+        status=$?
+        set -e
+        if ! "$repo_root/scripts/tests/verify-container-negative-case.sh" "$negative_case" "$status" "$log"; then
+            cat "$log" >&2
+            exit 1
+        fi
+        continue
+    fi
+
     setup_expired="$fixture/${negative_case}.setup-expired"
     case_expired="$fixture/${negative_case}.case-expired"
     set +e
@@ -113,12 +131,8 @@ for negative_case in unavailable slow missing; do
     wait "$setup_watchdog_pid" 2>/dev/null || true
 
     if grep -Fq 'NEGATIVE_CASE_PHASE_STARTED' "$log"; then
-        case_watchdog_seconds=$fixture_setup_timeout_seconds
-        if [[ $negative_case == unavailable ]]; then
-            case_watchdog_seconds=$unavailable_outer_watchdog_seconds
-        fi
         (
-            sleep "$case_watchdog_seconds"
+            sleep "$unavailable_outer_watchdog_seconds"
             if kill -0 "$build_pid" 2>/dev/null; then
                 : >"$case_expired"
                 kill -TERM "$build_pid" 2>/dev/null || true

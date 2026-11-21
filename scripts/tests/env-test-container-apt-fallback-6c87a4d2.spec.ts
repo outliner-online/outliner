@@ -41,4 +41,10 @@ test("the image uses the bounded installer and CI runs its Docker regression", (
     expect(integration).toContain("setup_expired");
     expect(integration).toContain("APT::Update::Error-Mode");
     expect(integration).toContain('verify-container-negative-case.sh" "$negative_case"');
+    expect(integration).toContain('docker build --no-cache -f "$fixture/Dockerfile.success"');
+    expect(integration).not.toContain(
+        'timeout "$fixture_setup_timeout_seconds" docker build --no-cache -f "$fixture/Dockerfile.success"',
+    );
+    expect(integration).toContain("if [[ $negative_case != unavailable ]]");
+    expect(integration).toContain('timeout 180 docker build --build-arg "CASE=${negative_case}"');
 });
