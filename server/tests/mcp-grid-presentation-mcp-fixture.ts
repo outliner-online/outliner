@@ -56,11 +56,13 @@ export interface PresentationSeams {
 
 export async function startGridMcpFixture(options: {
     seed?: typeof seedGridProject;
+    tempDir?: typeof tempDir;
 } = {}) {
     const auditLease = await acquireMcpLogDestination();
-    const dir = tempDir();
+    let dir: string | undefined;
     let server: TestServer | undefined;
     try {
+        dir = (options.tempDir ?? tempDir)();
         const acl = new AclStore();
         acl.grant("projectUsers", PROJECT, UID);
         server = await startTestServer(dir, acl);
@@ -136,7 +138,7 @@ export async function startGridMcpFixture(options: {
     } catch (error) {
         try {
             if (server) await stopTestServer(server);
-            await fs.remove(dir);
+            if (dir) await fs.remove(dir);
         } finally {
             auditLease.release();
         }

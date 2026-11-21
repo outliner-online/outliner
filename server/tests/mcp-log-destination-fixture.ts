@@ -21,6 +21,10 @@ export async function acquireMcpLogDestination() {
     return {
         destination,
         wait: () => new Promise<void>((resolve, reject) => {
+            if (released) {
+                reject(new Error("MCP audit destination lease has been released"));
+                return;
+            }
             destination.write("", error => error ? reject(error) : resolve());
         }),
         release() {

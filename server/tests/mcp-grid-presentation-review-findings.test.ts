@@ -81,12 +81,21 @@ describe("MCP grid presentation review findings (#5436)", function() {
         let releaseWrite!: () => void;
         let auditWriteHeld!: () => void;
         let released = false;
+        let writeCompleted = false;
+        let signalWriteCompleted!: () => void;
+        const completedWrite = new Promise<void>(resolve => signalWriteCompleted = resolve);
         const held = new Promise<void>(resolve => auditWriteHeld = resolve);
         const release = new Promise<void>(resolve => releaseWrite = resolve);
         destination._write = (chunk, encoding, callback) => {
             if (chunk.toString().includes(operationId)) {
                 auditWriteHeld();
-                void release.then(() => originalWrite(chunk, encoding, callback));
+                void release.then(() =>
+                    originalWrite(chunk, encoding, error => {
+                        writeCompleted = true;
+                        signalWriteCompleted();
+                        callback(error);
+                    })
+                );
                 return;
             }
             originalWrite(chunk, encoding, callback);
@@ -99,16 +108,23 @@ describe("MCP grid presentation review findings (#5436)", function() {
         };
         const readAfter = (barrier: () => Promise<void>) => {
             let completed = false;
+            let destinationCompletedAtRead: boolean | undefined;
             let signalEntered!: () => void;
             const entered = new Promise<void>(resolve => signalEntered = resolve);
             const result = (async () => {
                 signalEntered();
                 await barrier();
+                destinationCompletedAtRead = writeCompleted;
                 const contents = fs.readFileSync(mcpLogPath, "utf8");
                 completed = true;
                 return contents;
             })();
-            return { entered, result, completed: () => completed };
+            return {
+                entered,
+                result,
+                completed: () => completed,
+                destinationCompletedAtRead: () => destinationCompletedAtRead,
+            };
         };
         const requirePendingRead = async (read: ReturnType<typeof readAfter>) => {
             await read.entered;
@@ -155,15 +171,21 @@ describe("MCP grid presentation review findings (#5436)", function() {
             );
             await expectOrderingRejection(flushOnlyRead);
             await flushOnlyRead.result;
+            expect(flushOnlyRead.destinationCompletedAtRead()).to.equal(false);
 
             const noOpRead = readAfter(() => Promise.resolve());
             await expectOrderingRejection(noOpRead);
             await noOpRead.result;
+            expect(noOpRead.destinationCompletedAtRead()).to.equal(false);
 
             const destinationRead = readAfter(t.waitForAuditDestination);
             await requirePendingRead(destinationRead);
+            expect(writeCompleted, "the actual destination write must still be incomplete").to.equal(false);
             releaseHeldWrite();
+            await completedWrite;
             auditFile = await destinationRead.result;
+            expect(destinationRead.destinationCompletedAtRead(), "the reader must observe destination completion")
+                .to.equal(true);
         } finally {
             releaseHeldWrite();
             destination._write = originalWrite;
@@ -205,9 +227,15 @@ describe("MCP grid presentation review findings (#5436)", function() {
         let held = false;
         let signalHeld!: () => void;
         const heldWrite = new Promise<void>(resolve => signalHeld = resolve);
+        let captured: {
+            chunk: string | Buffer;
+            encoding: BufferEncoding;
+            callback: (error?: Error | null) => void;
+        } | undefined;
         destination._write = (chunk, encoding, callback) => {
             if (chunk.toString().includes("audit-that-was-not-emitted")) {
                 held = true;
+                captured = { chunk, encoding, callback };
                 signalHeld();
                 return;
             }
@@ -229,8 +257,13 @@ describe("MCP grid presentation review findings (#5436)", function() {
             }
             expect(message).to.equal("expected audit emission did not reach the destination");
             expect(held).to.equal(false);
+
+            destination.write(`${JSON.stringify({ control: "audit-that-was-not-emitted" })}\n`, () => undefined);
+            await heldWrite;
+            expect(held).to.equal(true);
         } finally {
             destination._write = originalWrite;
+            if (captured) originalWrite(captured.chunk, captured.encoding, captured.callback);
         }
         await t.waitForAuditDestination();
         expect(destination.destroyed).to.equal(false);
@@ -251,6 +284,13 @@ describe("MCP grid presentation review findings (#5436)", function() {
             expect(firstDestination.destroyed).to.equal(false);
 
             await t.stop();
+            let releasedWait = "";
+            try {
+                await t.waitForAuditDestination();
+            } catch (error) {
+                releasedWait = error instanceof Error ? error.message : String(error);
+            }
+            expect(releasedWait).to.equal("MCP audit destination lease has been released");
             second = await secondStart;
             expect(firstDestination.writableEnded).to.equal(true);
             await second.waitForAuditDestination();
@@ -264,6 +304,18 @@ describe("MCP grid presentation review findings (#5436)", function() {
 
     it("rolls back a seeded startup failure before the next destination owner", async () => {
         await t.stop();
+        let tempFailure = "";
+        try {
+            await startGridMcpFixture({
+                tempDir: () => {
+                    throw new Error("temporary directory setup failed");
+                },
+            });
+        } catch (error) {
+            tempFailure = error instanceof Error ? error.message : String(error);
+        }
+        expect(tempFailure).to.equal("temporary directory setup failed");
+
         let failure = "";
         try {
             await startGridMcpFixture({

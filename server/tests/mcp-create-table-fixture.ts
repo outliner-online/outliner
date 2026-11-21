@@ -95,16 +95,17 @@ export async function startMcpTestServer(options: {
     const auditLease = await acquireMcpLogDestination();
     const acl = options.acl ?? new AclStore();
     acl.grant("projectUsers", PROJECT, UID);
-    const dir = options.dir ?? tempDir();
+    let dir: string | undefined;
     let server: TestServer | undefined;
     try {
+        dir = options.dir ?? tempDir();
         server = options.server ?? await startTestServer(dir, acl);
         mcpLogStream = auditLease.destination;
         if (!options.server) await seedProject(server.hocuspocus, PROJECT);
     } catch (error) {
         try {
             if (server && !options.server) await stopTestServer(server);
-            if (!options.dir) await fs.remove(dir);
+            if (dir && !options.dir) await fs.remove(dir);
         } finally {
             auditLease.release();
         }
