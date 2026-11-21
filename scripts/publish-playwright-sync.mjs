@@ -43,7 +43,9 @@ import {
 } from "./playwright-version-sync-lib.mjs";
 
 const REMOTE = "origin";
-const COMMIT_MESSAGE = "Auto-fix: Sync Playwright Dockerfile image version with lockfile";
+// Dependabot may regenerate this machine-owned correction while rebasing.
+// This marker does not skip GitHub Actions checks.
+const COMMIT_MESSAGE = "Auto-fix: Sync Playwright Dockerfile image version with lockfile\n\n[dependabot skip]";
 const BOT_IDENTITY = {
     GIT_AUTHOR_NAME: "GitHub Action",
     GIT_AUTHOR_EMAIL: "action@github.com",

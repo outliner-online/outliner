@@ -26,6 +26,7 @@ test.describe("production on-premises transport cancellation", () => {
             event.kind === "ws-open"
         ).slice(-1)[0]!;
         expect(stack.isTunnelOpen(unrelatedTunnel.id)).toBe(true);
+        await stack.waitForTransportEvent("ws-upstream-data", unrelatedTunnel.url, { id: unrelatedTunnel.id });
 
         const orders = [undefined, "ws-client-close", "ws-upstream-close"] as const;
         for (const firstTerminal of orders) {
@@ -40,6 +41,7 @@ test.describe("production on-premises transport cancellation", () => {
             const targetTunnel = stack.transportSnapshot().slice(beforeTarget).filter(event => event.kind === "ws-open")
                 .slice(-1)[0]!;
             expect(stack.isTunnelOpen(targetTunnel.id)).toBe(true);
+            await stack.waitForTransportEvent("ws-upstream-data", targetTunnel.url, { id: targetTunnel.id });
             if (firstTerminal) stack.controlTunnelTerminalOrder(targetTunnel.id, firstTerminal);
             const secondTerminal = firstTerminal === "ws-client-close" ? "ws-upstream-close" : "ws-client-close";
             const callbackBarrier = firstTerminal

@@ -27,9 +27,11 @@ export interface TransportEvent {
         | "ws-open"
         | "ws-upstream-data"
         | "ws-client-close"
+        | "ws-client-socket-close"
         | "ws-client-reset-request"
         | "ws-upstream-reset-request"
         | "ws-upstream-close"
+        | "ws-upstream-socket-close"
         | "ws-client-close-held"
         | "ws-upstream-close-held"
         | "ws-client-cleanup-destroy"
@@ -128,6 +130,10 @@ export class OnPremProductionStack {
                     upstreamDestroyed: tunnel.upstream.destroyed,
                     clientReadableEnded: tunnel.client.readableEnded,
                     upstreamReadableEnded: tunnel.upstream.readableEnded,
+                    upstreamReadableFlowing: tunnel.upstream.readableFlowing,
+                    upstreamReadableLength: tunnel.upstream.readableLength,
+                    upstreamWritableFinished: tunnel.upstream.writableFinished,
+                    upstreamWritableLength: tunnel.upstream.writableLength,
                     clientWritableEnded: tunnel.client.writableEnded,
                     upstreamWritableEnded: tunnel.upstream.writableEnded,
                     controlledFirstTerminal: tunnel.controlledFirstTerminal,
@@ -196,6 +202,14 @@ export class OnPremProductionStack {
                 hold.deliver();
             },
         };
+    }
+
+    /** Real stream backpressure control; terminal signals still come from the sockets. */
+    pauseTunnelUpstreamReads(id: number) {
+        const tunnel = [...this.tunnels].find(candidate => candidate.id === id);
+        if (!tunnel) throw new Error(`No active upstream tunnel ${id}`);
+        tunnel.upstream.pause();
+        return () => tunnel.upstream.readableLength;
     }
 
     interruptTunnelClient(id: number) {
@@ -429,7 +443,13 @@ export class OnPremProductionStack {
             // Forward that transport termination before a callback barrier can
             // hold observer delivery. Keep reading the real backend's response;
             // destroying upstream here would make its terminal signal cleanup-induced.
-            if (!upstream.destroyed && !upstream.writableEnded) upstream.end();
+            if (!upstream.destroyed) {
+                // Unpiping a dead destination pauses its source. Drain buffered
+                // backend data so its native EOF/close can reach the recorder.
+                upstream.unpipe(socket);
+                upstream.resume();
+                if (!upstream.writableEnded) upstream.end();
+            }
             this.deliverTunnelClose(tunnel, "ws-client-close");
         };
         const upstreamClose = () => {
@@ -456,6 +476,16 @@ export class OnPremProductionStack {
                 clientDestroyedByCleanup: tunnel.clientDestroyedByCleanup,
                 upstreamDestroyedByCleanup: tunnel.upstreamDestroyedByCleanup,
             });
+            // A terminal error can reach a callback hold before the native
+            // close callback. Expose that separate physical observation only
+            // after recording it, never from an error or a scheduled turn.
+            if (event === "close") {
+                this.recordTransport({
+                    id: tunnel.id,
+                    kind: side === "client" ? "ws-client-socket-close" : "ws-upstream-socket-close",
+                    url: tunnel.url,
+                });
+            }
         };
         socket.once("end", () => observeSocket("client", "end"));
         upstream.once("end", () => observeSocket("upstream", "end"));
