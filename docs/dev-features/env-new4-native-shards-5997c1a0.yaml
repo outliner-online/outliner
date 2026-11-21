@@ -6,3 +6,4 @@ description: >-
   exact collection guard and aggregate check preserve coverage and failures.
 tests:
   - scripts/tests/env-new4-native-shards-5997c1a0.spec.ts
+  - scripts/tests/env-new4-rerun-provenance-5997c1a0.spec.ts

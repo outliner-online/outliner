@@ -311,7 +311,7 @@ jobs:
         run: |
           set -euo pipefail
           cd scripts/tests
-          npx vitest run env-playwright-collects-every-spec-7d41ae62.spec.ts env-firefox-selection-coverage-78ad2b91.spec.ts env-firefox-ci-promotion-934d0f2a.spec.ts env-new3-shard-partition-8624c6a1.spec.ts env-new2-native-shards-8c3de7a2.spec.ts env-new4-native-shards-5997c1a0.spec.ts 2>&1 | tee ../../job_logs/selection-coverage.log
+          npx vitest run env-playwright-collects-every-spec-7d41ae62.spec.ts env-firefox-selection-coverage-78ad2b91.spec.ts env-firefox-ci-promotion-934d0f2a.spec.ts env-new3-shard-partition-8624c6a1.spec.ts env-new2-native-shards-8c3de7a2.spec.ts env-new4-native-shards-5997c1a0.spec.ts env-new4-rerun-provenance-5997c1a0.spec.ts 2>&1 | tee ../../job_logs/selection-coverage.log
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s . -p 'test_bounded_e2e*.py' -v 2>&1 | tee ../../job_logs/bounded-e2e-contract.log
 
       - name: Upload collection guard logs
