@@ -53,6 +53,12 @@ import {
 } from "../../services/yjstable/gridCommandExecution";
 import { buildGridCopyPayload, commitGridPaste, planGridPaste, type GridPastePlan } from "../../services/yjstable/gridClipboard";
 import { cellComponentFor, cellComponentTypeFor } from "./cellComponents";
+import {
+    gridColumnLabel,
+    gridFieldFor,
+    gridVisibleColumns,
+    type GridProjectionRowTarget,
+} from "../../../../shared/src/notifications/gridProjection";
 import { draftHasLineBreak, textLineBreakPolicy, type TextLineBreakPolicy } from "./textCellLineBreakPolicy";
 import { unambiguousPhysicalColumn, unambiguousRowSource, type ProjectQueryProvenance } from "../../../../shared/src/services/projectQueryProvenance";
 import ConfirmDialog from "../ConfirmDialog.svelte";
@@ -484,23 +490,14 @@ const columnByName = $derived(new Map((schema?.columns ?? []).map((c) => [c.name
 /** Metadata is selected per result occurrence, including heterogeneous UNION branches. */
 function fieldFor(columnId: string, rowTarget?: GridCommandRowTarget): TableColumnSchema | undefined {
     if (!grid) return columnByName.get(columnId);
-    const candidates = mutationPhysicalColumns.filter(column => column.outputColumn === columnId
-        && (!rowTarget?.source || column.source.sqlName === rowTarget.source.sourceKind));
-    const first = candidates[0];
-    // Repeated result branches may describe the same one physical field.
-    // Distinct source/field identities remain ambiguous presentation metadata.
-    if (first?.field && candidates.every(candidate => candidate.field
-        && candidate.source.kind === first.source.kind && candidate.source.id === first.source.id
-        && candidate.source.sqlName === first.source.sqlName
-        && candidate.source.schemaRevision === first.source.schemaRevision
-        && candidate.physicalColumn === first.physicalColumn)) return first.field;
-    const typeId = resultColumnMetadata.find(column => column.name === columnId)?.typeId;
-    const kind = typeId === 16 ? "boolean" : [20, 21, 23].includes(typeId ?? 0) ? "integer"
-        : [700, 701, 1700].includes(typeId ?? 0) ? "number" : typeId === 1082 ? "date" : "text";
-    return { name: columnId, dataType: kind, kind, isNullable: true, isPrimaryKey: false } as const;
+    const projectionTarget: GridProjectionRowTarget = {
+        logicalRowId: rowTarget ? selectionRowId(rowTarget.row, rowTarget.rowIndex) : "column",
+        source: rowTarget?.source,
+    };
+    return gridFieldFor(columnId, projectionTarget, mutationPhysicalColumns, resultColumnMetadata) as TableColumnSchema;
 }
 const effectiveColumns = $derived(orderColumns(result.columns, columnOrder));
-const displayColumns = $derived(effectiveColumns.filter(column => hiddenColumns[column] !== true));
+const displayColumns = $derived(gridVisibleColumns(result.columns, columnOrder, hiddenColumns));
 
 function commitBareRecordValue(
     recordId: string,
@@ -707,8 +704,7 @@ function writeVisibleColumnOrder(visibleOrder: string[]) {
 
 /** Presentation label for a column; falls back to the SQL name. */
 function headerLabel(column: string): string {
-    const label = columnLabels[column];
-    return label !== undefined && label !== "" ? label : column;
+    return gridColumnLabel(column, columnLabels);
 }
 
 let dropTargetColumn = $state<{ column: string; position: "left" | "right" } | undefined>(undefined);

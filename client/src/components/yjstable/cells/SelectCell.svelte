@@ -1,4 +1,5 @@
 <script lang="ts">
+import { gridDisplayedCell } from "../../../../../shared/src/notifications/gridProjection";
 interface Props {
     value: unknown;
     editable: boolean;
@@ -30,7 +31,8 @@ const nullOption = $derived.by(() => {
     while (options.includes(candidate)) candidate += "_";
     return candidate;
 });
-const current = $derived(value === null || value === undefined ? nullOption : String(value));
+const displayed = $derived((gridDisplayedCell("select", value) as { value: string }).value);
+const current = $derived(displayed === "" && (value === null || value === undefined) ? nullOption : displayed);
 </script>
 
 <select
