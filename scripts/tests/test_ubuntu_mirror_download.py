@@ -106,7 +106,7 @@ class Unsupported(unittest.TestCase):
         declared=re.findall(rb'^        project: \[([^\]]+)\]',workflow,re.M)
         self.assertEqual(len(declared),1)
         rows=[v.strip() for v in declared[0].decode().split(',')]
-        expected='basic core-1 core-2 core-3 core-4 core-4b core-5 core-6 core-7 core-8 new-1 new-2-1 new-2-2 new-3a new-3b new-4 new-5 auth utils server yjs tables-1 tables-2 schedule onprem firefox-selection-core-4 firefox-selection-core-4b firefox-selection-new firefox-selection-basic'.split()
+        expected='basic core-1 core-2 core-3 core-4 core-4b core-5 core-6 core-7 core-8 new-1 new-2-1 new-2-2 new-3a new-3b new-4-1 new-4-2 new-5 auth utils server yjs tables-1 tables-2 schedule onprem firefox-selection-core-4 firefox-selection-core-4b firefox-selection-new firefox-selection-basic'.split()
         self.assertEqual(rows,expected)
         self.assertIn(b'  e2e-test:\n    runs-on: ubuntu-latest',workflow)
         self.assertIn(b'    needs: e2e-test\n',workflow)

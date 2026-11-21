@@ -16,7 +16,7 @@ MODULE = (CLI.parent / 'index.mjs').as_uri()
 
 
 class PlaywrightBoundaryTest(unittest.TestCase):
-    def run_probe(self, mode, tables_shard=False, new3_half=None, new2_shard=None):
+    def run_probe(self, mode, tables_shard=False, new3_half=None, new2_shard=None, new4_shard=None):
         with tempfile.TemporaryDirectory(prefix='bounded-playwright-') as directory:
             root = Path(directory)
             (root / 'context.json').write_text(json.dumps({'startedAt': datetime.now(timezone.utc).isoformat()}))
@@ -25,6 +25,8 @@ class PlaywrightBoundaryTest(unittest.TestCase):
                 projects = "projects:[{name:'new-3a'},{name:'new-3b'}],"
             if new2_shard:
                 projects = "projects:[{name:'new-2'}],"
+            if new4_shard:
+                projects = "projects:[{name:'new-4'}],"
             (root / 'playwright.config.mjs').write_text("export default {testDir:'.',retries:0,workers:1,"
                                                        + projects + "reporter:[['json',{outputFile:'report.json'}]]};")
             action = "process.exit(0)" if mode == 'incomplete' else "await new Promise(() => {})" if mode == 'timeout' else (
@@ -72,6 +74,18 @@ class PlaywrightBoundaryTest(unittest.TestCase):
                 self.assertEqual(cli_arguments, ['--project=new-2', '--shard=' + new2_shard,
                                                  '--reporter=line,list,json,html'])
                 other = 'zzz-other.spec.mjs' if new2_shard == '1/2' else 'aaa-other.spec.mjs'
+                (root / other).write_text(f"""
+                    import {{test}} from {json.dumps(MODULE)};
+                    test('must remain on the other native shard', () => {{throw new Error('wrong shard executed')}});
+                """)
+            if new4_shard:
+                workflow = (ROOT / '.github/workflows/ci-test-e2e.yml').read_text()
+                branch = workflow.split('elif [[ "$project" =~ ^new-4-([12])$ ]]; then')[1].split('elif ')[0]
+                command = branch.split('-- npm run github:test:e2e -- ', 1)[1].strip()
+                cli_arguments = shlex.split(command.replace('"$shard"', new4_shard))
+                self.assertEqual(cli_arguments, ['--project=new-4', '--shard=' + new4_shard,
+                                                 '--reporter=line,list,json,html'])
+                other = 'zzz-other.spec.mjs' if new4_shard == '1/2' else 'aaa-other.spec.mjs'
                 (root / other).write_text(f"""
                     import {{test}} from {json.dumps(MODULE)};
                     test('must remain on the other native shard', () => {{throw new Error('wrong shard executed')}});
@@ -125,6 +139,20 @@ class PlaywrightBoundaryTest(unittest.TestCase):
 
     def test_new2_shipped_command_incomplete_report_cannot_pass(self):
         self.run_probe('incomplete', new2_shard='2/2')
+
+    def test_new4_shipped_native_shards_and_reporters(self):
+        for shard in ('1/2', '2/2'):
+            with self.subTest(shard=shard):
+                self.run_probe('pass', new4_shard=shard)
+
+    def test_new4_shipped_command_failure_is_nonzero(self):
+        self.run_probe('failure', new4_shard='2/2')
+
+    def test_new4_shipped_command_timeout_retains_diagnostics(self):
+        self.run_probe('timeout', new4_shard='1/2')
+
+    def test_new4_shipped_command_incomplete_report_cannot_pass(self):
+        self.run_probe('incomplete', new4_shard='2/2')
 
     def test_new3_shipped_command_failure_is_nonzero(self):
         self.run_probe('failure', new3_half='new-3b')
