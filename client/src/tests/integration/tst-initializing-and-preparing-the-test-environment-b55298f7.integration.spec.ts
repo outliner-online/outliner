@@ -1,3 +1,4 @@
+import "fake-indexeddb/auto";
 import { render, screen } from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
 import { userManager } from "../../auth/UserManager";
@@ -13,8 +14,8 @@ describe("basic home page and auth component", () => {
     });
 
     it("renders auth section with Google login button", async () => {
-        vi.useFakeTimers();
         await userManager.logout();
+        vi.useFakeTimers();
         render(AuthSectionWrapper);
         await vi.advanceTimersByTimeAsync(2000);
         expect(screen.getByRole("button", { name: /google/i })).toBeTruthy();
