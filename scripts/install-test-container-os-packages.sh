@@ -9,6 +9,7 @@ set -euo pipefail
 # the transport endpoint--Ubuntu's signed Release metadata and package signature
 # verification remain enabled.
 readonly acquisition_budget_seconds="${APT_ACQUISITION_BUDGET_SECONDS:-180}"
+readonly shutdown_grace_seconds="${APT_ACQUISITION_SHUTDOWN_GRACE_SECONDS:-5}"
 readonly primary_host="${APT_PRIMARY_HOST:-azure.archive.ubuntu.com}"
 readonly fallback_host="${APT_FALLBACK_HOST:-archive.ubuntu.com}"
 readonly apt_options=(
@@ -27,12 +28,16 @@ if [[ ! "$acquisition_budget_seconds" =~ ^[1-9][0-9]*$ ]]; then
     echo "APT_ACQUISITION_BUDGET_SECONDS must be a positive integer." >&2
     exit 64
 fi
+if [[ ! "$shutdown_grace_seconds" =~ ^[1-9][0-9]*$ ]]; then
+    echo "APT_ACQUISITION_SHUTDOWN_GRACE_SECONDS must be a positive integer." >&2
+    exit 64
+fi
 
 # Run the complete production acquisition path under one deadline. The private
 # worker mode avoids applying a fresh budget to each fallback attempt.
 if [[ $1 != "--bounded-acquisition-worker" ]]; then
     set +e
-    timeout --signal=TERM --kill-after=5 "$acquisition_budget_seconds" \
+    timeout --signal=TERM --kill-after="$shutdown_grace_seconds" "$acquisition_budget_seconds" \
         "$0" --bounded-acquisition-worker "$@"
     status=$?
     set -e
@@ -57,10 +62,17 @@ replace_archive_host() {
 install_from_current_source() {
     local label=$1
     shift
-    echo "APT acquisition attempt: ${label}" >&2
+    echo "APT fetch attempt: ${label}" >&2
     rm -rf /var/lib/apt/lists/*
-    apt-get "${apt_options[@]}" update
-    apt-get "${apt_options[@]}" install -y --no-install-recommends "$@"
+    if ! apt-get "${apt_options[@]}" update; then
+        echo "APT fetch failure: ${label}" >&2
+        return 1
+    fi
+    echo "APT fetch succeeded: ${label}" >&2
+    if ! apt-get "${apt_options[@]}" install -y --no-install-recommends "$@"; then
+        echo "APT package installation failure: ${label}" >&2
+        return 1
+    fi
 }
 
 if ! install_from_current_source "primary host ${primary_host}" "$@"; then

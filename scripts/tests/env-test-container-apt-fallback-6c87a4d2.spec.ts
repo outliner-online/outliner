@@ -21,7 +21,8 @@ test("the image uses the bounded installer and CI runs its Docker regression", (
     expect(dockerfile).toContain("/usr/local/bin/install-test-container-os-packages");
     expect(installer).toContain("Acquire::Retries=2");
     expect(installer).toContain("APT_ACQUISITION_BUDGET_SECONDS:-180");
-    expect(installer).toContain("timeout --signal=TERM --kill-after=5");
+    expect(installer).toContain("APT_ACQUISITION_SHUTDOWN_GRACE_SECONDS:-5");
+    expect(installer).toContain('timeout --signal=TERM --kill-after="$shutdown_grace_seconds"');
     expect(installer).toContain("dpkg-query");
     expect(workflow).toContain("scripts/tests/test-container-os-packages.integration.sh");
     expect(workflow).toContain("docker run --rm outliner-test-container:ci");
@@ -32,6 +33,36 @@ test("the image uses the bounded installer and CI runs its Docker regression", (
     expect(integration).toContain("dpkg --remove --force-depends");
     expect(integration).toContain("verify-missing-netcat-openbsd");
     expect(integration).toContain("verify-missing-python3-pip");
-    expect(integration).toContain("status == 124 || status == 137");
-    expect(integration).toContain("timed out before ${negative_case} reported its own failure");
+    expect(integration).toContain("unavailable_inner_watchdog_seconds=40");
+    expect(integration).toContain("unavailable_launch_allowance_seconds=15");
+    expect(integration).toContain("Dockerfile.fixture");
+    expect(integration).toContain("outliner-apt-regression:fixture");
+    expect(integration).toContain("negative_case_setup_timeout_seconds=30");
+    expect(integration).toContain("Dockerfile.unavailable");
+    expect(integration).toContain("outliner-apt-regression:unavailable");
+    expect(integration).toContain(
+        'timeout "$negative_case_setup_timeout_seconds" docker build --no-cache',
+    );
+    expect(integration).toContain("run-bounded-unavailable-case.sh");
+    const unavailableSetup = integration.indexOf(
+        '-f "$fixture/Dockerfile.unavailable" -t outliner-apt-regression:unavailable',
+    );
+    const unavailableInstaller = integration.indexOf(
+        '"$repo_root/scripts/tests/run-bounded-unavailable-case.sh"',
+    );
+    expect(unavailableSetup).toBeGreaterThan(-1);
+    expect(unavailableInstaller).toBeGreaterThan(unavailableSetup);
+    expect(integration).not.toContain("NEGATIVE_CASE_PHASE_STARTED");
+    expect(integration).not.toContain("run-bounded-docker-build.sh");
+    expect(integration).toContain("APT::Update::Error-Mode");
+    expect(integration).toContain("UNAVAILABLE_WATCHDOG_EXIT_STATUS");
+    expect(integration).toContain("/run/outliner-apt-control/ready");
+    expect(integration).toContain("/run/outliner-apt-control/start");
+    expect(integration).toContain('verify-container-negative-case.sh" "$negative_case"');
+    expect(integration).toContain('docker build --no-cache -f "$fixture/Dockerfile.success"');
+    expect(integration).not.toContain(
+        'timeout "$fixture_setup_timeout_seconds" docker build --no-cache -f "$fixture/Dockerfile.success"',
+    );
+    expect(integration).toContain("if [[ $negative_case != unavailable ]]");
+    expect(integration).toContain('timeout 180 docker build --build-arg "CASE=${negative_case}"');
 });
