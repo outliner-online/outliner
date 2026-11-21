@@ -64,6 +64,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p job_logs
+          node -e 'const e=require("./job_logs/direct-runner-fixture-build.json"); if(e.outcome!=="success"||e.exitCode!==0) process.exit(1)'
           bash scripts/run-env-tests.sh --isolated env-direct-runner-os-acquisition-5921b0ad.spec.ts 2>&1 | tee job_logs/direct-runner-os-regression.log
       - name: Retain isolated acquisition evidence
         if: always()
@@ -188,11 +189,14 @@ jobs:
           node - <<'NODE'
           const fs = require("node:fs");
           const evidence = require("./job_logs/direct-runner-fixture-build.json");
-          const events = fs.readFileSync("job_logs/delayed-build-observer.json", "utf8");
+          const eventsText = fs.readFileSync("job_logs/delayed-build-observer.json", "utf8");
+          const events = eventsText.trim().split("\n").map(JSON.parse);
+          const buildStarted = events.find(event => event.event === "build-started");
+          const clientClosed = events.find(event => event.event === "client-closed");
           const elapsedNs = BigInt(evidence.endedNs) - BigInt(evidence.startedNs);
           if (evidence.outcome !== "deadline" || evidence.terminated !== true || elapsedNs > 15_000_000_000n) process.exit(1);
-          if (!events.includes('"event": "build-started"') || !events.includes('"event": "client-closed"')) process.exit(1);
-          if (events.includes('"event": "natural-completion"')) process.exit(1);
+          if (!buildStarted || !clientClosed || clientClosed.at < buildStarted.at || clientClosed.at - buildStarted.at > 15) process.exit(1);
+          if (events.some(event => event.event === "natural-completion")) process.exit(1);
           NODE
           test ! -e job_logs/unexpected-scenario-launch
 

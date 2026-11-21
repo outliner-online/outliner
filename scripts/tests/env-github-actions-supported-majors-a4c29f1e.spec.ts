@@ -117,6 +117,7 @@ test("direct-runner fixture uses the authenticated action cache and passes its l
     expect(deadline.run).toContain("DIRECT_RUNNER_OS_PROVISIONING_DEADLINE_NS");
     expect(regression.env.DIRECT_RUNNER_OS_PREBUILT_IMAGE).toBe(build.with.tags);
     expect(regression["continue-on-error"]).toBeUndefined();
+    expect(regression.run).toContain('e.outcome!=="success"||e.exitCode!==0');
 });
 
 test("a delayed hosted build consumes the same monotonic deadline as container provisioning", () => {
@@ -154,8 +155,9 @@ test("a delayed hosted build consumes the same monotonic deadline as container p
     expect(verification.env.BUILD_OUTCOME).toBe("${{ steps.delayed-build.outcome }}");
     expect(verification.run).toContain('test "$BUILD_OUTCOME" = failure');
     expect(verification.run).toContain('evidence.outcome !== "deadline"');
-    expect(verification.run).toContain('"event": "client-closed"');
-    expect(verification.run).toContain('"event": "natural-completion"');
+    expect(verification.run).toContain('event.event === "client-closed"');
+    expect(verification.run).toContain("clientClosed.at - buildStarted.at > 15");
+    expect(verification.run).toContain('event.event === "natural-completion"');
     expect(verification.run).toContain("test ! -e job_logs/unexpected-scenario-launch");
 });
 
