@@ -138,11 +138,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p job_logs
-          builder_container=$(docker ps --filter name=buildx_buildkit --format '{{.ID}}' | head -1)
-          test -n "$builder_container"
           observer="direct-runner-deadline-observer-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "$observer" > job_logs/delayed-build-observer-container
-          docker run --detach --rm --name "$observer" --network "container:$builder_container" \
+          docker run --detach --rm --name "$observer" --network host \
             --volume "$PWD:/workspace" --workdir /workspace python:3.14-slim \
             python scripts/tests/fixtures/direct-runner-os/deadline-control/observe-build.py \
             job_logs/delayed-build-observer.json
@@ -161,13 +159,10 @@ jobs:
       - name: Build deliberately delayed fixture
         id: delayed-build
         continue-on-error: true
-        uses: ./.github/actions/bounded-buildx
-        with:
-          context: scripts/tests/fixtures/direct-runner-os/deadline-control
-          load: true
-          tags: outliner-direct-os-regression:deadline-control
-          network: host
-          no-cache: true
+        env:
+          DIRECT_RUNNER_OS_FAILURE_CONTROL_CONTEXT: scripts/tests/fixtures/direct-runner-os/deadline-control
+          DIRECT_RUNNER_OS_PREBUILT_IMAGE: outliner-direct-os-regression:deadline-control-unused
+        run: bash scripts/run-env-tests.sh --isolated env-direct-runner-os-acquisition-5921b0ad.spec.ts
       - name: Acquisition must stay blocked after deadline expiry
         if: steps.delayed-build.outcome == 'success'
         run: |
@@ -188,13 +183,10 @@ jobs:
           done
           node - <<'NODE'
           const fs = require("node:fs");
-          const evidence = require("./job_logs/direct-runner-fixture-build.json");
           const eventsText = fs.readFileSync("job_logs/delayed-build-observer.json", "utf8");
           const events = eventsText.trim().split("\n").map(JSON.parse);
           const buildStarted = events.find(event => event.event === "build-started");
           const clientClosed = events.find(event => event.event === "client-closed");
-          const elapsedNs = BigInt(evidence.endedNs) - BigInt(evidence.startedNs);
-          if (evidence.outcome !== "deadline" || evidence.terminated !== true || elapsedNs > 15_000_000_000n) process.exit(1);
           if (!buildStarted || !clientClosed || clientClosed.at < buildStarted.at || clientClosed.at - buildStarted.at > 15) process.exit(1);
           if (events.some(event => event.event === "natural-completion")) process.exit(1);
           NODE

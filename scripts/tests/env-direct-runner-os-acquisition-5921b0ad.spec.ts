@@ -52,20 +52,29 @@ beforeAll(() => {
 
     // Negative control at the real provisioning boundary: the actual builder
     // must propagate a native failure before any scenario container can start.
-    const failingContext = mkdtempSync(join(tmpdir(), "direct-runner-os-failing-"));
-    writeFileSync(join(failingContext, "Dockerfile"), "FROM scratch\nCOPY absent-file /must-not-exist\n");
+    const suppliedFailureContext = process.env.DIRECT_RUNNER_OS_FAILURE_CONTROL_CONTEXT;
+    const failingContext = suppliedFailureContext ?? mkdtempSync(join(tmpdir(), "direct-runner-os-failing-"));
+    if (!suppliedFailureContext) {
+        writeFileSync(join(failingContext, "Dockerfile"), "FROM scratch\nCOPY absent-file /must-not-exist\n");
+    }
     try {
-        const failedBuild = spawnSync("bash", [builder, `${image}-failure-control`, failingContext], {
+        const controlArguments = suppliedFailureContext ? ["--network", "host", "--no-cache"] : [];
+        const failedBuild = spawnSync("bash", [builder, `${image}-failure-control`, failingContext,
+            ...controlArguments], {
             cwd: root,
             encoding: "utf8",
-            timeout: 30000,
+            timeout: remainingProvisioning(),
             maxBuffer: 5 * 1024 * 1024,
         });
+        if ((failedBuild.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") {
+            expectNoScenarioContainers();
+            throw new Error("Fixture provisioning deadline exceeded during the failure-control build");
+        }
         expect(failedBuild.error, output(failedBuild)).toBeUndefined();
         expect(failedBuild.status, output(failedBuild)).not.toBe(0);
         expectNoScenarioContainers();
     } finally {
-        rmSync(failingContext, { recursive: true, force: true });
+        if (!suppliedFailureContext) rmSync(failingContext, { recursive: true, force: true });
     }
 
     if (process.env.DIRECT_RUNNER_OS_PREBUILT_IMAGE) {

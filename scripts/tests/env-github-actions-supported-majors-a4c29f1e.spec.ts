@@ -122,6 +122,10 @@ test("direct-runner fixture uses the authenticated action cache and passes its l
 
 test("a delayed hosted build consumes the same monotonic deadline as container provisioning", () => {
     const e2e = parseWorkflow("ci-test-e2e.yml");
+    const acquisitionSource = fs.readFileSync(
+        path.join(root, "scripts/tests/env-direct-runner-os-acquisition-5921b0ad.spec.ts"),
+        "utf8",
+    );
     const job = e2e.jobs["direct-runner-os-provisioning-deadline"];
     const deadline = findStep(
         e2e,
@@ -143,19 +147,22 @@ test("a delayed hosted build consumes the same monotonic deadline as container p
     expect(job.steps.indexOf(deadline)).toBeLessThan(job.steps.indexOf(build));
     expect(deadline.run).toContain("time.monotonic_ns() + 5_000_000_000");
     expect(deadline.run).toContain("observe-build.py");
-    expect(build.uses).toBe("./.github/actions/bounded-buildx");
-    expect(build.with.context).toBe("scripts/tests/fixtures/direct-runner-os/deadline-control");
-    expect(deadline.run).toContain('--network "container:$builder_container"');
-    expect(build.with.network).toBe("host");
-    expect(build.with["no-cache"]).toBe(true);
+    expect(deadline.run).toContain("--network host");
+    expect(build.env.DIRECT_RUNNER_OS_FAILURE_CONTROL_CONTEXT).toBe(
+        "scripts/tests/fixtures/direct-runner-os/deadline-control",
+    );
+    expect(build.run).toContain("env-direct-runner-os-acquisition-5921b0ad.spec.ts");
+    expect(acquisitionSource).toContain("timeout: remainingProvisioning()");
+    expect(acquisitionSource).toContain("DIRECT_RUNNER_OS_FAILURE_CONTROL_CONTEXT");
+    expect(acquisitionSource).toContain("Fixture provisioning deadline exceeded during the failure-control build");
     expect(build["continue-on-error"]).toBe(true);
     expect(acquisition.if).toBe("steps.delayed-build.outcome == 'success'");
     expect(acquisition.run).toContain("unexpected-scenario-launch");
     expect(acquisition.run).toContain("env-direct-runner-os-acquisition-5921b0ad.spec.ts");
     expect(verification.env.BUILD_OUTCOME).toBe("${{ steps.delayed-build.outcome }}");
     expect(verification.run).toContain('test "$BUILD_OUTCOME" = failure');
-    expect(verification.run).toContain('evidence.outcome !== "deadline"');
     expect(verification.run).toContain('event.event === "client-closed"');
+    expect(verification.run).toContain("clientClosed.at < buildStarted.at");
     expect(verification.run).toContain("clientClosed.at - buildStarted.at > 15");
     expect(verification.run).toContain('event.event === "natural-completion"');
     expect(verification.run).toContain("test ! -e job_logs/unexpected-scenario-launch");
