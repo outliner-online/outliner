@@ -112,6 +112,36 @@ test("direct-runner fixture uses the authenticated action cache and passes its l
     expect(regression["continue-on-error"]).toBeUndefined();
 });
 
+test("a hosted fixture failure cannot enter the scenario acquisition caller", () => {
+    const e2e = parseWorkflow("ci-test-e2e.yml");
+    const job = e2e.jobs["direct-runner-os-provisioning-failure"];
+    const build = findStep(e2e, "direct-runner-os-provisioning-failure", "Exercise failing fixture provisioning");
+    const acquisition = findStep(e2e, "direct-runner-os-provisioning-failure", "Acquisition must stay blocked");
+    const verification = findStep(
+        e2e,
+        "direct-runner-os-provisioning-failure",
+        "Verify provisioning failure propagation",
+    );
+
+    expect(job["continue-on-error"]).toBeUndefined();
+    expect(build).toMatchObject({
+        uses: "docker/build-push-action@v7",
+        "continue-on-error": true,
+        with: {
+            context: "scripts/tests/fixtures/direct-runner-os/failure-control",
+            load: true,
+            tags: "outliner-direct-os-regression:failure-control",
+        },
+    });
+    expect(acquisition.if).toBe("steps.fixture-build.outcome == 'success'");
+    expect(acquisition.run).toContain("unexpected-scenario-launch");
+    expect(acquisition.run).toContain("env-direct-runner-os-acquisition-5921b0ad.spec.ts");
+    expect(verification.if).toBe("always()");
+    expect(verification.env.BUILD_OUTCOME).toBe("${{ steps.fixture-build.outcome }}");
+    expect(verification.run).toContain('test "$BUILD_OUTCOME" = failure');
+    expect(verification.run).toContain("test ! -e job_logs/unexpected-scenario-launch");
+});
+
 test("artifact and Pages deployment producers retain their consumer-facing contracts", () => {
     const e2e = parseWorkflow("ci-test-e2e.yml");
     const artifact = findStep(e2e, "e2e-test", "Upload Logs & Artifacts");
