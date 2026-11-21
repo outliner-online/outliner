@@ -715,16 +715,11 @@ jobs:
     steps:
       - name: Checkout verifier
         uses: actions/checkout@v7
-      - name: Download new-4 shard 1 evidence
+      - name: Download new-4 execution evidence
         uses: actions/download-artifact@v8
         with:
-          name: e2e-artifacts-chromium-new-4-1-${{ github.run_id }}-${{ github.run_attempt }}
-          path: new-4-evidence/new-4-1
-      - name: Download new-4 shard 2 evidence
-        uses: actions/download-artifact@v8
-        with:
-          name: e2e-artifacts-chromium-new-4-2-${{ github.run_id }}-${{ github.run_attempt }}
-          path: new-4-evidence/new-4-2
+          pattern: e2e-artifacts-chromium-new-4-*-${{ github.run_id }}-*
+          path: new-4-evidence
       - name: Require exact successful execution and collection
         env:
           E2E_RESULT: ${{ needs.e2e-test.result }}
@@ -733,4 +728,4 @@ jobs:
           set -euo pipefail
           test "$E2E_RESULT" = success && test "$COLLECTION_RESULT" = success
           node scripts/ci/verify-new4-shards.mjs \
-            new-4-evidence "${{ github.run_id }}-${{ github.run_attempt }}" "${{ github.sha }}"
+            new-4-evidence "${{ github.run_id }}" "${{ github.run_attempt }}" "${{ github.sha }}"

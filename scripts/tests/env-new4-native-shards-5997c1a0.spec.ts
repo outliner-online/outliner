@@ -41,10 +41,8 @@ describe("ENV-5997c1a0: complete native new-4 sharding", () => {
         const downloads = gate.steps.filter((step: { uses?: string; }) =>
             step.uses?.startsWith("actions/download-artifact@")
         );
-        expect(downloads.map((step: { with: { name: string; }; }) => step.with.name)).toEqual([
-            "e2e-artifacts-chromium-new-4-1-${{ github.run_id }}-${{ github.run_attempt }}",
-            "e2e-artifacts-chromium-new-4-2-${{ github.run_id }}-${{ github.run_attempt }}",
-        ]);
+        expect(downloads).toHaveLength(1);
+        expect(downloads[0].with.pattern).toBe("e2e-artifacts-chromium-new-4-*-${{ github.run_id }}-*");
         const upload = job.steps.find((step: { name?: string; }) => step.name === "Upload Logs & Artifacts");
         expect(upload.if).toContain("steps.tests.outputs.startup_verified == 'true'");
         expect(upload.if).toContain("startsWith(matrix.project, 'new-4-')");
@@ -64,38 +62,44 @@ describe("ENV-5997c1a0: complete native new-4 sharding", () => {
     it("rejects missing, stale, duplicate, and failed execution evidence", () => {
         const directory = fs.mkdtempSync(path.join(os.tmpdir(), "new4-joined-evidence-"));
         temporary.push(directory);
-        const run = "run-attempt";
+        const run = "1234";
+        const attempt = 1;
+        const executionId = `${run}-${attempt}`;
         const commit = "head-sha";
         const cases = [
             { file: "new/j.spec.ts", line: 1, titles: ["first"] },
             { file: "new/s.spec.ts", line: 2, titles: ["second"] },
         ];
         for (const index of [1, 2]) {
-            const logs = path.join(directory, `new-4-${index}`, "job_logs");
+            const logs = path.join(
+                directory,
+                `e2e-artifacts-chromium-new-4-${index}-${executionId}`,
+                "job_logs",
+            );
             fs.mkdirSync(logs, { recursive: true });
             const owned = [cases[index - 1]];
-            fs.writeFileSync(path.join(logs, `new-4-full-${run}.json`), JSON.stringify({
+            fs.writeFileSync(path.join(logs, `new-4-full-${executionId}.json`), JSON.stringify({
                 cases: cases.map(test => ({ ...test, project: "new-4", browser: "chromium" })),
             }));
-            fs.writeFileSync(path.join(logs, `new-4-${index}-expected-${run}.json`), JSON.stringify({
+            fs.writeFileSync(path.join(logs, `new-4-${index}-expected-${executionId}.json`), JSON.stringify({
                 cases: owned.map(test => ({ ...test, project: "new-4", browser: "chromium" })),
             }));
             fs.writeFileSync(path.join(logs, "execution-context.json"), JSON.stringify({
                 browserEngine: "chromium",
                 project: "new-4",
                 ciShard: `new-4-${index}`,
-                executionId: run,
+                executionId,
                 commit,
                 status: "success",
             }));
-            fs.writeFileSync(path.join(logs, `new-4-${index}-execution-${run}.json`), JSON.stringify({
+            fs.writeFileSync(path.join(logs, `new-4-${index}-execution-${executionId}.json`), JSON.stringify({
                 mode: "execution",
                 status: "passed",
                 engine: "chromium",
                 project: "new-4",
                 ciShard: `new-4-${index}`,
                 shard: `${index}/2`,
-                executionId: run,
+                executionId,
                 commit,
                 cases: owned.map(test => ({ ...test, attempts: [{ retry: 0, status: "passed" }] })),
             }));
@@ -105,10 +109,15 @@ describe("ENV-5997c1a0: complete native new-4 sharding", () => {
                 path.join(root, "scripts/ci/verify-new4-shards.mjs"),
                 directory,
                 run,
+                "2",
                 commit,
             ], { encoding: "utf8" });
         expect(verify().status).toBe(0);
-        const report = path.join(directory, "new-4-2/job_logs", `new-4-2-execution-${run}.json`);
+        const report = path.join(
+            directory,
+            `e2e-artifacts-chromium-new-4-2-${executionId}/job_logs`,
+            `new-4-2-execution-${executionId}.json`,
+        );
         const original = fs.readFileSync(report, "utf8");
         fs.rmSync(report);
         expect(verify().status).not.toBe(0);

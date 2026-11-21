@@ -1,8 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const [root, executionId, commit] = process.argv.slice(2);
-if (!root || !executionId || !commit) throw new Error("usage: verify-new4-shards.mjs ROOT EXECUTION_ID COMMIT");
+const [root, runId, currentAttemptText, commit] = process.argv.slice(2);
+const currentAttempt = Number(currentAttemptText);
+if (!root || !runId || !Number.isInteger(currentAttempt) || currentAttempt < 1 || !commit) {
+    throw new Error("usage: verify-new4-shards.mjs ROOT RUN_ID CURRENT_ATTEMPT COMMIT");
+}
 
 function read(file, description) {
     try {
@@ -17,7 +20,16 @@ let canonicalFull;
 const joined = [];
 
 for (const index of [1, 2]) {
-    const directory = path.join(root, `new-4-${index}`, "job_logs");
+    const prefix = `e2e-artifacts-chromium-new-4-${index}-${runId}-`;
+    const attempts = fs.readdirSync(root, { withFileTypes: true })
+        .filter(entry => entry.isDirectory() && entry.name.startsWith(prefix))
+        .map(entry => ({ entry: entry.name, attempt: Number(entry.name.slice(prefix.length)) }))
+        .filter(candidate => Number.isInteger(candidate.attempt) && candidate.attempt <= currentAttempt)
+        .sort((left, right) => right.attempt - left.attempt);
+    if (!attempts.length) throw new Error(`No new-4-${index} execution artifact exists for this run`);
+    const selected = attempts[0];
+    const executionId = `${runId}-${selected.attempt}`;
+    const directory = path.join(root, selected.entry, "job_logs");
     const context = read(path.join(directory, "execution-context.json"), "execution context");
     const full = read(path.join(directory, `new-4-full-${executionId}.json`), "unsharded inventory");
     const expected = read(path.join(directory, `new-4-${index}-expected-${executionId}.json`), "shard inventory");
