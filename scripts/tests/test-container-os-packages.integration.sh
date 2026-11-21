@@ -11,11 +11,14 @@ cp "$repo_root/scripts/verify-test-container-os-tools.sh" "$fixture/verify.sh"
 readonly fixture_setup_timeout_seconds=180
 readonly unavailable_fetch_timeout_seconds=30
 readonly unavailable_shutdown_grace_seconds=5
-# This watchdog is started inside the already-provisioned fixture, immediately
-# before the case. It leaves ten seconds beyond the inner timeout and grace.
+# This receipt-producing watchdog runs inside the already-provisioned fixture.
+# It leaves five seconds beyond the fetch timeout and shutdown grace.
+readonly unavailable_inner_watchdog_seconds=40
+# The host watchdog starts immediately before docker run and remains outside
+# the receipt-producing watchdog, so it cannot win during normal completion.
 readonly unavailable_outer_watchdog_seconds=45
-# Docker/BuildKit must reach the case RUN instruction inside this separately
-# enforced preparation phase. The case watchdog starts only after that marker,
+# Docker/BuildKit must finish the unavailable image in this separately enforced
+# preparation phase. Only a subsequent docker run starts the case watchdog,
 # composing a 75-second maximum for unavailable setup plus case execution.
 readonly negative_case_setup_timeout_seconds=30
 
@@ -29,19 +32,6 @@ cat > "$fixture/Dockerfile" <<'EOF_DOCKER'
 FROM outliner-apt-regression:fixture
 ARG CASE
 RUN case "$CASE" in \
-      unavailable) printf 'APT::Update::Error-Mode "any";\n' >/tmp/apt-fixture.conf; \
-        find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
-          -exec sed -Ei 's#https?://[^ /]+#http://127.0.0.1:18081#g' {} +; \
-        printf 'NEGATIVE_CASE_PHASE_%s=%s\n' STARTED "$(date +%s%N)"; \
-        set +e; \
-        timeout --signal=TERM --kill-after=__OUTER_KILL_AFTER__ __OUTER_TIMEOUT__ \
-          sh -c 'set +e; "$@"; status=$?; echo "INSTALLER_EXIT_STATUS=$status"; exit "$status"' sh \
-            env APT_CONFIG=/tmp/apt-fixture.conf \
-            APT_ACQUISITION_BUDGET_SECONDS=__UNAVAILABLE_FETCH_TIMEOUT__ \
-            APT_ACQUISITION_SHUTDOWN_GRACE_SECONDS=__UNAVAILABLE_SHUTDOWN_GRACE__ \
-            APT_PRIMARY_HOST=127.0.0.1:18081 APT_FALLBACK_HOST=127.0.0.1:18082 \
-            /usr/local/bin/install-test-container-os-packages outliner-fixture-unavailable; \
-        status=$?; echo "UNAVAILABLE_WATCHDOG_EXIT_STATUS=$status"; exit "$status" ;; \
       slow) python3 -c 'import socket,time; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1); s.bind(("127.0.0.1",18080)); s.listen(); c,_=s.accept(); time.sleep(300)' & \
         sleep 1; \
         find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
@@ -55,12 +45,28 @@ RUN case "$CASE" in \
       *) exit 64 ;; \
     esac
 EOF_DOCKER
+
+cat > "$fixture/Dockerfile.unavailable" <<'EOF_DOCKER'
+FROM outliner-apt-regression:fixture
+RUN printf 'APT::Update::Error-Mode "any";\n' >/tmp/apt-fixture.conf && \
+    find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
+      -exec sed -Ei 's#https?://[^ /]+#http://127.0.0.1:18081#g' {} +
+CMD set +e; \
+    timeout --signal=TERM --kill-after=__OUTER_KILL_AFTER__ __OUTER_TIMEOUT__ \
+      sh -c 'set +e; "$@"; status=$?; echo "INSTALLER_EXIT_STATUS=$status"; exit "$status"' sh \
+        env APT_CONFIG=/tmp/apt-fixture.conf \
+        APT_ACQUISITION_BUDGET_SECONDS=__UNAVAILABLE_FETCH_TIMEOUT__ \
+        APT_ACQUISITION_SHUTDOWN_GRACE_SECONDS=__UNAVAILABLE_SHUTDOWN_GRACE__ \
+        APT_PRIMARY_HOST=127.0.0.1:18081 APT_FALLBACK_HOST=127.0.0.1:18082 \
+        /usr/local/bin/install-test-container-os-packages outliner-fixture-unavailable; \
+    status=$?; echo "UNAVAILABLE_WATCHDOG_EXIT_STATUS=$status"; exit "$status"
+EOF_DOCKER
 sed -i \
     -e "s/__UNAVAILABLE_FETCH_TIMEOUT__/${unavailable_fetch_timeout_seconds}/g" \
     -e "s/__UNAVAILABLE_SHUTDOWN_GRACE__/${unavailable_shutdown_grace_seconds}/g" \
-    -e "s/__OUTER_TIMEOUT__/${unavailable_outer_watchdog_seconds}/g" \
+    -e "s/__OUTER_TIMEOUT__/${unavailable_inner_watchdog_seconds}/g" \
     -e "s/__OUTER_KILL_AFTER__/${unavailable_shutdown_grace_seconds}/g" \
-    "$fixture/Dockerfile"
+    "$fixture/Dockerfile.unavailable"
 
 cat > "$fixture/Dockerfile.success" <<'EOF_DOCKER'
 FROM mcr.microsoft.com/playwright:v1.64.1-jammy
@@ -94,6 +100,12 @@ grep -q 'Required OS package is not installed: python3-pip' "$fixture/verify-mis
 timeout "$fixture_setup_timeout_seconds" docker build --no-cache \
     -f "$fixture/Dockerfile.fixture" -t outliner-apt-regression:fixture "$fixture"
 
+# Complete fixture-specific preparation before the installer is admitted. These
+# are separate bounded processes, so delayed BuildKit output cannot consume the
+# installer's timeout or shutdown grace.
+timeout "$negative_case_setup_timeout_seconds" docker build --no-cache \
+    -f "$fixture/Dockerfile.unavailable" -t outliner-apt-regression:unavailable "$fixture"
+
 for negative_case in unavailable slow missing; do
     log="$fixture/${negative_case}.log"
     if [[ $negative_case != unavailable ]]; then
@@ -109,9 +121,9 @@ for negative_case in unavailable slow missing; do
     fi
 
     set +e
-    "$repo_root/scripts/tests/run-bounded-docker-build.sh" \
-        "$negative_case_setup_timeout_seconds" "$unavailable_outer_watchdog_seconds" "$log" \
-        docker build --progress=plain --build-arg "CASE=${negative_case}" "$fixture"
+    timeout --signal=TERM --kill-after="$unavailable_shutdown_grace_seconds" \
+        "$unavailable_outer_watchdog_seconds" \
+        docker run --rm outliner-apt-regression:unavailable >"$log" 2>&1
     status=$?
     set -e
     if ! "$repo_root/scripts/tests/verify-container-negative-case.sh" "$negative_case" "$status" "$log"; then
