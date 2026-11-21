@@ -16,15 +16,17 @@
     import { DemoInitAborted } from "../../lib/demoInit";
     import { openRouteProject, type RouteProjectHandle } from "../../lib/routeProject";
     import { Project } from "$shared/app-schema";
+    import type { CalendarObservationContextV1 } from "$shared/notifications/calendarProjection";
 
     const logger = getLogger("CalendarStandalonePage");
 
     interface Props {
         projectName: string;
         calendarName: string;
+        observationContext?: CalendarObservationContextV1;
     }
 
-    let { projectName, calendarName }: Props = $props();
+    let { projectName, calendarName, observationContext }: Props = $props();
 
     // Page state
     let error: string | undefined = $state(undefined);
@@ -100,8 +102,10 @@
             const project = Project.fromDoc(store.project.ydoc);
             // The route carries the display name; falling back to the id
             // keeps links written against the identifier working too.
-            const entry = listCalendars(project).find((e) => e.settings.name === calendarName)
-                ?? listCalendars(project).find((e) => e.id === calendarName);
+            const entry = observationContext
+                ? listCalendars(project).find((e) => e.id === calendarName)
+                : listCalendars(project).find((e) => e.settings.name === calendarName)
+                    ?? listCalendars(project).find((e) => e.id === calendarName);
             if (!entry) {
                 logger.warn(`Calendar "${calendarName}" not found in project "${projectName}"`);
                 notFound = true;
@@ -242,7 +246,7 @@
     {:else if calendarId && calendarProject}
         <div class="flex-grow min-h-0 relative border border-gray-200 rounded-md overflow-hidden bg-white p-2">
             {#key calendarId}
-                <CalendarView project={calendarProject} projectId={calendarProjectId} {calendarId} />
+                <CalendarView project={calendarProject} projectId={calendarProjectId} {calendarId} {observationContext} />
             {/key}
         </div>
     {/if}

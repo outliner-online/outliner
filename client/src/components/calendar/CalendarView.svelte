@@ -8,8 +8,9 @@
 // CalendarBlock/the standalone route) — a calendar has no subdoc to key on
 // the way a table does, so the id itself is the remount key.
 
-import { onDestroy, onMount } from "svelte";
+import { onDestroy, onMount, untrack } from "svelte";
 import type { Project } from "$shared/app-schema";
+import type { CalendarObservationContextV1 } from "$shared/notifications/calendarProjection";
 import { utcMsToFloatingDate } from "$shared/utils/zonedTime";
 import * as Y from "yjs";
 import { analyzeCalendarEditability } from "../../services/calendar/calendarEditability";
@@ -86,9 +87,10 @@ interface Props {
     project: Project;
     projectId?: string;
     calendarId: string;
+    observationContext?: CalendarObservationContextV1;
 }
 
-let { project, projectId, calendarId }: Props = $props();
+let { project, projectId, calendarId, observationContext }: Props = $props();
 
 const EMPTY_SETTINGS: CalendarSettings = {
     name: "",
@@ -115,7 +117,7 @@ let result = $state<TableQueryResult>({ columns: [], rows: [] });
 let queryError = $state<string | undefined>(undefined);
 let writeError = $state<string | undefined>(undefined);
 let catalogResultCurrent = $state(false);
-let anchorUtcMs = $state(Date.now());
+let anchorUtcMs = $state(untrack(() => observationContext?.anchorUtcMs) ?? Date.now());
 let optimisticOverrides = $state<OptimisticOverrides>(createOptimisticOverrides());
 let showCreateDialog = $state(false);
 let createDefaultStartMs = $state<number | undefined>(undefined);
@@ -136,22 +138,23 @@ const writableColumns = $derived(analyzeCalendarColumnWritability(settings.query
 // and the grid range below is computed in it, so two collaborators viewing a
 // calendar with a fixed timezone see the same window regardless of either
 // viewer's own local zone.
-const timeZone = $derived(resolveCalendarTimezone(settings.timezone));
+const timeZone = $derived(observationContext?.timeZone ?? resolveCalendarTimezone(settings.timezone));
 const timeZoneOptions = listSupportedTimeZones();
-const weekStart = $derived(settings.weekStart ?? resolveDefaultWeekStart());
+const weekStart = $derived(observationContext?.weekStart ?? settings.weekStart ?? resolveDefaultWeekStart());
 const workingHoursStart = $derived(settings.workingHoursStartMinutes ?? DEFAULT_WORKING_HOURS_START_MINUTES);
 const workingHoursEnd = $derived(settings.workingHoursEndMinutes ?? DEFAULT_WORKING_HOURS_END_MINUTES);
 const KNOWN_VIEW_TYPES = new Set<CalendarViewType>(["day", "hours", "days", "week", "month"]);
-const isGantt = $derived(settings.viewType === "gantt");
+const effectiveViewType = $derived(observationContext?.viewType ?? settings.viewType);
+const isGantt = $derived(effectiveViewType === "gantt");
 // A stored viewType this component does not know how to grid (a stale
 // value) falls back to "week" rather than crashing the range computation,
 // which is only total over the known variants. Irrelevant when `isGantt`,
 // which uses its own scale/range below.
 const viewType = $derived(
-    KNOWN_VIEW_TYPES.has(settings.viewType as CalendarViewType) ? (settings.viewType as CalendarViewType) : "week",
+    KNOWN_VIEW_TYPES.has(effectiveViewType as CalendarViewType) ? (effectiveViewType as CalendarViewType) : "week",
 );
 const ganttScale = $derived(
-    GANTT_SCALES.has(settings.ganttScale as GanttScale) ? (settings.ganttScale as GanttScale) : DEFAULT_GANTT_SCALE,
+    observationContext?.ganttScale ?? (GANTT_SCALES.has(settings.ganttScale as GanttScale) ? (settings.ganttScale as GanttScale) : DEFAULT_GANTT_SCALE),
 );
 const range = $derived(
     isGantt ? computeGanttRange(anchorUtcMs, ganttScale, timeZone) : computeViewRange(anchorUtcMs, viewType, weekStart, timeZone),
@@ -194,7 +197,7 @@ function laneLabelForEntry(entry: CalendarEntry): string {
 }
 
 const monthLaneFilterOptions = $derived(lanes?.map((lane) => collapseLanePath(lane.path)) ?? []);
-let monthLaneFilter = $state<string | undefined>(undefined);
+let monthLaneFilter = $state<string | undefined>(untrack(() => observationContext?.monthLaneFilter) ?? undefined);
 const monthFilteredEntries = $derived(
     groupingActive && monthLaneFilter !== undefined
         ? placedEntries.filter((entry) => laneLabelForEntry(entry) === monthLaneFilter)
@@ -714,6 +717,7 @@ onDestroy(() => {
             ticks={ganttTicks}
             scale={ganttScale}
             {timeZone}
+            initialCollapsedEntryKeys={observationContext?.collapsedEntryKeys ?? []}
             onScaleChange={commitGanttScale}
             isLeafStartWritable={isStartWritable}
             isLeafDurationWritable={isDurationWritable}

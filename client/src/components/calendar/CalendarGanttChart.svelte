@@ -11,6 +11,7 @@
 // project doc (§6.7): folding a subtree here must not fold it for anyone
 // else, and it is not worth an undo entry.
 
+import { untrack } from "svelte";
 import { SvelteSet } from "svelte/reactivity";
 import { formatDragMoveLabel, formatDragResizeLabel, formatSubtreeShiftLabel } from "../../services/calendar/calendarDragLabel";
 import type { CalendarEntry } from "../../services/calendar/calendarEntries";
@@ -39,6 +40,7 @@ interface Props {
     scale: GanttScale;
     /** The calendar's own timezone (§6.5) — the drag tooltip formats in it, never viewer-local. */
     timeZone: string;
+    initialCollapsedEntryKeys?: readonly string[];
     onScaleChange: (scale: GanttScale) => void;
     isLeafStartWritable: (entry: CalendarEntry) => boolean;
     isLeafDurationWritable: (entry: CalendarEntry) => boolean;
@@ -71,6 +73,7 @@ let {
     ticks,
     scale,
     timeZone,
+    initialCollapsedEntryKeys = [],
     onScaleChange,
     isLeafStartWritable,
     isLeafDurationWritable,
@@ -92,7 +95,7 @@ let {
 /** Pointer travel below this is a click, not a drag (#4982). */
 const CLICK_TOLERANCE_PX = 4;
 
-const collapsedKeys = new SvelteSet<string>();
+const collapsedKeys = new SvelteSet<string>(untrack(() => initialCollapsedEntryKeys));
 
 /**
  * Double-click opens the row's source item. Stopped here so it never reaches
