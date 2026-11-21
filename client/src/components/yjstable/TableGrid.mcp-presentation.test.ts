@@ -75,7 +75,7 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
         const branchA =
             "SELECT 'choices' AS source_kind, id AS source_id, observed_on AS value, hidden AS hidden FROM choices";
         const branchB =
-            "SELECT 'notes' AS source_kind, id AS source_id, observed_at AS value, hidden AS hidden FROM notes";
+            "SELECT 'notes' AS source_kind, id AS source_id, observed_at + INTERVAL '0 seconds' AS value, hidden AS hidden FROM notes";
         const grid = getGridHandles(
             projectDoc,
             createGrid(projectDoc, {
@@ -92,9 +92,10 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
                 timeout: 30000,
             });
             // PostgreSQL promotes DATE and TIMESTAMP branches to one result
-            // OID, while accepted source schemas still select date versus
-            // text rendering. Tie each native control and projection cell to
-            // its occurrence so a source-blind text fallback cannot pass.
+            // OID. The first occurrence uses its accepted DATE field; the
+            // second is a computed output with no physical candidate and uses
+            // the typed fallback. Tie both controls and projection cells to
+            // their occurrences so a source-blind fallback cannot pass.
             const dateCell = view.container.querySelector("tr[data-record-id='choices:same'] td[data-col='value']")!;
             const textCell = view.container.querySelector("tr[data-record-id='notes:same'] td[data-col='value']")!;
             await waitFor(() => expect(dateCell.querySelector("input[type='date']")).toHaveValue("2026-11-21"));
@@ -118,7 +119,11 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
             await waitFor(() => expect(view.container.querySelectorAll("td[data-col='value'] button")).toHaveLength(2));
             const textProjection = getGridProjection(grid.gridId);
             if (textProjection.status !== "ready") throw new Error("Expected accepted text projection");
-            expect(textProjection).not.toEqual(initial);
+            expect(textProjection.projection.rows).toEqual([
+                [{ value: "2026-11-21T00:00:00.000Z" }],
+                [{ value: "2026-11-22T12:34:56.000Z" }],
+            ]);
+            expect(textProjection).not.toEqual(initial); // normalization changed, not merely renderer identity
 
             // Prove the changed hidden value reached a fresh accepted result,
             // then hide it again and compare only the displayed table content.
@@ -133,7 +138,17 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
             await waitFor(() => expect(getGridProjection(grid.gridId)).toEqual(textProjection));
 
             setRecordValue(notes, "same", "observed_at", "2026-11-23 01:02:03");
-            await waitFor(() => expect(getGridProjection(grid.gridId)).not.toEqual(textProjection));
+            await waitFor(() =>
+                expect(getGridProjection(grid.gridId)).toMatchObject({
+                    status: "ready",
+                    projection: {
+                        rows: [
+                            [{ value: "2026-11-21T00:00:00.000Z" }],
+                            [{ value: "2026-11-23T01:02:03.000Z" }],
+                        ],
+                    },
+                })
+            );
             await waitFor(() =>
                 expect(
                     view.container.querySelector("tr[data-record-id='notes:same'] td[data-col='value'] button"),
@@ -164,15 +179,19 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
             await waitFor(() => expect(view.container.querySelectorAll("tbody tr")).toHaveLength(2));
             await waitFor(() => expect(view.container.querySelectorAll("td[data-col='value'] button")).toHaveLength(2));
             expect(view.container.querySelector("td[data-col='value'] input[type='date']")).toBeNull();
-            const ambiguousValues = [...view.container.querySelectorAll("td[data-col='value'] button")].map(cell =>
-                cell.textContent!
-            );
+            const ambiguousValues = ["2026-11-21T00:00:00.000Z", "2026-11-22T12:34:56.000Z"];
+            expect([...view.container.querySelectorAll("td[data-col='value'] button")].map(cell => cell.textContent))
+                .toEqual(ambiguousValues);
             await waitFor(() =>
                 expect(getGridProjection(grid.gridId)).toMatchObject({
                     status: "ready",
                     projection: { rows: ambiguousValues.map(value => [{ value }]) },
                 })
             );
+            const ambiguousProjection = getGridProjection(grid.gridId);
+            setGridComponentField(grid, "value", "type", "text");
+            await waitFor(() => expect(getGridProjection(grid.gridId)).toEqual(ambiguousProjection));
+            setGridComponentField(grid, "value", "type", undefined);
 
             // The UI deliberately retains the last successful rows while a
             // replacement query is invalid, but comparable content must not
@@ -180,12 +199,26 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
             // restores publication without remounting the Grid.
             setGridQuery(grid, "SELECT missing_column AS value FROM choices");
             await waitFor(() => expect(getGridProjection(grid.gridId)).toMatchObject({ status: "unavailable" }));
-            expect(view.container.querySelectorAll("tbody tr")).toHaveLength(2);
+            expect([...view.container.querySelectorAll("td[data-col='value'] button")].map(cell => cell.textContent))
+                .toEqual(ambiguousValues);
+            setRecordValue(notes, "same", "observed_at", "2026-11-24 04:05:06");
             setGridQuery(
                 grid,
                 "SELECT observed_on AS value FROM choices UNION ALL SELECT observed_at AS value FROM notes ORDER BY value",
             );
-            await waitFor(() => expect(getGridProjection(grid.gridId)).toMatchObject({ status: "ready" }));
+            const recoveredValues = ["2026-11-21T00:00:00.000Z", "2026-11-24T04:05:06.000Z"];
+            await waitFor(() =>
+                expect(getGridProjection(grid.gridId)).toMatchObject({
+                    status: "ready",
+                    projection: { rows: recoveredValues.map(value => [{ value }]) },
+                })
+            );
+            await waitFor(() =>
+                expect(
+                    [...view.container.querySelectorAll("td[data-col='value'] button")].map(cell => cell.textContent),
+                )
+                    .toEqual(recoveredValues)
+            );
         } finally {
             view.unmount();
             projectDoc.destroy();

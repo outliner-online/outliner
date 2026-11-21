@@ -192,13 +192,13 @@ export function projectGridTable(input: GridProjectionInput): GridProjectionResu
         return { status: "unavailable", reason: "Grid result column metadata is incomplete" };
     }
     const columns = gridVisibleColumns(input.columns, input.columnOrder, input.hiddenColumns);
-    const incoherentTarget = input.rowTargets.some((target) =>
-        target.source && columns.some((column) => {
-            const candidates = input.physicalColumns.filter((candidate) => candidate.outputColumn === column);
-            return candidates.length > 0
-                && !candidates.some((candidate) => candidate.source.sqlName === target.source!.sourceKind);
-        })
-    );
+    // A proven branch may legitimately compute one output, so that occurrence
+    // has no physical candidate for that column and uses the result OID just
+    // like TableGrid. Refuse only sources absent from the complete accepted
+    // provenance, not a known source that lacks a mapping for one output.
+    const acceptedSources = new Set(input.physicalColumns.map(candidate => candidate.source.sqlName));
+    const incoherentTarget = input.metadataStatus === "resolved"
+        && input.rowTargets.some(target => target.source && !acceptedSources.has(target.source.sourceKind));
     if (incoherentTarget) {
         return { status: "unavailable", reason: "Grid row source evidence does not match the accepted result" };
     }

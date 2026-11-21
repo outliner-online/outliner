@@ -109,7 +109,7 @@ describe("Grid table projection", () => {
         });
     });
 
-    it("selects occurrence-aligned heterogeneous fields and falls back only for authoritative ambiguity", () => {
+    it("uses typed fallback for a computed occurrence from a known accepted source", () => {
         const input: GridProjectionInput = {
             ...base(),
             columns: ["value"],
@@ -133,10 +133,12 @@ describe("Grid table projection", () => {
                     },
                 },
                 {
-                    outputColumn: "value",
-                    physicalColumn: "value",
+                    // Beta is proven by its row identity mapping, while its
+                    // displayed value is computed and has no physical field.
+                    outputColumn: "source_id",
+                    physicalColumn: "id",
                     source: { kind: "table", id: "b", sqlName: "beta", schemaRevision: "1" },
-                    field: { name: "value", kind: "text", dataType: "text", isNullable: false, isPrimaryKey: false },
+                    field: { name: "id", kind: "text", dataType: "text", isNullable: false, isPrimaryKey: true },
                 },
             ],
             metadataStatus: "resolved",
