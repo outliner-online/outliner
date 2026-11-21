@@ -1,151 +1,113 @@
 # CI duration review issues
 
-The **CI Duration Monitor** workflow runs daily at **21:43 UTC (06:43 JST)**.
-It reads completed GitHub Actions attempts and submits an English improvement
-issue when a job's runner execution reaches **600 seconds or more**. GitHub may
-start a scheduled workflow later than its cron time.
+The daily workflow runs at **21:43 UTC (06:43 JST)**. Qualification uses GitHub's
+native job/step `started_at`, `completed_at`, `status` and `conclusion` fields.
+There is no log parsing, reporter instrumentation, JSON test-result admission,
+percentage conversion, per-file timing requirement or two-run admission barrier.
+The monitor does not implement sharding.
 
-## What the monitor measures
+## Admission before existing duplicate handling
 
-The threshold is `completed_at - started_at` for an actual job, including its
-setup, test commands and cleanup. Runner queue time is reported separately and
-does not contribute to the threshold. Successful, failed and timed-out completed
-jobs can supply evidence; cancelled, skipped and unfinished jobs do not.
+A candidate needs all of the following:
 
-The default scan discovers runs **created during the preceding 48 hours**, which
-overlaps consecutive daily scans. Each run attempt is inspected separately, and
-paginated jobs are read from that attempt. GitHub can retain an earlier successful
-job's execution timestamps in a later attempt view while giving that row a newer
-creation timestamp; its queue duration is unknown rather than negative or zero.
-Such an attempt row is not evidence of a fresh execution, and the original job
-completion timestamp remains the authority for whether an observation is newer
-than an issue's closure. Detection considers every eligible observation in the scan window. Issue evidence
-shows the latest five observations per logical family, plus an older qualifying
-observation when needed to explain the trigger. A qualifying observation opens an
-issue without requiring multiple slow days.
+1. Verified repository/default-branch metadata and an active workflow at its
+   exact configured path. Its current YAML, local reusable workflow chain and
+   static matrix declare the exact job variant and execution step names.
+2. Either a default-branch push/manual/scheduled execution, or a same-repository
+   PR run with GitHub-native PR/base repository identities targeting the default
+   branch. Workflow/entrypoint source bytes at the immutable observed SHA must
+   match the verified default branch. A matching display name alone is not proof.
+3. A configured, reviewed **separated execution contract**. All matching exact
+   test steps must complete successfully, with usable intervals inside the job.
+   Their total execution must reach **600 seconds** and at least half of the job's
+   runner execution. Setup, acquisition, build, queue time and workflow totals
+   cannot qualify a family on their own.
 
-A workflow's total time can exceed ten minutes because of dependency ordering,
-queueing or aggregation even when its individual jobs remain shorter. Those
-workflow totals remain diagnostic evidence; they do not create job-splitting
-issues by themselves. Missing timestamps remain unknown.
+Normal retries remain part of the successful test execution step. A successful
+Playwright retry does not erase a genuine ten-minute test process. Step elapsed
+time includes the normal test harness and fixtures; it is not claimed as pure
+individual test-body time or a prediction of sharding savings.
 
-The test-command step duration is an indicator for investigation. It can include
-fixture setup, retries and harness work inside the command. It is not a native
-pytest, Mocha, Vitest or Playwright phase measurement. The issue asks reviewers to
-inspect native durations and distinguish test work from dependency acquisition
-before choosing a split or setup optimization.
+`report.json` exposes `admission` and `admission_summary` before existing issue
+reconciliation: qualifying candidate job IDs, matching open issues, families
+that qualify with an existing issue, new qualifying families, and insufficient
+or diagnostic evidence. **Insufficient evidence is not reported as duplication.**
+The existing repository/workflow/family identity, open-issue lookup, evidence
+markers, reviewer-body preservation, consumed readiness and closure checks remain
+unchanged. Already recorded queued evidence remains unchanged; new evidence follows
+existing reconciliation. Closed issues stay closed unless later qualifying
+execution satisfies the existing post-closure rule.
 
-## Monitored workflows and job families
+## Actual execution boundaries
 
-[`.github/ci-duration-monitor.json`](../.github/ci-duration-monitor.json) is the
-explicit monitoring configuration. It includes the main `CI` workflow, manually
-invoked unit/integration/server/E2E workflows, on-premises Compose tests,
-devcontainer Firebase smoke, test-container validation, and both schedule Hosting
-contract workflows. Deployment, image publication and the monitor itself are
-outside this configuration.
+| Family                                                       | Execution boundary                                                                                                                                                                                                                                                                                                                                                               |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unit                                                         | Existing `Setup Test Environment`, then `Run unit tests`: the existing package command runs both unit Vitest and base-path Vitest verification. No command or selection changes.                                                                                                                                                                                                 |
+| Integration                                                  | Existing setup, then the existing `Run integration tests` Vitest command.                                                                                                                                                                                                                                                                                                        |
+| Server                                                       | Existing setup plus `Prepare server test runtime` runs the exact former `SKIP_SERVER_START=1 SKIP_PORT_WAIT=1 bash scripts/setup.sh` with the original environment. `Run server tests` invokes `npm run test:prepared`, retaining npm’s executable PATH/context for the prepared Mocha command, with the same loaders, exclusions, timeout, `--exit`, pipefail and log pipeline. |
+| Canonical project directory                                  | Existing setup, then the existing explicit four-file Mocha command.                                                                                                                                                                                                                                                                                                              |
+| Chromium/Firefox E2E                                         | Existing dependency setup/build/startup, then exact `Run E2E tests (variant)`. This includes current `new-4`, `new-3a` and `new-3b`; reporter format is irrelevant. The `onprem` matrix variant still builds production output inside its wrapper and remains diagnostic.                                                                                                        |
+| Compose, Hosting wrappers, devcontainer and container guards | Diagnostic until their own acquisition/preflight can be verified as separated from execution. Unknown fallback jobs remain diagnostic.                                                                                                                                                                                                                                           |
 
-The main workflow invokes reusable test workflows, so GitHub names jobs such as
-`unit-test / unit-test` and `e2e-test / e2e-test (new-2-1)`. The configuration
-recognizes these names as well as direct manual runs. Chromium E2E shards share
-one family, while Firefox E2E shards have a separate family. The existing
-`new-2`, `new-3` and `tables` partitions therefore do not each create duplicate
-issues for the same browser suite. Unit, integration, server and canonical
-project-directory tests remain separate.
+`npm test` in `server` retains its local default: perform the same preparation,
+then execute the same Mocha selection. The CI-only prepared command is factored
+into `scripts/run-server-test-command.sh`; it does not replace preparation with
+trust in `.setup-installed`. The prepared path verifies local Mocha and ts-node prerequisites and fails rather
+than allowing npx to acquire a missing runner inside the timed execution.
+Generic setup can still install, build, stop PM2/
+emulators and wait even when a sentinel exists, so that work is explicitly timed
+outside the CI test step. Required checks, retries, job timeouts and topology are
+preserved. No full test suite is added or repeated.
 
-Other job names in a monitored workflow use their exact name as a fallback
-family. Independent build, lint and guard jobs consequently retain independent
-issues. Add explicit family expressions only for jobs that really share one
-bounded test or work selection. Review both the job expression and the
-`test_step_pattern`: a build step named "Build test image" is still a build.
+## Owner evidence and historical limits
 
-## Issue handoff and recovery
+GitHub job `136798530012`, run `44885392240`, attempt 2, reports new-4 success:
+**1,090 job seconds**, **1,003 test-step seconds**, 43 dependency seconds and 28
+startup seconds. The actual test command ran about 08:36:15.684–08:52:58.233 UTC;
+its one legitimate retry remains inside the measured execution. This is an
+eligible execution candidate before lookup of existing Chromium issue #5997.
+Unit job `136731411619` reports **887 job / 721 execution seconds**, with setup
+already separated. Server job `136731411435` reports **965 / 802 seconds**, but
+its historical wrapper included nested generic preparation: that historical
+802 seconds is not retroactively relabeled as pure Mocha time. Forward server
+measurement is trustworthy only with the reviewed separated preparation contract.
+The exact measured API rows are regression fixtures for the current contract.
 
-The monitor uses the `ci-duration-monitor` label plus durable hidden identity and
-evidence markers. The identity includes the repository, workflow and logical
-family. Overlapping scans reuse an open issue instead of creating another issue
-for each shard or rerun. New evidence is added in comments, preserving the
-reviewers' issue body, Objective and Requirements.
+The closed false positives remain diagnostic: #5998 failed dependency setup
+without tests; #5999 spent 376s installing Playwright versus 268s verifying;
+#6000/#6001 spent 553s/595s acquiring dependencies versus 41s/34s verifying;
+#6003 was a retired PR prototype with a 649s image build. Setup timing is retained,
+including shared cross-family setup groups, without creating per-family issues.
 
-A new issue is created with its complete body, then receives a durable identity
-comment, and **`review-ready` is added in a separate final submission operation**.
-The repository must already provide that readiness label. The monitor can create
-its own `ci-duration-monitor` label when needed. Readiness is not attached to a
-partially created specification.
+A read-only scan before this change merges cannot certify the new server helper
+as default-branch source. Its historical mixed boundary remains explicit
+insufficient evidence. Existing queued #5995/#5996/#5997 are not modified by
+verification, and an admission count of zero must never be called merely a
+successful duplicate check.
 
-If publication is interrupted, the next scan reconciles the existing issue and
-comments before continuing. An unfinished submission can recover from its retained
-complete specification and evidence even after the original run ages out of the
-48-hour discovery window. If reviewers have changed an unfinished issue into an
-incomplete specification, the monitor withholds `review-ready` until that
-specification is complete. A lost response does not authorize blindly repeating
-an issue creation. A previously applied `review-ready` label is recognized from
-the issue events even if reviewers have since removed it; the monitor does not
-put a consumed label back. A closed issue is retained, and only new qualifying
-observations completed after its closure can start another issue for that family.
+## Operation and verification
 
-Each generated issue contains a short Objective, observed run/attempt/job links,
-job and queue timings, slow-step evidence, numbered Requirements, acceptance
-scenarios and a repository-grounded initial implementation prompt. The requested
-follow-up preserves the full test selection, browser coverage, native failures
-and existing validation gates. The monitor does not modify shard counts or CI
-timeouts itself.
+Default discovery covers completed runs created in the prior 48 hours, with
+attempt-specific paginated jobs. Old retained job completion timestamps remain
+authoritative. Incomplete pagination, auth, source or workflow metadata fails
+closed before writes. No log/artifact endpoint is needed for qualification.
 
-`review-ready` is the requested handoff signal. Issues created with the workflow's
-`GITHUB_TOKEN` do not normally trigger another Actions workflow through an
-`issues` event. A consumer must observe the submitted issues through its existing
-polling or other supported intake; this workflow does not provision an external
-reviewer or claim that it has completed a review.
-
-## Running and inspecting the monitor
-
-In Actions, select **CI Duration Monitor → Run workflow** on the default branch.
-The `dry_run` input defaults to `true`: it collects the same evidence and planned
-issue actions without mutations. Select `false` to publish. Pull-request and
-push executions only run the monitor's focused regression tests; they do not
-publish issues. Scheduled and manual runs share a non-cancelling concurrency
-group so their issue reconciliation is serialized.
-
-For a local read-only inspection, supply `GITHUB_TOKEN` through your existing
-authenticated environment and run:
+Manual invocation defaults to dry-run. Pull requests/pushes run verification;
+publication remains confined to the existing authorized workflow events and
+permissions. Mutations are never blindly retried. Interrupted valid submissions
+retain their complete-body/identity/final-readiness sequence; only a current
+separated-step policy receipt can recover a retained submission without new data.
 
 ```bash
-python -m pip install loguru==0.7.3
-python scripts/ci_duration_monitor.py \
-    --repository outliner-online/outliner \
-    --config .github/ci-duration-monitor.json \
-    --source-ref "$(git rev-parse HEAD)"
-```
-
-Add `--publish` only when issue publication is intended. The GitHub Actions token
-has `contents: read`, `actions: read` and `issues: write` for the monitor job;
-regression checks use read-only repository permissions. The transport uses the
-Actions `GITHUB_API_URL` when provided, otherwise GitHub's public REST API.
-
-The CLI also accepts `--lookback-hours N` for a longer recovery scan and
-`--output-dir PATH` for diagnostic output. The workflow uses the 48-hour default;
-there is no lookback input in the manual Actions form. Runs originally created
-before the lookback are not discovered even when an old run is retried recently.
-Use a longer CLI lookback when recovering such attempts. If a run search reaches
-GitHub's result limit, the monitor fails explicitly rather than reporting a
-partial scan as complete.
-
-Reports, summaries and Loguru logs are written under
-`ci-duration-monitor-output/`, and logs also go to standard output. Actions
-retains this directory as an artifact for 14 days, including failure diagnostics.
-The summary shows planned or performed issue actions and workflow-only delays.
-Transient read-only API failures receive bounded retries. Mutations are never
-blindly retried: a failed issue mutation or readiness-label operation, or an API
-read that still fails after its retry allowance, fails the job rather than being
-reported as successful submission.
-
-## Focused verification
-
-```bash
+python -m pip install loguru==0.7.3 PyYAML==6.0.3
+python scripts/ci_duration_monitor.py --repository outliner-online/outliner
 python -m unittest discover -s scripts/tests -p 'test_ci_duration_monitor*.py' -v
+# With the existing server dependencies installed:
+python -m unittest discover -s scripts/tests -p 'test_server_test_boundary.py' -v
 ```
 
-The shared regression suite covers threshold boundaries, attempts and pagination,
-duplicate suppression, publication interruption and reviewer handoff. Repository
-regressions verify the actual configured job families and real HTTP request
-serialization against an isolated local fixture server. They do not contact or
-mutate GitHub issues.
+The CLI is read-only without `--publish`; `--lookback-hours` and `--output-dir`
+control discovery and reports. Tests use isolated GitHub/HTTP boundaries and
+small real Mocha fixtures to check selection, failure exit and setup parity.
+They never change live issues. Reports/logs are retained by the existing Actions
+artifact step for 14 days; logs contain metadata identifiers, not signed log URLs.

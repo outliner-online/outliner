@@ -22,6 +22,11 @@ from urllib.parse import quote, urlencode
 
 from loguru import logger
 
+try:
+    from .ci_duration_policy import CurrentSource
+except ImportError:
+    from ci_duration_policy import CurrentSource
+
 MANAGED_LABEL = "ci-duration-monitor"
 READY_LABEL = "review-ready"
 THRESHOLD_SECONDS = 600
@@ -48,6 +53,8 @@ class Family:
     test_step_pattern: str
     source_paths: tuple[str, ...]
     guidance: str
+    measurement: str = "diagnostic"
+    diagnostic_job_pattern: str = ""
 
 
 @dataclass(frozen=True)
@@ -77,6 +84,8 @@ class Sample:
     family_jobs: int
     fastest_job_seconds: float
     steps: tuple[Step, ...]
+    qualifying_test_step_seconds: float | None = None
+    diagnostic_reason: str | None = None
 
     @property
     def marker(self) -> str:
@@ -213,9 +222,14 @@ def read_config(path: Path) -> tuple[Workflow, ...]:
                 _text(entry.get("test_step_pattern")),
                 tuple(_text(source) for source in sources),
                 _text(entry.get("guidance")),
+                _text(entry.get("measurement", "diagnostic")),
+                str(entry.get("diagnostic_job_pattern", "")),
             )
+            if family.measurement not in {"test-step", "diagnostic"}:
+                raise ValueError("Unsupported test execution policy")
             re.compile(family.job_pattern)
             re.compile(family.test_step_pattern)
+            re.compile(family.diagnostic_job_pattern)
             families.append(family)
         if len({family.key for family in families}) != len(families):
             raise ValueError("Duplicate family key in workflow")
@@ -225,7 +239,7 @@ def read_config(path: Path) -> tuple[Workflow, ...]:
     return tuple(workflows)
 
 
-def collect(client: Client, workflows: tuple[Workflow, ...], cutoff: datetime) -> tuple[list[Observation], list[dict[str, object]]]:
+def collect(client: Client, workflows: tuple[Workflow, ...], cutoff: datetime, source: CurrentSource) -> tuple[list[Observation], list[dict[str, object]]]:
     observations = [Observation(workflow, family, []) for workflow in workflows for family in workflow.families]
     totals: list[dict[str, object]] = []
     for workflow in workflows:
@@ -278,40 +292,62 @@ def collect(client: Client, workflows: tuple[Workflow, ...], cutoff: datetime) -
                     selected = [(job, duration) for job, duration in candidates if re.fullmatch(family.job_pattern, _text(job.get("name")))]
                     if not selected:
                         continue
-                    job, duration = max(selected, key=lambda item: (item[1], _number(item[0].get("id"))))
-                    steps = []
-                    test_seconds = 0.0
-                    matched_test_steps = 0
-                    unknown_test_steps = False
-                    for step in _objects(job.get("steps", [])):
-                        seconds = _seconds(step.get("started_at"), step.get("completed_at"))
-                        name = _text(step.get("name"))
-                        if re.search(family.test_step_pattern, name):
-                            matched_test_steps += 1
+                    for job, duration in selected:
+                        steps = []
+                        test_seconds = 0.0
+                        matched_test_steps = 0
+                        unknown_test_steps = False
+                        for step in _objects(job.get("steps", [])):
+                            seconds = _seconds(step.get("started_at"), step.get("completed_at"))
+                            name = _text(step.get("name"))
+                            if re.search(family.test_step_pattern, name):
+                                matched_test_steps += 1
+                                if step.get("status") != "completed" or seconds is None:
+                                    unknown_test_steps = True
+                                else:
+                                    test_seconds += seconds
                             if step.get("status") != "completed" or seconds is None:
-                                unknown_test_steps = True
+                                continue
+                            steps.append(Step(name, seconds))
+                        reason = source.reason(workflow, family, attempt_run, _text(job.get("name")))
+                        qualifying_seconds = None
+                        if reason is None:
+                            if job.get("conclusion") != "success" or unknown_test_steps or not matched_test_steps:
+                                reason = "test execution is incomplete or unsuccessful"
+                            elif duration < THRESHOLD_SECONDS:
+                                reason = "job execution is below 600 seconds"
+                            elif test_seconds < THRESHOLD_SECONDS:
+                                reason = "separated test execution is below 600 seconds"
+                            elif test_seconds < duration / 2:
+                                reason = "test execution does not dominate the job"
                             else:
-                                test_seconds += seconds
-                        if step.get("status") != "completed" or seconds is None:
-                            continue
-                        steps.append(Step(name, seconds))
-                    observation.samples.append(
-                        Sample(
-                            run_id,
-                            attempt,
-                            _number(job.get("id")),
-                            _text(job.get("name")),
-                            _text(job.get("conclusion")),
-                            _text(attempt_run.get("head_sha")),
-                            _text(job.get("completed_at")),
-                            duration,
-                            _seconds(job.get("created_at"), job.get("started_at")),
-                            round(test_seconds, 3) if matched_test_steps and not unknown_test_steps else None,
-                            len(selected),
-                            min(value for _, value in selected),
-                            tuple(sorted(steps, key=lambda item: item.seconds, reverse=True)[:3]),
+                                allowed = source.execution_step_names(workflow, family, _text(job.get("name")))
+                                measured = [step for step in _objects(job.get("steps", [])) if re.search(family.test_step_pattern, _text(step.get("name")))]
+                                if any(step.get("name") not in allowed or step.get("conclusion") != "success" for step in measured):
+                                    reason = "test step does not match the current successful execution contract"
+                                elif any(_time(step["started_at"]) < _time(job["started_at"]) or _time(step["completed_at"]) > _time(job["completed_at"]) for step in measured):
+                                    reason = "test step interval is outside the job execution"
+                                else:
+                                    qualifying_seconds = round(test_seconds, 3)
+                        observation.samples.append(
+                            Sample(
+                                run_id,
+                                attempt,
+                                _number(job.get("id")),
+                                _text(job.get("name")),
+                                _text(job.get("conclusion")),
+                                _text(attempt_run.get("head_sha")),
+                                _text(job.get("completed_at")),
+                                duration,
+                                _seconds(job.get("created_at"), job.get("started_at")),
+                                round(test_seconds, 3) if matched_test_steps and not unknown_test_steps else None,
+                                len(selected),
+                                min(value for _, value in selected),
+                                tuple(sorted(steps, key=lambda item: item.seconds, reverse=True)[:3]),
+                                qualifying_seconds,
+                                reason,
+                            )
                         )
-                    )
                 completed = [job.get("completed_at") for job in jobs if job.get("completed_at")]
                 elapsed = _seconds(attempt_run.get("run_started_at"), max(completed, key=_time)) if completed else None
                 if elapsed is not None and elapsed >= THRESHOLD_SECONDS:
@@ -337,16 +373,16 @@ def evidence(repository: str, observation: Observation, trigger: Sample) -> str:
     lines = [
         "## Observed CI evidence",
         "",
-        "Job duration excludes queue time. Test-command step duration includes harness/setup/retries inside that step; it is not native test-phase timing.",
+        "Durations come from GitHub job/step timestamps, excluding queue time. Qualification requires the exact successful, separated test execution step to reach 600 seconds and dominate job execution; test retries remain part of that executed step.",
         "",
-        "| Run / attempt | Job | Result | Job seconds | Queue seconds | Test-command seconds | Family min/max seconds |",
-        "| --- | --- | --- | ---: | ---: | ---: | ---: |",
+        "| Run / attempt | Job | Result | Job seconds | Queue seconds | Test-command seconds | Family min/max seconds | Qualifying test-step seconds |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |",
     ]
     for sample in samples:
         url = f"https://github.com/{repository}/actions/runs/{sample.run_id}/job/{sample.job_id}"
         queue = "unknown" if sample.queue_seconds is None else f"{sample.queue_seconds:g}"
         test_time = "unknown" if sample.test_step_seconds is None else f"{sample.test_step_seconds:g}"
-        lines.append(f"| [{sample.run_id} / {sample.attempt}]({url}) | {_safe(sample.job_name)} | {sample.conclusion} | {sample.runner_seconds:g} | {queue} | {test_time} | {sample.fastest_job_seconds:g} / {sample.runner_seconds:g} ({sample.family_jobs} jobs) |")
+        lines.append(f"| [{sample.run_id} / {sample.attempt}]({url}) | {_safe(sample.job_name)} | {sample.conclusion} | {sample.runner_seconds:g} | {queue} | {test_time} | {sample.fastest_job_seconds:g} / {sample.runner_seconds:g} ({sample.family_jobs} jobs) | {sample.qualifying_test_step_seconds if sample.qualifying_test_step_seconds is not None else 'unknown'} |")
     lines += ["", f"Threshold: **{THRESHOLD_SECONDS} seconds or more**. Qualifying attempt completed: `{trigger.completed_at}`; GitHub run head SHA: `{trigger.head_sha}` (the workflow may check out a different merge/head revision).", "", "Longest steps in the qualifying job:"]
     lines += [f"- {_safe(step.name)}: {step.seconds:g} seconds." for step in trigger.steps]
     lines += ["", trigger.marker]
@@ -360,7 +396,7 @@ def issue_body(repository: str, observation: Observation, trigger: Sample, sourc
     source_links = "\n".join(f"- [{path}](https://github.com/{repository}/blob/{quote(source_ref, safe='')}/{quote(path, safe='/')})" for path in family.source_paths)
     template_path = Path(__file__).resolve().parents[1] / ".github" / "ci-duration-issue.md"
     return Template(template_path.read_text(encoding="utf-8")).substitute(
-        identity=_key(repository, observation),
+        identity=_key(repository, observation) + f"\n<!-- ci-duration-policy:v3:separated-test-step:{source_ref} -->",
         family_name=_safe(family.name),
         threshold=THRESHOLD_SECONDS,
         workflow_path=observation.workflow.path,
@@ -405,15 +441,29 @@ def _prepare_labels(client: Client) -> None:
 
 
 def run_monitor(client: Client, workflows: tuple[Workflow, ...], repository: str, source_ref: str, *, now: datetime, lookback_hours: int, publish: bool) -> dict[str, object]:
-    observations, workflow_totals = collect(client, workflows, now - timedelta(hours=lookback_hours))
+    source = CurrentSource(client, _call, repository, request=_request)
+    observations, workflow_totals = collect(client, workflows, now - timedelta(hours=lookback_hours), source)
+    source_ref = source.sha
     # Read the durable issue/comment inventory before any mutation. Unavailable pages cannot
     # silently authorize duplicate issues or readiness re-submission.
     managed = _issues(client)
     actions: list[dict[str, object]] = []
     prepared = False
     processed: set[int] = set()
+    admission = []
     for observation in observations:
-        slow = [sample for sample in observation.samples if sample.runner_seconds >= THRESHOLD_SECONDS]
+        key = _key(repository, observation)
+        existing = [issue.number for issue in managed if issue.state == "open" and
+                    (key in issue.body.splitlines() or any(key in comment.splitlines() for comment in issue.comments))]
+        eligible = [sample for sample in observation.samples if sample.diagnostic_reason is None and sample.qualifying_test_step_seconds is not None]
+        if observation.samples or existing:
+            admission.append({"workflow": observation.workflow.path, "family": observation.family.key,
+                              "qualifying_job_ids": list(dict.fromkeys(sample.job_id for sample in eligible)),
+                              "existing_open_issues": existing,
+                              "classification": "qualifies-existing" if eligible and existing else "qualifies-new" if eligible else "insufficient-evidence",
+                              "diagnostic_samples": len(observation.samples) - len(eligible)})
+    for observation in observations:
+        slow = [sample for sample in observation.samples if sample.diagnostic_reason is None and sample.qualifying_test_step_seconds is not None and sample.runner_seconds >= THRESHOLD_SECONDS]
         if not slow:
             continue
         key = _key(repository, observation)
@@ -473,7 +523,7 @@ def run_monitor(client: Client, workflows: tuple[Workflow, ...], repository: str
             continue
         retained = "\n".join([issue.body, *issue.comments])
         keys = re.findall(r"^<!-- ci-duration-monitor:v1:[0-9a-f]{24} -->$", retained, re.MULTILINE)
-        if not keys or len(set(keys)) != 1 or _submitted(client, issue):
+        if f"<!-- ci-duration-policy:v3:separated-test-step:{source.sha} -->" not in issue.body or not keys or len(set(keys)) != 1 or _submitted(client, issue):
             continue
         if not _complete_specification(issue):
             logger.warning("Pending managed issue {} no longer has a complete specification; not submitting", issue.number)
@@ -494,15 +544,42 @@ def run_monitor(client: Client, workflows: tuple[Workflow, ...], repository: str
         _call(client, "POST", f"issues/{issue.number}/labels", {"labels": [READY_LABEL]})
     return {
         "repository": repository,
+        "verified_default_branch": source.branch,
+        "verified_source_sha": source.sha,
+        "shared_setup_diagnostics": shared_setup_diagnostics(observations),
         "lookback_hours": lookback_hours,
         "run_discovery": "created_at",
         "threshold_seconds": THRESHOLD_SECONDS,
         "publish": publish,
         "actions": actions,
+        "admission": admission,
+        "admission_summary": {
+            "qualifying_candidates": sum(len(item["qualifying_job_ids"]) for item in admission),
+            "qualifying_families_existing": sum(item["classification"] == "qualifies-existing" for item in admission),
+            "qualifying_families_new": sum(item["classification"] == "qualifies-new" for item in admission),
+            "insufficient_families": sum(item["classification"] == "insufficient-evidence" for item in admission),
+            "diagnostic_samples": sum(item["diagnostic_samples"] for item in admission),
+        },
         "workflow_totals": workflow_totals,
         "observations": [{"workflow": item.workflow.path, "family": item.family.key, "samples": [asdict(sample) for sample in item.samples]} for item in observations],
     }
 
+
+
+def shared_setup_diagnostics(observations: list[Observation]) -> list[dict[str, object]]:
+    """Retain recurring acquisition evidence across families without issue writes."""
+    grouped: dict[str, list[dict[str, object]]] = {}
+    for observation in observations:
+        for sample in observation.samples:
+            for step in sample.steps:
+                if step.seconds < 300 or re.search(observation.family.test_step_pattern, step.name):
+                    continue
+                grouped.setdefault(step.name, []).append({
+                    "workflow": observation.workflow.path, "family": observation.family.key,
+                    "run_id": sample.run_id, "job_id": sample.job_id, "seconds": step.seconds,
+                })
+    return [{"step": name, "observations": rows} for name, rows in sorted(grouped.items())
+            if len({row["family"] for row in rows}) >= 2 and len({row["run_id"] for row in rows}) >= 2]
 
 def main(argv: list[str] | None = None, *, client_factory: Callable[[str, str], Client] | None = None, now: datetime | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -532,9 +609,13 @@ def main(argv: list[str] | None = None, *, client_factory: Callable[[str, str], 
         report = run_monitor(client_factory(token, args.repository), read_config(args.config), args.repository, args.source_ref, now=now or datetime.now(timezone.utc), lookback_hours=args.lookback_hours, publish=args.publish)
         (args.output_dir / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         summary = f"# CI duration monitor\n\nMode: {'publish' if args.publish else 'dry run'}. Runs created in the last {args.lookback_hours} hours; threshold >= {THRESHOLD_SECONDS} seconds.\n\n"
+        admission_summary = cast(dict[str, int], report["admission_summary"])
+        summary += f"Admission before existing issue handling: {admission_summary['qualifying_candidates']} qualifying jobs; {admission_summary['qualifying_families_existing']} qualifying families with existing issues; {admission_summary['qualifying_families_new']} new qualifying families; {admission_summary['insufficient_families']} families with insufficient evidence.\n\n"
         summary += "\n".join(f"- {item['action']}: `{item['workflow']}` / `{item['family']}` (issue {item['issue'] or 'not created'})." for item in cast(list[dict[str, object]], report["actions"])) or "No qualifying job families."
         totals = cast(list[dict[str, object]], report["workflow_totals"])
         report_only = [item for item in totals if not item["long_job"]]
+        shared = cast(list[dict[str, object]], report["shared_setup_diagnostics"])
+        summary += f"\n\nShared setup diagnostics: {len(shared)}. See report.json for cross-family step evidence; these never create per-family issues.\n"
         summary += f"\n\nWorkflow-total-only observations: {len(report_only)}. These do not create splitting issues; queue/dependencies/aggregation can exceed ten minutes while every job remains below it.\n"
         (args.output_dir / "summary.md").write_text(summary, encoding="utf-8")
         if os.environ.get("GITHUB_STEP_SUMMARY"):

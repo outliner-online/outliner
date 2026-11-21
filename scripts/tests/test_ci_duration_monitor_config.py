@@ -8,6 +8,7 @@ import re
 import sys
 import threading
 import unittest
+from urllib.request import Request
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("outliner_ci_duration_github", ROOT / "scripts/ci_duration_github.py")
@@ -111,6 +112,12 @@ class GitHubTransportTest(unittest.TestCase):
         self.assertEqual(self.requests[0][:3], ("GET", "/repos/example/repo/actions/runs?per_page=100&page=2", None))
         self.assertEqual(self.requests[1][:3], ("POST", "/repos/example/repo/issues/42/labels", {"labels": ["review-ready"]}))
         self.assertEqual(self.requests[1][3]["Authorization"], "Bearer fixture-token")
+
+    def test_metadata_redirect_cannot_escape_the_api_origin(self):
+        request = Request("https://api.github.com/repos/example/repo")
+        with self.assertRaisesRegex(RuntimeError, "untrusted metadata redirect") as caught:
+            transport.MetadataRedirect().redirect_request(request, None, 302, "Found", {}, "https://foreign.example/?sig=secret")
+        self.assertNotIn("secret", str(caught.exception))
 
     def test_http_error_preserves_status_but_success_requires_json(self):
         response = self.client.request("GET", "unavailable")

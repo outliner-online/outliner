@@ -6,7 +6,7 @@ Reduce the execution time of the ${family_name} CI job family while preserving i
 
 ## Context
 
-The daily monitor observed a completed job taking at least ${threshold} seconds in `${workflow_path}`. ${recommendation}. This is a measured improvement candidate for specification review, not proof that adding shards will help.
+The daily monitor verified a current default-branch or same-repository PR test job with an exact successful, separated test execution step taking at least ${threshold} seconds in `${workflow_path}`. ${recommendation}. GitHub step timestamps measure the actual test process, including its normal test harness and retries. Review the selection and dependencies before choosing a safe split; this does not assert pure test-body timing.
 
 ${evidence}
 

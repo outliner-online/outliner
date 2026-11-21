@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import copy
 import json
 import tempfile
@@ -32,7 +33,7 @@ def job(number: int = 1, seconds: float = 600, *, name: str = "Tests (1/4)", con
         "created_at": stamp(-seconds - 10),
         "started_at": stamp(-seconds),
         "completed_at": stamp(),
-        "steps": [{"name": "Run tests", "status": "completed", "started_at": stamp(-seconds + 20), "completed_at": stamp()}],
+        "steps": [{"name": "Run tests", "status": "completed", "conclusion": "success", "started_at": stamp(-seconds), "completed_at": stamp()}],
     }
 
 
@@ -46,7 +47,7 @@ class GitHub:
     """Controlled API with durable mutations and deliberate lost responses."""
 
     def __init__(self) -> None:
-        self.runs: list[dict[str, object]] = [{"id": 10, "run_attempt": 1, "status": "completed", "path": ".github/workflows/ci.yml", "head_sha": "a" * 40, "run_started_at": stamp(-700)}]
+        self.runs: list[dict[str, object]] = [{"id": 10, "run_attempt": 1, "status": "completed", "path": ".github/workflows/ci.yml", "head_sha": "a" * 40, "run_started_at": stamp(-700), "head_branch": "main", "event": "push", "repository": {"full_name": REPOSITORY}, "head_repository": {"full_name": REPOSITORY}}]
         self.jobs: dict[tuple[int, int], list[dict[str, object]]] = {(10, 1): [job()]}
         self.issues: list[dict[str, object]] = []
         self.comments: dict[int, list[dict[str, object]]] = {}
@@ -57,6 +58,10 @@ class GitHub:
         self.search_total: int | None = None
         self.truncated_jobs = False
         self.managed_label_exists = True
+        self.sources = {
+            ".github/workflows/ci.yml": "jobs:\n  tests:\n    name: Tests (${{ matrix.shard }})\n    strategy:\n      matrix:\n        shard: [" + ", ".join(f"'{i}/{n}'" for n in [4, 101] for i in range(1, n+1)) + "]\n    steps: [{name: Run tests}]\n  server:\n    name: server-test / server-test\n    steps: [{name: Run tests}]\n",
+            "scripts/test.sh": "native test fixture entrypoint",
+        }
 
     def request(self, method: str, path: str, payload: dict[str, object] | None = None) -> Result:
         self.calls.append((method, path, copy.deepcopy(payload)))
@@ -68,8 +73,18 @@ class GitHub:
             return copy.deepcopy(items[(page - 1) * 100 : page * 100])
 
         if method == "GET":
+            if route == "":
+                return Result(200, {"id": 987528414, "full_name": REPOSITORY, "default_branch": "main"})
+            if route == "branches/main":
+                return Result(200, {"commit": {"sha": "b" * 40}})
+            if route.startswith("contents/"):
+                source = self.sources.get(route.removeprefix("contents/"))
+                return Result(200, {"type": "file", "encoding": "base64", "content": base64.b64encode(source.encode()).decode()}) if source is not None else Result(404, {})
+            if route.startswith("actions/workflows/") and not route.endswith("/runs"):
+                return Result(200, {"state": "active", "path": ".github/workflows/" + route.split("/")[-1]})
             if route.startswith("actions/workflows/"):
-                return Result(200, {"total_count": self.search_total if self.search_total is not None else len(self.runs), "workflow_runs": paged(self.runs)})
+                runs = [run for run in self.runs if run["path"].rsplit("/", 1)[-1] == route.split("/")[-2]]
+                return Result(200, {"total_count": self.search_total if self.search_total is not None else len(runs), "workflow_runs": paged(runs)})
             if route.startswith("actions/runs/"):
                 parts = route.split("/")
                 run_id, attempt = int(parts[2]), int(parts[4])
@@ -137,7 +152,7 @@ class MonitorTests(unittest.TestCase):
                     "workflows": [
                         {
                             "path": ".github/workflows/ci.yml",
-                            "families": [{"key": "tests", "name": "Tests", "job_pattern": r"Tests \(\d+/\d+\)", "test_step_pattern": "^Run tests$", "source_paths": [".github/workflows/ci.yml", "scripts/test.sh"], "guidance": "Retain the existing complete test selection and aggregate check."}],
+                            "families": [{"key": "tests", "name": "Tests", "job_pattern": r"Tests \(\d+/\d+\)", "test_step_pattern": "^Run tests$", "source_paths": [".github/workflows/ci.yml", "scripts/test.sh"], "guidance": "Retain the existing complete test selection and aggregate check.", "measurement": "test-step"}],
                         }
                     ]
                 }
@@ -146,7 +161,17 @@ class MonitorTests(unittest.TestCase):
         )
         self.github = GitHub()
 
-    def run_cli(self, *, publish: bool = True, now: datetime = NOW) -> int:
+    def run_cli(self, *, publish: bool = True, now: datetime = NOW, recurring: bool = True) -> int:
+        # Reconciliation cases use two explicitly distinct successful scan runs.
+        # Eligibility-only regressions pass recurring=False to control recurrence.
+        if recurring and self.github.runs:
+            self.github.runs = [run for run in self.github.runs if run["id"] != 9]
+            prior = copy.deepcopy(self.github.runs[0])
+            prior.update({"id": 9, "run_attempt": 1})
+            self.github.runs.append(prior)
+            self.github.jobs[(9, 1)] = copy.deepcopy(self.github.jobs[(10, 1)])
+            for item in self.github.jobs[(9, 1)]:
+                item["id"] += 10000
         args = ["--repository", REPOSITORY, "--config", str(self.config), "--output-dir", str(self.root / "output"), "--source-ref", "b" * 40]
         if publish:
             args.append("--publish")
@@ -190,13 +215,13 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(self.run_cli(), 0)
         self.assertEqual(self.github.mutations, [])
 
-    def test_failed_and_timed_out_completed_work_is_observed(self) -> None:
+    def test_failed_and_timed_out_completed_work_remains_diagnostic(self) -> None:
         for conclusion in ("failure", "timed_out"):
             with self.subTest(conclusion=conclusion):
                 self.github = GitHub()
                 self.github.jobs[(10, 1)] = [job(seconds=610, conclusion=conclusion)]
                 self.assertEqual(self.run_cli(), 0)
-                self.assertEqual(len(self.github.issues), 1)
+                self.assertEqual(len(self.github.issues), 0)
 
     def test_queue_and_workflow_total_alone_are_report_only(self) -> None:
         self.github.jobs[(10, 1)] = [job(seconds=100)]
@@ -209,8 +234,8 @@ class MonitorTests(unittest.TestCase):
     def test_unknown_job_has_its_own_family(self) -> None:
         self.github.jobs[(10, 1)] = [job(name="Lint and build", seconds=610)]
         self.assertEqual(self.run_cli(), 0)
-        self.assertEqual(self.report()["actions"][0]["family"], "job:Lint and build")
-        self.assertIn(".github/workflows/ci.yml", self.github.issues[0]["body"])
+        self.assertEqual(self.report()["actions"], [])
+        self.assertIn("job:Lint and build", [item["family"] for item in self.report()["observations"]])
 
     def test_detection_retains_slow_observation_before_five_fast_runs(self) -> None:
         for run_id in range(11, 17):
@@ -220,6 +245,7 @@ class MonitorTests(unittest.TestCase):
             self.github.jobs[(run_id, 1)] = [job(run_id, 100)]
         self.github.jobs[(10, 1)] = [job(seconds=610)]
         self.github.jobs[(10, 1)][0]["completed_at"] = stamp(-10)
+        self.github.jobs[(10, 1)][0]["steps"][0]["completed_at"] = stamp(-10)
         self.assertEqual(self.run_cli(), 0)
         self.assertEqual(len(self.github.issues), 1)
         self.assertIn("10 / 1", self.github.issues[0]["body"])
@@ -356,7 +382,7 @@ class MonitorTests(unittest.TestCase):
 
                 with patch.object(self.github, "request", side_effect=flaky):
                     self.assertEqual(self.run_cli(), 0)
-                self.assertEqual(requests, 2)
+                self.assertEqual(requests, 3)
                 self.assertEqual(len(self.github.issues), 1)
 
     def test_read_retries_are_bounded_and_do_not_retry_auth_rate_or_schema_errors(self) -> None:
@@ -394,13 +420,13 @@ class MonitorTests(unittest.TestCase):
         self.github.jobs[(10, 1)] = []
         self.github.jobs[(10, 2)] = [retained]
         self.assertEqual(self.run_cli(now=NOW + timedelta(hours=3)), 0)
-        self.assertEqual(len(self.github.issues), 1)
+        self.assertEqual(len(self.github.issues), 0)
         samples = [sample for item in self.report()["observations"] for sample in item["samples"]]
         self.assertEqual(samples[0]["runner_seconds"], 784)
         self.assertIsNone(samples[0]["queue_seconds"])
         self.assertEqual(samples[0]["completed_at"], "2026-11-21T02:45:29Z")
         self.assertEqual(self.report()["workflow_totals"], [])
-        self.assertIn("| 784 | unknown | 755 |", self.github.issues[0]["body"])
+        self.assertEqual(self.github.issues, [])
 
     def test_out_of_order_job_is_skipped_and_optional_step_remains_unknown(self) -> None:
         invalid = job(1, 900)
@@ -410,11 +436,11 @@ class MonitorTests(unittest.TestCase):
         self.github.jobs[(10, 1)] = [invalid, valid]
         self.assertEqual(self.run_cli(), 0)
         samples = self.report()["observations"][0]["samples"]
-        self.assertEqual(len(samples), 1)
+        self.assertEqual(len(samples), 2)
         self.assertEqual(samples[0]["runner_seconds"], 800)
         self.assertEqual(samples[0]["family_jobs"], 1)
         self.assertIsNone(samples[0]["test_step_seconds"])
-        self.assertIn("| 800 | 10 | unknown |", self.github.issues[0]["body"])
+        self.assertEqual(self.github.issues, [])
 
     def test_configured_repository_paths_and_template_exist(self) -> None:
         root = Path(monitor.__file__).resolve().parents[1]

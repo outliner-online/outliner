@@ -18,7 +18,8 @@
         "test:emulator-wait": "mocha tests/log-service-emulator-wait.test.js --timeout 10000",
         "postinstall": "patch-package && (test -e ../shared/node_modules || ln -s ../server/node_modules ../shared/node_modules || true)",
         "postbuild": "ls -la dist",
-        "test:unit": "npm run test:jest"
+        "test:unit": "npm run test:jest",
+        "test:prepared": "bash ../scripts/run-server-test-command.sh"
     },
     "overrides": {
         "yjs": "13.6.33"

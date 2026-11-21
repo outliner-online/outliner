@@ -17,7 +17,13 @@ on:
       - '.github/ci-duration-issue.md'
       - 'scripts/ci_duration_monitor.py'
       - 'scripts/ci_duration_github.py'
+      - 'scripts/ci_duration_policy.py'
+      - '.github/workflows/ci-test-server.yml'
+      - 'scripts/run-server-tests.sh'
+      - 'scripts/run-server-test-command.sh'
+      - 'scripts/tests/test_server_test_boundary.py'
       - 'scripts/tests/test_ci_duration_monitor*.py'
+      - 'scripts/tests/fixtures/ci-duration/**'
   push:
     branches: [main]
     paths:
@@ -26,7 +32,13 @@ on:
       - '.github/ci-duration-issue.md'
       - 'scripts/ci_duration_monitor.py'
       - 'scripts/ci_duration_github.py'
+      - 'scripts/ci_duration_policy.py'
+      - '.github/workflows/ci-test-server.yml'
+      - 'scripts/run-server-tests.sh'
+      - 'scripts/run-server-test-command.sh'
+      - 'scripts/tests/test_server_test_boundary.py'
       - 'scripts/tests/test_ci_duration_monitor*.py'
+      - 'scripts/tests/fixtures/ci-duration/**'
 
 permissions:
   contents: read
@@ -46,7 +58,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install monitor dependency
-        run: python -m pip install loguru==0.7.3
+        run: python -m pip install loguru==0.7.3 PyYAML==6.0.3
       - name: Verify collection and issue reconciliation
         run: python -m unittest discover -s scripts/tests -p 'test_ci_duration_monitor*.py' -v
 
@@ -70,7 +82,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install monitor dependency
-        run: python -m pip install loguru==0.7.3
+        run: python -m pip install loguru==0.7.3 PyYAML==6.0.3
       - name: Collect completed runs and submit review issues
         env:
           GITHUB_TOKEN: ${{ github.token }}
