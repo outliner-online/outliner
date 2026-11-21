@@ -18,7 +18,7 @@ const normalize = (text) =>
     )].sort();
 const full = normalize(fullOutput);
 const selected = [];
-const coverageMap = libCoverage.createCoverageMap();
+const mergedCoverage = {};
 for (let shard = 1; shard <= shardCount; shard++) {
     const shardDir = path.join(artifactDir,
         `unit-shard-${shard}-${process.env.GITHUB_RUN_ID}-${process.env.GITHUB_RUN_ATTEMPT}`);
@@ -29,7 +29,19 @@ for (let shard = 1; shard <= shardCount; shard++) {
     if (!fs.existsSync(coveragePath)) throw new Error(`missing current-attempt coverage for shard ${shard}`);
     const coverage = JSON.parse(fs.readFileSync(coveragePath, "utf8"));
     if (Object.keys(coverage).length === 0) throw new Error(`empty coverage for shard ${shard}`);
-    coverageMap.merge(coverage);
+    for (const [file, data] of Object.entries(coverage)) {
+        if (!mergedCoverage[file]) {
+            mergedCoverage[file] = structuredClone(data);
+            continue;
+        }
+        const target = mergedCoverage[file];
+        for (const key of Object.keys(data.s)) target.s[key] = (target.s[key] ?? 0) + data.s[key];
+        for (const key of Object.keys(data.f)) target.f[key] = (target.f[key] ?? 0) + data.f[key];
+        for (const [key, counts] of Object.entries(data.b)) {
+            const prior = target.b[key] ?? counts.map(() => 0);
+            target.b[key] = counts.map((count, index) => (prior[index] ?? 0) + count);
+        }
+    }
 }
 const union = [...new Set(selected)].sort();
 const duplicates = selected.filter((value, index) => selected.indexOf(value) !== index);
@@ -43,5 +55,5 @@ if (JSON.stringify(union) !== JSON.stringify(full)) {
 }
 const output = path.resolve("coverage/unit_and_integration/coverage-final.json");
 fs.mkdirSync(path.dirname(output), { recursive: true });
-fs.writeFileSync(output, JSON.stringify(coverageMap.toJSON()));
+fs.writeFileSync(output, JSON.stringify(mergedCoverage));
 console.log(`Verified ${full.length} unique unit files across ${shardCount} shards and merged complete coverage.`);

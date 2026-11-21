@@ -42,7 +42,7 @@ describe("unit CI native shard orchestration", () => {
         expect(verify).toContain("shard selection differs from native selection");
         expect(verify).toContain("empty coverage");
         expect(verify).toContain("GITHUB_RUN_ID");
-        expect(verify).toContain("coverageMap.merge");
+        expect(verify).toContain("mergedCoverage[file]");
     });
 
     test("shell syntax and workflow YAML remain valid", () => {
