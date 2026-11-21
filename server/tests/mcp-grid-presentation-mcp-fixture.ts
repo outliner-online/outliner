@@ -54,11 +54,31 @@ export interface PresentationSeams {
     deliver?: (outcome: GridPresentationUpdateResult) => GridPresentationUpdateResult;
 }
 
+// refreshMcpLogStream replaces a process-global logger destination. Serialize
+// Grid fixtures so a later fixture cannot replace or close a destination that
+// an earlier fixture still owns.
+let fixtureOwnershipTail = Promise.resolve();
+
+async function acquireFixtureOwnership() {
+    const previousOwner = fixtureOwnershipTail;
+    let release!: () => void;
+    fixtureOwnershipTail = new Promise<void>(resolve => release = resolve);
+    await previousOwner;
+    return release;
+}
+
 export async function startGridMcpFixture() {
+    const releaseOwnership = await acquireFixtureOwnership();
     const acl = new AclStore();
     acl.grant("projectUsers", PROJECT, UID);
     const dir = tempDir();
-    const server: TestServer = await startTestServer(dir, acl);
+    let server: TestServer;
+    try {
+        server = await startTestServer(dir, acl);
+    } catch (error) {
+        releaseOwnership();
+        throw error;
+    }
     // This fixture owns the destination returned here.  Keeping the exact
     // stream lets audit assertions queue a completion barrier on the same
     // destination that pino writes, rather than relying on logger.flush().
@@ -102,6 +122,7 @@ export async function startGridMcpFixture() {
     const reads = new OutlinerReadService(server.hocuspocus, gatedAccess, async () => []);
     app.use(createMcpRouter(reads, undefined, undefined, server.mcpRelations, undefined, undefined, tool));
     const mcp = rpcClient(app);
+    let stopped = false;
     return {
         acl,
         dir,
@@ -119,8 +140,14 @@ export async function startGridMcpFixture() {
             return domainCalls;
         },
         async stop() {
-            await stopTestServer(server);
-            await fs.remove(dir);
+            if (stopped) return;
+            stopped = true;
+            try {
+                await stopTestServer(server);
+                await fs.remove(dir);
+            } finally {
+                releaseOwnership();
+            }
         },
     };
 }
