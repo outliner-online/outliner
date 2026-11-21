@@ -86,10 +86,12 @@ describe("production Kanban visible projection", { timeout: 30000 }, () => {
 
         const displayedEditContent = latest!.visible;
         const displayedEditQueryId = latest!.provenance!.evidence!.queryId;
+        expect(latest?.result?.rows.find(row => row.id === "todo")?.hidden).toBe("before");
         setRecordValue(table, "todo", "hidden", "after");
-        await waitFor(() => expect(latest?.provenance?.evidence?.queryId).not.toBe(displayedEditQueryId), {
-            timeout: 15000,
-        });
+        await waitFor(() => {
+            expect(latest?.provenance?.evidence?.queryId).not.toBe(displayedEditQueryId);
+            expect(latest?.result?.rows.find(row => row.id === "todo")?.hidden).toBe("after");
+        }, { timeout: 15000 });
         expect(latest?.visible).toEqual(displayedEditContent);
         expect(latest?.visible?.status === "ready" && latest.visible.content.lanes).toEqual(readBoard(view.container));
 
