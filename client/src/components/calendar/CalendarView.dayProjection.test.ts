@@ -145,6 +145,53 @@ describe("CalendarView Day projection boundary", { timeout: 30000 }, () => {
         });
     });
 
+    it("uses a title-role edit committed while the initial query is in flight", async () => {
+        const projectId = "proj-calendar-day-pending-role";
+        const projectDoc = new Y.Doc({ guid: projectId });
+        const project = Project.fromDoc(projectDoc);
+        const calendarId = createCalendar(project, {
+            name: "Pending role",
+            query: "SELECT 1",
+            viewType: "day",
+            timezone: "UTC",
+            roleTitle: "primary_title",
+            roleStart: "start_at",
+        });
+        let resolveQuery: ((value: runner.CalendarQueryOutcome) => void) | undefined;
+        const spy = vi.spyOn(runner, "runCalendarQuery").mockImplementation(() =>
+            new Promise(resolve => {
+                resolveQuery = resolve;
+            })
+        );
+        const projections: CalendarProjectionResult[] = [];
+        const component = render(CalendarView, {
+            props: { project, projectId, calendarId, onVisibleProjection: result => projections.push(result) },
+        });
+        await waitFor(() => expect(resolveQuery).toBeDefined());
+        const calendarMap = projectDoc.getMap("calendars").get(calendarId) as Y.Map<unknown>;
+        calendarMap.set("roleTitle", "alternate_title");
+        resolveQuery!({
+            result: {
+                columns: ["primary_title", "alternate_title", "start_at", "source_kind", "source_id"],
+                rows: [{
+                    primary_title: "Captured title",
+                    alternate_title: "Latest title",
+                    start_at: new Date().toISOString(),
+                    source_kind: "item",
+                    source_id: "pending-role",
+                }],
+            },
+        });
+        await waitFor(() =>
+            expect(component.getByTestId("calendar-entry-item:pending-role").textContent).toContain("Latest title")
+        );
+        await waitFor(() => {
+            const latest = projections.at(-1);
+            expect(latest?.ready && latest.projection.content.map(value => value.title)).toContain("Latest title");
+        });
+        spy.mockRestore();
+    });
+
     it("keeps grouped Day rendering but reports its projection as non-ready", async () => {
         const projectId = "proj-calendar-grouped-day-projection";
         const projectDoc = new Y.Doc({ guid: projectId });
@@ -239,6 +286,45 @@ describe("CalendarView Day projection boundary", { timeout: 30000 }, () => {
         expect(projections.some(result => result.ready)).toBe(false);
         secondResolve!({ result: { columns: [], rows: [] } });
         await waitFor(() => expect(projections.some(result => result.ready)).toBe(true));
+        spy.mockRestore();
+    });
+
+    it("fences an in-flight response when query authority changes before the debounce", async () => {
+        const projectId = "proj-calendar-day-query-generation";
+        const projectDoc = new Y.Doc({ guid: projectId });
+        const project = Project.fromDoc(projectDoc);
+        const calendarId = createCalendar(project, {
+            name: "Query generation",
+            query: "SELECT 1 AS id, 'Old query' AS title, now() AS start_at",
+            viewType: "day",
+            timezone: "UTC",
+            roleTitle: "title",
+            roleStart: "start_at",
+        });
+        const resolvers: Array<(value: runner.CalendarQueryOutcome) => void> = [];
+        const spy = vi.spyOn(runner, "runCalendarQuery").mockImplementation(() =>
+            new Promise(resolve => resolvers.push(resolve))
+        );
+        const projections: CalendarProjectionResult[] = [];
+        render(CalendarView, {
+            props: { project, projectId, calendarId, onVisibleProjection: result => projections.push(result) },
+        });
+        await waitFor(() => expect(resolvers).toHaveLength(1));
+        const calendarMap = projectDoc.getMap("calendars").get(calendarId) as Y.Map<unknown>;
+        calendarMap.set("query", "SELECT 2 AS id, 'New query' AS title, now() AS start_at");
+        expect(projections.at(-1)?.ready).toBe(false);
+        resolvers[0]!({
+            result: {
+                columns: ["id", "title", "start_at"],
+                rows: [{ id: 1, title: "Old query", start_at: new Date().toISOString() }],
+            },
+        });
+        await waitFor(() => expect(resolvers).toHaveLength(2));
+        expect(projections.some(result => result.ready)).toBe(false);
+        resolvers[1]!({ result: { columns: [], rows: [] } });
+        await waitFor(() => expect(projections.some(result => result.ready)).toBe(true));
+        calendarMap.set("viewType", "week");
+        await waitFor(() => expect(projections.at(-1)?.ready).toBe(false));
         spy.mockRestore();
     });
 });

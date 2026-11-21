@@ -335,10 +335,10 @@ function publishAcceptedDayModel(currentSettings: CalendarSettings): void {
     }
 }
 
-function invalidateDayObservation(): void {
+function invalidateDayObservation(publishNonReady = effectiveViewType === "day"): void {
     acceptedDayEvidence = undefined;
     acceptedDayModel = undefined;
-    if (effectiveViewType === "day") {
+    if (publishNonReady) {
         onVisibleProjection?.({ ready: false, reason: "Accepted Calendar SQL evidence is stale or unavailable." });
     }
 }
@@ -385,7 +385,10 @@ async function runQuery() {
         catalogResultCurrent = true;
         if (currentDayContext) {
             acceptedDayEvidence = { result: outcome.result, context: currentDayContext, rangeLabel: currentRangeLabel };
-            publishAcceptedDayModel(currentSettings);
+            // Roles and other presentation settings do not require another
+            // SQL execution. Use their latest committed value even when they
+            // changed while this accepted query was in flight.
+            publishAcceptedDayModel(settings);
         }
         // The query result is authoritative: drop any optimistic placement
         // whose row has now come back, whether or not it agrees with the
@@ -400,12 +403,16 @@ async function runQuery() {
     }
 }
 
-function scheduleRequery(invalidateCurrentResult = false, invalidateObservation = false) {
+function scheduleRequery(
+    invalidateCurrentResult = false,
+    invalidateObservation = false,
+    publishNonReady = effectiveViewType === "day",
+) {
     if (invalidateObservation) {
         // Cancel an in-flight generation before the debounce. Its captured
         // range must never be paired with labels from the new navigation.
         queryGeneration++;
-        invalidateDayObservation();
+        invalidateDayObservation(publishNonReady);
     }
     if (invalidateCurrentResult) {
         catalogResultCurrent = false;
@@ -421,6 +428,7 @@ function scheduleRequery(invalidateCurrentResult = false, invalidateObservation 
 function refreshMirror() {
     const next = readSettingsFromMap();
     if (!next) return;
+    const previousViewType = effectiveViewType;
     const queryChanged = next.query !== settings.query;
     const viewTypeChanged = next.viewType !== settings.viewType;
     const timezoneChanged = next.timezone !== settings.timezone;
@@ -428,12 +436,12 @@ function refreshMirror() {
     settings = next;
     queryInput = next.query;
     if (queryChanged || timezoneChanged) {
-        scheduleRequery(true);
+        scheduleRequery(true, true, previousViewType === "day" || next.viewType === "day");
     } else if (viewTypeChanged || ganttScaleChanged) {
         // Presentation-only changes reuse the same current SQL result. They
         // must not temporarily revoke drag/write authority while the
         // debounced refresh confirms that unchanged result.
-        scheduleRequery();
+        scheduleRequery(false, true, previousViewType === "day" || next.viewType === "day");
     } else if (catalogResultCurrent && acceptedDayEvidence) {
         // Role/grouping/lane presentation changes reuse the accepted rows but
         // must rebuild both the production Day model and its projection.
@@ -671,6 +679,9 @@ onMount(() => {
         }
         queryGeneration++;
         catalogResultCurrent = false;
+        // Retain the intentionally stale rendered rows, but revoke the
+        // comparable observation as soon as its catalog authority is lost.
+        invalidateDayObservation();
         if (state.status === "building") {
             queryError = "SQL catalog is rebuilding";
         } else if (state.status === "error") {
