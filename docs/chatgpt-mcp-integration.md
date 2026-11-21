@@ -215,3 +215,9 @@ do not reserve an identity or operation ID. Applied and accepted no-op outcomes 
 replayable for five minutes in the serving process, but a replay is the original
 receipt rather than a current settings read. Use `get_kanban` for current retained
 settings and a new observation before a later edit.
+
+# Notification callback boundary
+
+The server notification adapter sends exact, caller-authorized bytes directly through Node HTTPS. It accepts only public IPv4 destinations on HTTPS port 443, pins the single DNS result set to the TLS connection, verifies the original DNS name and connected peer, and never follows redirects or uses an ambient proxy. IPv6-only callback destinations are not supported by this initial adapter.
+
+MCP event callbacks use Standard Webhooks signatures over the bytes that are ultimately written. Callback enrollment can use the signed, unpredictable challenge exchange, but a successful challenge proves only control of that endpoint at that attempt. A 2xx response means receiver acceptance—not browser display, user action, ChatGPT execution, or exactly-once processing. Each call is one bounded attempt; ambiguous response loss remains unknown and is not automatically retried or stored.
