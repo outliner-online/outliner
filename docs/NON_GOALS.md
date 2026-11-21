@@ -12,7 +12,7 @@ Firebase Authentication is used for sign-in. Two-factor authentication is outsid
 
 ### NOT-0001 External Notification Services
 
-Outliner does not send notifications through Slack or any other external applications.
+Outliner does not send notifications through Slack or other external applications. Cloud mode supports private browser Web Push enrollment, but enrollment alone does not send a notification or prove handset delivery.
 
 ## Offline Editing
 

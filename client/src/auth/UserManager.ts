@@ -491,6 +491,18 @@ export class UserManager {
             return;
         }
         try {
+            // Disarm the browser-wide enrollment generation before replacing
+            // authenticated authority. Remote/unsubscribe cleanup may be
+            // incomplete, but an unconfirmed durable local disarm blocks logout.
+            if (typeof window !== "undefined") {
+                const { BrowserPushRegistration } = await import("../services/notifications/browserPushRegistration");
+                const enrollment = new BrowserPushRegistration();
+                await enrollment.disable();
+                if (enrollment.detail === "Could not verify local disarm") throw new Error(enrollment.detail);
+                if (enrollment.status === "incomplete") {
+                    logger.warn({ detail: enrollment.detail }, "Web Push cleanup incomplete during logout");
+                }
+            }
             await signOut(this.auth);
             // Logout process is detected by onAuthStateChanged
         } catch (error) {
