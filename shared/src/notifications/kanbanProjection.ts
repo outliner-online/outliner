@@ -1,4 +1,4 @@
-import type { KanbanLaneValue, KanbanSettings } from "../services/kanbanDefinition";
+import type { KanbanLaneValue, KanbanSettings } from "../services/kanbanDefinition.js";
 
 export interface KanbanObservationContextV1 {
     version: 1;
@@ -47,6 +47,18 @@ export interface KanbanRenderInput {
     readonly settings: Pick<KanbanSettings, "name" | "groupField" | "titleField" | "detailFields" | "laneOrder">;
     readonly declaredGroupingChoices: readonly KanbanLaneValue[];
 }
+
+export interface KanbanProjectionInput extends KanbanRenderInput {
+    /** Authoritative query boundary: only an accepted complete/current result is comparable. */
+    readonly readiness:
+        | { readonly status: "ready"; readonly complete: true; readonly current: true; }
+        | { readonly status: "non-ready"; readonly reason: string; };
+}
+
+export type KanbanObservationContextParseResult =
+    | { readonly status: "absent"; }
+    | { readonly status: "valid"; readonly context: KanbanObservationContextV1; }
+    | { readonly status: "invalid"; readonly reason: string; };
 
 export function kanbanDisplayedValue(value: unknown): string {
     return value === null ? "NULL" : value === undefined ? "" : String(value);
@@ -101,9 +113,14 @@ export function deriveKanbanRenderModel(input: KanbanRenderInput): KanbanRenderM
 }
 
 export function createKanbanVisibleProjection(
-    input: KanbanRenderInput,
+    input: KanbanProjectionInput,
     context: KanbanObservationContextV1,
 ): KanbanVisibleProjectionResult {
+    if (input.readiness.status !== "ready" || !input.readiness.complete || !input.readiness.current) {
+        return nonReadyKanbanProjection(
+            input.readiness.status === "non-ready" ? input.readiness.reason : "Kanban query result is not ready",
+        );
+    }
     if (!isKanbanObservationContextV1(context)) {
         return Object.freeze({ status: "non-ready", reason: "Unsupported Kanban observation context" });
     }
@@ -137,8 +154,24 @@ export function isKanbanObservationContextV1(value: unknown): value is KanbanObs
     if (!value || typeof value !== "object") return false;
     const context = value as Partial<KanbanObservationContextV1>;
     return context.version === 1 && context.surface === "board"
-        && typeof context.locale === "string" && context.locale.length > 0
-        && typeof context.timeZone === "string" && context.timeZone.length > 0;
+        && typeof context.locale === "string" && validLocale(context.locale)
+        && typeof context.timeZone === "string" && validTimeZone(context.timeZone);
+}
+
+/** Shared route/producer parser so malformed explicit contexts can never fall back to an ordinary board. */
+export function parseKanbanObservationContext(parameters: URLSearchParams): KanbanObservationContextParseResult {
+    const keys = ["surface", "version", "locale", "timeZone"];
+    if (!keys.some(key => parameters.has(key))) return Object.freeze({ status: "absent" });
+    const candidate = {
+        surface: parameters.get("surface"),
+        version: Number(parameters.get("version")),
+        locale: parameters.get("locale"),
+        timeZone: parameters.get("timeZone"),
+    };
+    if (!isKanbanObservationContextV1(candidate)) {
+        return Object.freeze({ status: "invalid", reason: "Unsupported Kanban observation context." });
+    }
+    return Object.freeze({ status: "valid", context: Object.freeze(candidate) });
 }
 
 function visibleCard(
@@ -148,11 +181,27 @@ function visibleCard(
     const displayedTitle = settings.titleField ? kanbanDisplayedValue(row[settings.titleField]) : "";
     return Object.freeze({
         title: displayedTitle || "Untitled",
-        details: Object.freeze(settings.detailFields.map(label => Object.freeze({
+        details: Object.freeze(settings.detailFields.map((label: string) => Object.freeze({
             label,
             value: kanbanDisplayedValue(row[label]),
         }))),
     });
+}
+
+function validLocale(locale: string): boolean {
+    try {
+        return Intl.getCanonicalLocales(locale).length === 1;
+    } catch {
+        return false;
+    }
+}
+
+function validTimeZone(timeZone: string): boolean {
+    try {
+        return new Intl.DateTimeFormat("en", { timeZone }).resolvedOptions().timeZone.length > 0;
+    } catch {
+        return false;
+    }
 }
 
 function unique(values: readonly KanbanLaneValue[]): KanbanLaneValue[] {

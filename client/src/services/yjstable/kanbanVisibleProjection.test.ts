@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
     createKanbanVisibleProjection,
     deriveKanbanRenderModel,
+    parseKanbanObservationContext,
 } from "../../../../shared/src/notifications/kanbanProjection";
 
 const context = { version: 1 as const, surface: "board" as const, locale: "en-US", timeZone: "UTC" };
@@ -12,6 +13,7 @@ const settings = {
     detailFields: ["points"],
     laneOrder: ["doing", null],
 };
+const ready = { status: "ready" as const, complete: true as const, current: true as const };
 
 describe("Kanban visible projection", () => {
     it("preserves display order, empty lanes, special values, details, and duplicate occurrences", () => {
@@ -25,6 +27,7 @@ describe("Kanban visible projection", () => {
             rows,
             settings,
             declaredGroupingChoices: ["todo", "doing", ""],
+            readiness: ready,
         }, context);
 
         expect(result).toEqual({
@@ -61,7 +64,12 @@ describe("Kanban visible projection", () => {
     });
 
     it("ignores hidden data and execution identity while retaining visible multiplicity", () => {
-        const input = (rows: Record<string, unknown>[]) => ({ rows, settings, declaredGroupingChoices: [] });
+        const input = (rows: Record<string, unknown>[]) => ({
+            rows,
+            settings,
+            declaredGroupingChoices: [],
+            readiness: ready,
+        });
         const first = createKanbanVisibleProjection(input([
             { lane: "doing", title: "A", points: 1, uuid: "old", queryId: "q1" },
         ]), context);
@@ -78,7 +86,7 @@ describe("Kanban visible projection", () => {
 
     it("returns non-ready content for unsupported context or invalid grouping evidence", () => {
         expect(
-            createKanbanVisibleProjection({ rows: [], settings, declaredGroupingChoices: [] }, {
+            createKanbanVisibleProjection({ rows: [], settings, declaredGroupingChoices: [], readiness: ready }, {
                 ...context,
                 surface: "notification" as "board",
             }),
@@ -87,11 +95,35 @@ describe("Kanban visible projection", () => {
             rows: [{ lane: 7 }],
             settings,
             declaredGroupingChoices: [],
+            readiness: ready,
         }, context)).toEqual({ status: "non-ready", reason: "Grouping values must be strings or SQL NULL" });
         expect(() => deriveKanbanRenderModel({
             rows: [],
             settings: { ...settings, groupField: undefined },
             declaredGroupingChoices: [],
         })).toThrow("Kanban grouping column is required");
+        expect(createKanbanVisibleProjection({
+            rows: [],
+            settings,
+            declaredGroupingChoices: [],
+            readiness: { status: "non-ready", reason: "stale evidence" },
+        }, context)).toEqual({ status: "non-ready", reason: "stale evidence" });
+    });
+
+    it("uses strict shared parsing for explicit route contexts", () => {
+        expect(parseKanbanObservationContext(new URLSearchParams())).toEqual({ status: "absent" });
+        expect(parseKanbanObservationContext(new URLSearchParams(
+            "surface=board&version=1&locale=en-US&timeZone=UTC",
+        ))).toEqual({ status: "valid", context });
+        for (const query of [
+            "surface=board&version=1&locale=%25%25%25&timeZone=UTC",
+            "surface=board&version=1&locale=en-US&timeZone=Not%2FAZone",
+            "surface=other&version=1&locale=en-US&timeZone=UTC",
+        ]) {
+            expect(parseKanbanObservationContext(new URLSearchParams(query))).toEqual({
+                status: "invalid",
+                reason: "Unsupported Kanban observation context.",
+            });
+        }
     });
 });

@@ -1,7 +1,7 @@
 <script lang="ts">
 import { onDestroy, onMount } from "svelte";
 import * as Y from "yjs";
-import { createTableEngineSession } from "../../services/yjstable/tableEngine";
+import { createTableEngineSession, type TableDocConnector } from "../../services/yjstable/tableEngine";
 import {
     destroyKanbanUndoManager,
     getKanban,
@@ -23,8 +23,16 @@ import SqlEditor from "../yjstable/SqlEditor.svelte";
 
 interface SqlEditorHandle { getValue(): string; }
 
-interface Props { projectDoc: Y.Doc; projectId?: string; kanban: KanbanHandles; isReadOnly?: boolean; context?: KanbanObservationContextV1; }
-let { projectDoc, projectId, kanban, isReadOnly = false, context }: Props = $props();
+interface Props {
+    projectDoc: Y.Doc;
+    projectId?: string;
+    kanban: KanbanHandles;
+    isReadOnly?: boolean;
+    context?: KanbanObservationContextV1;
+    onProjection?: (projection: KanbanProjection) => void;
+    connect?: TableDocConnector;
+}
+let { projectDoc, projectId, kanban, isReadOnly = false, context, onProjection, connect }: Props = $props();
 // Props are immutable for this mounted lifetime: the parent keys by identity.
 // svelte-ignore state_referenced_locally
 let committed = $state<KanbanSettings>(getKanban(projectDoc, kanban.kanbanId)!);
@@ -52,7 +60,7 @@ let editingCard = $state<{ sourceKind?: string; sourceId: string; field: string;
 let dragged = $state<{ card: KanbanCard; source: string | null; } | undefined>();
 let committingDrop = false;
 // svelte-ignore state_referenced_locally
-const session = createTableEngineSession({ projectDoc, projectId });
+const session = createTableEngineSession({ projectDoc, projectId, connect });
 
 function copy(settings: KanbanSettings): KanbanSettings {
     return { ...settings, detailFields: [...settings.detailFields], laneOrder: [...settings.laneOrder] };
@@ -150,7 +158,7 @@ onMount(() => {
     retainKanbanUndoManager(kanban.entry);
     kanban.entry.observeDeep(observer);
     void Promise.resolve().then(() => {
-        runner = new KanbanQueryRunner({ projectDoc, projectId, kanbanId: kanban.kanbanId, kanban, context });
+        runner = new KanbanQueryRunner({ projectDoc, projectId, kanbanId: kanban.kanbanId, kanban, context, connect });
         operations = new KanbanCardOperationController({
             resolver: session,
             schema: sourceKind => runner?.schemaForSource(sourceKind),
@@ -162,6 +170,7 @@ onMount(() => {
         });
         runner.subscribeProjection(value => {
             projection = value;
+            onProjection?.(value);
             operations?.observeProjection(value);
         });
         runner.start();

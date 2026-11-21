@@ -266,7 +266,10 @@ export class KanbanQueryRunner {
         const renderInput = { rows: e.rows, settings: s, declaredGroupingChoices: declared };
         const render = deriveKanbanRenderModel(renderInput);
         const resolved = Intl.DateTimeFormat().resolvedOptions();
-        const visible = createKanbanVisibleProjection(renderInput, this.options.context ?? {
+        const visible = createKanbanVisibleProjection({
+            ...renderInput,
+            readiness: { status: "ready", complete: true, current: true },
+        }, this.options.context ?? {
             version: 1,
             surface: "board",
             locale: resolved.locale,
