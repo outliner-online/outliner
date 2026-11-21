@@ -38,8 +38,17 @@ describe("ENV-5997c1a0: complete native new-4 sharding", () => {
         expect(gate.name).toBe("e2e-test (new-4)");
         expect(gate.needs).toEqual(["e2e-test", "selection-coverage"]);
         expect(gate.if).toBe("always()");
-        expect(gate.steps.filter((step: { uses?: string; }) => step.uses?.startsWith("actions/download-artifact@")))
-            .toHaveLength(2);
+        const downloads = gate.steps.filter((step: { uses?: string; }) =>
+            step.uses?.startsWith("actions/download-artifact@")
+        );
+        expect(downloads.map((step: { with: { name: string; }; }) => step.with.name)).toEqual([
+            "e2e-artifacts-chromium-new-4-1-${{ github.run_id }}-${{ github.run_attempt }}",
+            "e2e-artifacts-chromium-new-4-2-${{ github.run_id }}-${{ github.run_attempt }}",
+        ]);
+        const upload = job.steps.find((step: { name?: string; }) => step.name === "Upload Logs & Artifacts");
+        expect(upload.if).toContain("steps.tests.outputs.startup_verified == 'true'");
+        expect(upload.if).toContain("startsWith(matrix.project, 'new-4-')");
+        expect(upload.with["if-no-files-found"]).toContain("startsWith(matrix.project, 'new-4-')");
         const step = gate.steps.at(-1);
         for (const input of ["E2E_RESULT", "COLLECTION_RESULT"]) {
             for (const outcome of ["success", "failure", "cancelled", "skipped"]) {
@@ -104,6 +113,10 @@ describe("ENV-5997c1a0: complete native new-4 sharding", () => {
         fs.rmSync(report);
         expect(verify().status).not.toBe(0);
         fs.writeFileSync(report, original.replace('"commit":"head-sha"', '"commit":"stale"'));
+        expect(verify().status).not.toBe(0);
+        fs.writeFileSync(report, original.replace('"shard":"2/2"', '"shard":"1/2"'));
+        expect(verify().status).not.toBe(0);
+        fs.writeFileSync(report, original.replace('"engine":"chromium"', '"engine":"firefox"'));
         expect(verify().status).not.toBe(0);
         const failed = JSON.parse(original);
         failed.status = "failed";
