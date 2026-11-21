@@ -29,7 +29,6 @@ const LANE_HEIGHT_PX = 22;
 const KEYBOARD_STEP_MINUTES = 15;
 /** Every row's minute track spans one whole hour, whatever slice of it the row itself covers. */
 const MINUTES_PER_ROW = 60;
-const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MINUTE_TICKS = [0, 15, 30, 45];
 /** Pointer travel below this is a click, not a drag (#4982). */
 const CLICK_TOLERANCE_PX = 4;
@@ -276,7 +275,7 @@ const hasBand = $derived(layout.allDay.length > 0 || layout.milestones.length > 
 <div class="hour-map" class:dragging={drag !== undefined} data-testid="calendar-hour-minute-grid">
     <div class="axis-header">
         <div class="hour-gutter" data-testid="calendar-hour-map-day-label">
-            {#if dayHeader}{WEEKDAY_LABELS[dayHeader.weekday]} {dayHeader.dayOfMonth}{/if}
+            {#if dayHeader}{dayHeader.label}{/if}
         </div>
         <div class="minute-axis">
             {#each MINUTE_TICKS as tick (tick)}

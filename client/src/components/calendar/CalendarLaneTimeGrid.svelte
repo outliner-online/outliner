@@ -20,7 +20,6 @@ import { collapseLanePath } from "../../services/calendar/calendarGrouping";
 import { layoutTimeGrid } from "../../services/calendar/calendarTimeGridLayout";
 import CalendarTimeGrid from "./CalendarTimeGrid.svelte";
 
-const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 interface Props {
     lanes: CalendarLane[];
@@ -135,7 +134,7 @@ function onBandDrop(lane: CalendarLane, e: DragEvent) {
                         data-testid={`calendar-day-header-${header.dayIndex}`}
                         data-date={header.isoDate}
                     >
-                        {WEEKDAY_LABELS[header.weekday]} {header.dayOfMonth}
+                        {header.label}
                     </div>
                 {/each}
             </div>

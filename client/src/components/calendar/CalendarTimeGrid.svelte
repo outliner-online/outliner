@@ -32,7 +32,6 @@ const MIN_DURATION_MS = 5 * 60 * 1000;
 const ROW_HEIGHT_PX = 48; // pixels per hour
 /** Pointer travel below this is a click, not a drag (#4982). */
 const CLICK_TOLERANCE_PX = 4;
-const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 interface Props {
     layout: TimeGridLayout;
@@ -286,7 +285,7 @@ onMount(() => {
                         data-testid={`calendar-day-header-${header.dayIndex}`}
                         data-date={header.isoDate}
                     >
-                        {WEEKDAY_LABELS[header.weekday]} {header.dayOfMonth}
+                        {header.label}
                     </div>
                 {/each}
             </div>

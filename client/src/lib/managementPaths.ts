@@ -1,5 +1,9 @@
 import { resolve } from "$app/paths";
 import type { ResolvedPathname } from "$app/types";
+import {
+    type CalendarObservationContextV1,
+    encodeCalendarObservationContext,
+} from "$shared/notifications/calendarProjection";
 import { isPublicProject, projectBasePath } from "./publicProject";
 
 /**
@@ -264,6 +268,17 @@ export function projectCalendarRoute(projectName: string, calendarName: string):
         project: encodeURIComponent(projectName),
         calendar,
     });
+}
+
+/** Stable-ID Calendar route carrying only a validated, versioned observation context. */
+export function projectCalendarObservationRoute(
+    projectName: string,
+    calendarId: string,
+    context: CalendarObservationContextV1,
+): ResolvedPathname {
+    return `${projectCalendarRoute(projectName, calendarId)}?context=${
+        encodeURIComponent(encodeCalendarObservationContext(context))
+    }`;
 }
 
 /** The Schedule list as a typed SvelteKit resolution. */

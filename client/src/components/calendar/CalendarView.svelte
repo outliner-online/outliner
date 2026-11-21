@@ -8,13 +8,14 @@
 // CalendarBlock/the standalone route) — a calendar has no subdoc to key on
 // the way a table does, so the id itself is the remount key.
 
-import { onDestroy, onMount } from "svelte";
+import { onDestroy, onMount, untrack } from "svelte";
 import type { Project } from "$shared/app-schema";
-import { utcMsToFloatingDate } from "$shared/utils/zonedTime";
+import type { CalendarObservationContextV1, CalendarProjectionResult } from "$shared/notifications/calendarProjection";
 import * as Y from "yjs";
 import { analyzeCalendarEditability } from "../../services/calendar/calendarEditability";
 import { analyzeCalendarColumnWritability } from "../../services/calendar/calendarColumnWritability";
 import { buildCalendarEntries, type CalendarEntry } from "../../services/calendar/calendarEntries";
+import { deriveCalendarDayVisibleModel, type CalendarDayVisibleModel } from "../../services/calendar/calendarDayVisibleModel";
 import {
     resolveCalendarEntryWritability,
     writeCalendarEntryDuration,
@@ -86,9 +87,11 @@ interface Props {
     project: Project;
     projectId?: string;
     calendarId: string;
+    observationContext?: CalendarObservationContextV1;
+    onVisibleProjection?: (result: CalendarProjectionResult) => void;
 }
 
-let { project, projectId, calendarId }: Props = $props();
+let { project, projectId, calendarId, observationContext, onVisibleProjection }: Props = $props();
 
 const EMPTY_SETTINGS: CalendarSettings = {
     name: "",
@@ -115,7 +118,8 @@ let result = $state<TableQueryResult>({ columns: [], rows: [] });
 let queryError = $state<string | undefined>(undefined);
 let writeError = $state<string | undefined>(undefined);
 let catalogResultCurrent = $state(false);
-let anchorUtcMs = $state(Date.now());
+let acceptedDayModel = $state<CalendarDayVisibleModel | undefined>(undefined);
+let anchorUtcMs = $state(untrack(() => observationContext?.anchorUtcMs) ?? Date.now());
 let optimisticOverrides = $state<OptimisticOverrides>(createOptimisticOverrides());
 let showCreateDialog = $state(false);
 let createDefaultStartMs = $state<number | undefined>(undefined);
@@ -136,27 +140,29 @@ const writableColumns = $derived(analyzeCalendarColumnWritability(settings.query
 // and the grid range below is computed in it, so two collaborators viewing a
 // calendar with a fixed timezone see the same window regardless of either
 // viewer's own local zone.
-const timeZone = $derived(resolveCalendarTimezone(settings.timezone));
+const locale = $derived(observationContext?.locale);
+const timeZone = $derived(observationContext?.timeZone ?? resolveCalendarTimezone(settings.timezone));
 const timeZoneOptions = listSupportedTimeZones();
-const weekStart = $derived(settings.weekStart ?? resolveDefaultWeekStart());
+const weekStart = $derived(observationContext?.weekStart ?? settings.weekStart ?? resolveDefaultWeekStart());
 const workingHoursStart = $derived(settings.workingHoursStartMinutes ?? DEFAULT_WORKING_HOURS_START_MINUTES);
 const workingHoursEnd = $derived(settings.workingHoursEndMinutes ?? DEFAULT_WORKING_HOURS_END_MINUTES);
 const KNOWN_VIEW_TYPES = new Set<CalendarViewType>(["day", "hours", "days", "week", "month"]);
-const isGantt = $derived(settings.viewType === "gantt");
+const effectiveViewType = $derived(observationContext?.viewType ?? settings.viewType);
+const isGantt = $derived(effectiveViewType === "gantt");
 // A stored viewType this component does not know how to grid (a stale
 // value) falls back to "week" rather than crashing the range computation,
 // which is only total over the known variants. Irrelevant when `isGantt`,
 // which uses its own scale/range below.
 const viewType = $derived(
-    KNOWN_VIEW_TYPES.has(settings.viewType as CalendarViewType) ? (settings.viewType as CalendarViewType) : "week",
+    KNOWN_VIEW_TYPES.has(effectiveViewType as CalendarViewType) ? (effectiveViewType as CalendarViewType) : "week",
 );
 const ganttScale = $derived(
-    GANTT_SCALES.has(settings.ganttScale as GanttScale) ? (settings.ganttScale as GanttScale) : DEFAULT_GANTT_SCALE,
+    observationContext?.ganttScale ?? (GANTT_SCALES.has(settings.ganttScale as GanttScale) ? (settings.ganttScale as GanttScale) : DEFAULT_GANTT_SCALE),
 );
 const range = $derived(
     isGantt ? computeGanttRange(anchorUtcMs, ganttScale, timeZone) : computeViewRange(anchorUtcMs, viewType, weekStart, timeZone),
 );
-const ganttTicks = $derived(isGantt ? computeGanttTicks(range.start, range.end, ganttScale, timeZone) : []);
+const ganttTicks = $derived(isGantt ? computeGanttTicks(range.start, range.end, ganttScale, timeZone, locale) : []);
 // The same visible window, in the `{ start: Date, end: Date }` shape the
 // query runner injects as `view.range_start`/`view.range_end` (§6.4). The
 // grid keeps working in UTC millis; only the SQL boundary needs Dates.
@@ -194,7 +200,7 @@ function laneLabelForEntry(entry: CalendarEntry): string {
 }
 
 const monthLaneFilterOptions = $derived(lanes?.map((lane) => collapseLanePath(lane.path)) ?? []);
-let monthLaneFilter = $state<string | undefined>(undefined);
+let monthLaneFilter = $state<string | undefined>(untrack(() => observationContext?.monthLaneFilter) ?? undefined);
 const monthFilteredEntries = $derived(
     groupingActive && monthLaneFilter !== undefined
         ? placedEntries.filter((entry) => laneLabelForEntry(entry) === monthLaneFilter)
@@ -205,6 +211,8 @@ const isHourMap = $derived(!isGantt && viewType === "hours");
 const timeGridLayout = $derived(
     isGantt || isHourMap || viewType === "month" || groupingActive
         ? undefined
+        : viewType === "day" && optimisticOverrides.size === 0 && acceptedDayModel
+        ? acceptedDayModel.layout
         : layoutTimeGrid(placedEntries, range.start, range.end),
 );
 // The Hour Map (#4972) is a single-day projection of the *same* entries every
@@ -312,6 +320,21 @@ async function runQuery() {
     const currentTimeZone = timeZone;
     const currentSettings = settings;
     const currentRangeBounds = { startUtcMs: range.start, endUtcMs: range.end };
+    const currentViewType = effectiveViewType;
+    const currentDayContext: CalendarObservationContextV1 | undefined = currentViewType === "day"
+        ? {
+            version: 1,
+            locale: locale ?? new Intl.DateTimeFormat().resolvedOptions().locale,
+            timeZone: currentTimeZone,
+            weekStart,
+            viewType: "day",
+            anchorUtcMs,
+            rangeStartUtcMs: currentRangeBounds.startUtcMs,
+            rangeEndUtcMs: currentRangeBounds.endUtcMs,
+            monthLaneFilter: null,
+            collapsedEntryKeys: [],
+        }
+        : undefined;
 
     const outcome = await runCalendarQuery(
         session,
@@ -326,6 +349,24 @@ async function runQuery() {
         result = outcome.result;
         queryError = undefined;
         catalogResultCurrent = true;
+        if (currentDayContext) {
+            const derived = deriveCalendarDayVisibleModel({
+                current: true,
+                result: outcome.result,
+                settings: currentSettings,
+                project,
+                context: currentDayContext,
+                title: currentSettings.name,
+                rangeLabel,
+            });
+            if (derived.ready) {
+                acceptedDayModel = derived.model;
+                onVisibleProjection?.({ ready: true, projection: derived.model.projection });
+            } else {
+                acceptedDayModel = undefined;
+                onVisibleProjection?.(derived);
+            }
+        }
         // The query result is authoritative: drop any optimistic placement
         // whose row has now come back, whether or not it agrees with the
         // local guess (a concurrent remote move wins either way).
@@ -333,11 +374,21 @@ async function runQuery() {
     } else {
         catalogResultCurrent = false;
         queryError = outcome.error;
+        if (currentDayContext) {
+            acceptedDayModel = undefined;
+            onVisibleProjection?.({ ready: false, reason: "Accepted Calendar SQL evidence is stale or unavailable." });
+        }
     }
 }
 
 function scheduleRequery(invalidateCurrentResult = false) {
-    if (invalidateCurrentResult) catalogResultCurrent = false;
+    if (invalidateCurrentResult) {
+        catalogResultCurrent = false;
+        acceptedDayModel = undefined;
+        if (effectiveViewType === "day") {
+            onVisibleProjection?.({ ready: false, reason: "Accepted Calendar SQL evidence is stale or unavailable." });
+        }
+    }
     if (requeryTimer !== undefined) clearTimeout(requeryTimer);
     requeryTimer = setTimeout(() => {
         requeryTimer = undefined;
@@ -418,7 +469,7 @@ function goNext() {
 // the label must read them back in that zone; `toISOString` would name the
 // UTC day, which is the previous one for any zone ahead of UTC.
 const rangeLabel = $derived(
-    `${utcMsToFloatingDate(range.start, timeZone)} – ${utcMsToFloatingDate(range.end - 1, timeZone)} (${timeZone})`,
+    `${new Intl.DateTimeFormat(locale, { timeZone, dateStyle: "medium" }).format(new Date(range.start))} – ${new Intl.DateTimeFormat(locale, { timeZone, dateStyle: "medium" }).format(new Date(range.end - 1))} (${timeZone})`,
 );
 
 // --- Write dispatch: drag/resize/keyboard all funnel through here. ---
@@ -714,6 +765,7 @@ onDestroy(() => {
             ticks={ganttTicks}
             scale={ganttScale}
             {timeZone}
+            initialCollapsedEntryKeys={observationContext?.collapsedEntryKeys ?? []}
             onScaleChange={commitGanttScale}
             isLeafStartWritable={isStartWritable}
             isLeafDurationWritable={isDurationWritable}
@@ -735,7 +787,7 @@ onDestroy(() => {
         <CalendarHourMinuteGrid
             layout={hourMinuteLayout}
             {timeZone}
-            dayHeader={computeDayHeaders(range.start, 1, timeZone)[0]}
+            dayHeader={computeDayHeaders(range.start, 1, timeZone, locale)[0]}
             {isStartWritable}
             {isDurationWritable}
             onDragMove={previewStart}
@@ -774,6 +826,7 @@ onDestroy(() => {
             cells={monthCells}
             {weekStart}
             {timeZone}
+            {locale}
             todayUtcMs={todayAnchor(timeZone, Date.now())}
             {isStartWritable}
             onDragEnd={commitStart}
@@ -793,7 +846,7 @@ onDestroy(() => {
             rangeEnd={range.end}
             workingHoursStartMinutes={workingHoursStart}
             workingHoursEndMinutes={workingHoursEnd}
-            dayHeaders={computeDayHeaders(range.start, Math.round((range.end - range.start) / 86_400_000), timeZone)}
+            dayHeaders={computeDayHeaders(range.start, Math.round((range.end - range.start) / 86_400_000), timeZone, locale)}
             todayUtcMs={todayAnchor(timeZone, Date.now())}
             {isStartWritable}
             {isDurationWritable}
@@ -819,7 +872,9 @@ onDestroy(() => {
             rangeStart={range.start}
             workingHoursStartMinutes={workingHoursStart}
             workingHoursEndMinutes={workingHoursEnd}
-            dayHeaders={computeDayHeaders(range.start, timeGridLayout.dayCount, timeZone)}
+            dayHeaders={viewType === "day" && acceptedDayModel
+                ? acceptedDayModel.dayHeaders
+                : computeDayHeaders(range.start, timeGridLayout.dayCount, timeZone, locale)}
             todayUtcMs={todayAnchor(timeZone, Date.now())}
             {isStartWritable}
             {isDurationWritable}

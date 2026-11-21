@@ -13,6 +13,7 @@ describe("computeDayHeaders", () => {
             dateUtcMs: startUtcMs,
             weekday: 0,
             isoDate: "2026-08-16",
+            label: "16 Sun",
             dayOfMonth: 16,
             isMonthStart: false,
         });
@@ -42,9 +43,15 @@ describe("computeDayHeaders", () => {
             dateUtcMs: tokyoMidnightUtcMs,
             weekday: 1, // Monday in Tokyo
             isoDate: "2026-08-17",
+            label: "17 Mon",
             dayOfMonth: 17,
             isMonthStart: false,
         });
+    });
+
+    it("uses the explicit observation locale rather than the runtime locale", () => {
+        const headers = computeDayHeaders(Date.UTC(2026, 7, 16), 1, "UTC", "ja-JP");
+        expect(headers[0].label).toBe("16日(日)");
     });
 
     it("handles daylight saving time transitions", () => {
