@@ -26,6 +26,11 @@ type DependabotConfig = {
     updates?: Update[];
 };
 
+type DockerCandidate = {
+    dependencyName: string;
+    file: string;
+};
+
 const dockerfiles = [
     "Dockerfile.onprem",
     ".devcontainer/Dockerfile",
@@ -83,6 +88,25 @@ function uncoveredDockerfiles(config: DependabotConfig): string[] {
     });
 }
 
+function selectedDockerCandidates(config: DependabotConfig, candidates: DockerCandidate[]): DockerCandidate[] {
+    const dockerUpdates = (config.updates ?? []).filter(update => update["package-ecosystem"] === "docker");
+
+    // This is the candidate-selection boundary Dependabot applies after its
+    // Docker parser has produced dependency names. A candidate must belong to
+    // a configured, unexcluded directory, then every dependency-name ignore
+    // pattern is applied using the documented wildcard semantics.
+    return candidates.filter(candidate =>
+        dockerUpdates.some(update =>
+            configuredDirectories(update).includes(dependabotDirectory(candidate.file))
+            && !excludesDockerfile(update, candidate.file)
+            && !(update.ignore ?? []).some(condition => {
+                const pattern = condition["dependency-name"];
+                return pattern !== undefined && path.matchesGlob(candidate.dependencyName, pattern);
+            })
+        )
+    );
+}
+
 const dependabotSource = fs.readFileSync(configPath, "utf8");
 const config = parse(dependabotSource) as DependabotConfig;
 
@@ -105,23 +129,30 @@ test("the v2 config covers Actions and every maintained Dockerfile", () => {
     expect(uncoveredDockerfiles(config)).toEqual([]);
 });
 
-test("only the npm-authoritative Playwright image is excluded from Docker proposals", () => {
-    const dockerUpdates = (config.updates ?? []).filter(update => update["package-ecosystem"] === "docker");
-    const ignoredDependencies = dockerUpdates.flatMap(update =>
-        (update.ignore ?? []).map(condition => condition["dependency-name"])
+test("Docker candidate selection excludes only npm-authoritative Playwright", () => {
+    const candidates: DockerCandidate[] = [
+        { dependencyName: "playwright", file: ".github/container/Dockerfile" },
+        { dependencyName: "node", file: "server/Dockerfile" },
+    ];
+    const withMissingIgnore = structuredClone(config);
+    const missingIgnoreDocker = (withMissingIgnore.updates ?? []).find(
+        update => update["package-ecosystem"] === "docker",
     );
+    delete missingIgnoreDocker!.ignore;
+    const withBroadIgnore = structuredClone(config);
+    const broadIgnoreDocker = (withBroadIgnore.updates ?? []).find(
+        update => update["package-ecosystem"] === "docker",
+    );
+    broadIgnoreDocker!.ignore = [{ "dependency-name": "*" }];
 
-    expect(ignoredDependencies).toEqual(["playwright"]);
+    expect(selectedDockerCandidates(config, candidates)).toEqual([candidates[1]]);
+    expect(selectedDockerCandidates(withMissingIgnore, candidates)).toEqual(candidates);
+
+    // False-success control: a green/no-candidate result obtained by dropping
+    // the unrelated Node update is not the required repaired selection.
+    expect(selectedDockerCandidates(withBroadIgnore, candidates)).toEqual([]);
+    expect(selectedDockerCandidates(withBroadIgnore, candidates)).not.toEqual([candidates[1]]);
     expect(uncoveredDockerfiles(config)).toEqual([]);
-});
-
-test("a missing or broad Docker ignore cannot masquerade as the scoped Playwright exclusion", () => {
-    const fixture = structuredClone(config);
-    const docker = (fixture.updates ?? []).find(update => update["package-ecosystem"] === "docker");
-    docker!.ignore = [{ "dependency-name": "*" }];
-
-    const ignoredDependencies = (docker!.ignore ?? []).map(condition => condition["dependency-name"]);
-    expect(ignoredDependencies).not.toEqual(["playwright"]);
 });
 
 test.each(dockerfiles)("missing coverage for %s fails validation", file => {
