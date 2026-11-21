@@ -6,7 +6,7 @@ Reduce the execution time of the ${family_name} CI job family while preserving i
 
 ## Context
 
-The daily monitor verified at least two distinct successful default-branch runs of the same current job variant with at least ${threshold} seconds of native test work and test-command elapsed time in `${workflow_path}`. ${recommendation}. Each qualifying native report covers multiple test files. Review dependencies between those files before selecting a safe optimization.
+The daily monitor verified a current default-branch or same-repository PR test job with an exact successful, separated test execution step taking at least ${threshold} seconds in `${workflow_path}`. ${recommendation}. GitHub step timestamps measure the actual test process, including its normal test harness and retries. Review the selection and dependencies before choosing a safe split; this does not assert pure test-body timing.
 
 ${evidence}
 

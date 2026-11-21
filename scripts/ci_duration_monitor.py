@@ -23,11 +23,9 @@ from urllib.parse import quote, urlencode
 from loguru import logger
 
 try:
-    from .ci_duration_policy import CurrentSource, native_tests
-    from .ci_duration_github import NativeLogUnavailable
+    from .ci_duration_policy import CurrentSource
 except ImportError:
-    from ci_duration_policy import CurrentSource, native_tests
-    from ci_duration_github import NativeLogUnavailable
+    from ci_duration_policy import CurrentSource
 
 MANAGED_LABEL = "ci-duration-monitor"
 READY_LABEL = "review-ready"
@@ -86,8 +84,7 @@ class Sample:
     family_jobs: int
     fastest_job_seconds: float
     steps: tuple[Step, ...]
-    native_test_seconds: float | None = None
-    independent_files: int = 0
+    qualifying_test_step_seconds: float | None = None
     diagnostic_reason: str | None = None
 
     @property
@@ -218,9 +215,6 @@ def read_config(path: Path) -> tuple[Workflow, ...]:
             sources = entry.get("source_paths")
             if not isinstance(sources, list) or not sources:
                 raise ValueError("Each family needs verified implementation source paths")
-            diagnostic_pattern = entry.get("diagnostic_job_pattern", "")
-            if not isinstance(diagnostic_pattern, str):
-                raise ValueError("Diagnostic job pattern must be text")
             family = Family(
                 _text(entry.get("key")),
                 _text(entry.get("name")),
@@ -229,10 +223,10 @@ def read_config(path: Path) -> tuple[Workflow, ...]:
                 tuple(_text(source) for source in sources),
                 _text(entry.get("guidance")),
                 _text(entry.get("measurement", "diagnostic")),
-                diagnostic_pattern,
+                str(entry.get("diagnostic_job_pattern", "")),
             )
-            if family.measurement not in {"vitest", "playwright", "diagnostic"}:
-                raise ValueError("Unsupported native test measurement policy")
+            if family.measurement not in {"test-step", "diagnostic"}:
+                raise ValueError("Unsupported test execution policy")
             re.compile(family.job_pattern)
             re.compile(family.test_step_pattern)
             re.compile(family.diagnostic_job_pattern)
@@ -316,26 +310,25 @@ def collect(client: Client, workflows: tuple[Workflow, ...], cutoff: datetime, s
                                 continue
                             steps.append(Step(name, seconds))
                         reason = source.reason(workflow, family, attempt_run, _text(job.get("name")))
-                        native = None
+                        qualifying_seconds = None
                         if reason is None:
-                            if job.get("conclusion") != "success" or unknown_test_steps or not matched_test_steps or test_seconds < THRESHOLD_SECONDS or test_seconds < duration / 2:
-                                reason = "incomplete, short, or setup-dominated test command"
-                            elif any(step.get("conclusion") != "success" for step in _objects(job.get("steps", [])) if re.search(family.test_step_pattern, _text(step.get("name")))):
-                                reason = "test command did not succeed"
+                            if job.get("conclusion") != "success" or unknown_test_steps or not matched_test_steps:
+                                reason = "test execution is incomplete or unsuccessful"
+                            elif duration < THRESHOLD_SECONDS:
+                                reason = "job execution is below 600 seconds"
+                            elif test_seconds < THRESHOLD_SECONDS:
+                                reason = "separated test execution is below 600 seconds"
+                            elif test_seconds < duration / 2:
+                                reason = "test execution does not dominate the job"
                             else:
-                                try:
-                                    response = _request(client, "GET", f"actions/jobs/{_number(job.get('id'))}/logs")
-                                except NativeLogUnavailable:
-                                    reason = "verified native log storage unavailable after bounded retries"
+                                allowed = source.execution_step_names(workflow, family, _text(job.get("name")))
+                                measured = [step for step in _objects(job.get("steps", [])) if re.search(family.test_step_pattern, _text(step.get("name")))]
+                                if any(step.get("name") not in allowed or step.get("conclusion") != "success" for step in measured):
+                                    reason = "test step does not match the current successful execution contract"
+                                elif any(_time(step["started_at"]) < _time(job["started_at"]) or _time(step["completed_at"]) > _time(job["completed_at"]) for step in measured):
+                                    reason = "test step interval is outside the job execution"
                                 else:
-                                    if response.status in {404, 410, 502, 503, 504}:
-                                        reason = f"native job log endpoint unavailable (HTTP {response.status})"
-                                    elif response.status != 200:
-                                        raise RuntimeError(f"Cannot read native test logs: HTTP {response.status}")
-                                    else:
-                                        native = native_tests(response.data, family.measurement) if isinstance(response.data, str) else None
-                                        if native is None or native[0] < THRESHOLD_SECONDS:
-                                            reason = "no usable independent native test slowdown"
+                                    qualifying_seconds = round(test_seconds, 3)
                         observation.samples.append(
                             Sample(
                                 run_id,
@@ -351,8 +344,7 @@ def collect(client: Client, workflows: tuple[Workflow, ...], cutoff: datetime, s
                                 len(selected),
                                 min(value for _, value in selected),
                                 tuple(sorted(steps, key=lambda item: item.seconds, reverse=True)[:3]),
-                                native[0] if native else None,
-                                native[1] if native else 0,
+                                qualifying_seconds,
                                 reason,
                             )
                         )
@@ -381,16 +373,16 @@ def evidence(repository: str, observation: Observation, trigger: Sample) -> str:
     lines = [
         "## Observed CI evidence",
         "",
-        "Job duration excludes queue time. Command elapsed time is diagnostic; qualification requires recurring, successful native test work in at least two distinct files on the current default branch.",
+        "Durations come from GitHub job/step timestamps, excluding queue time. Qualification requires the exact successful, separated test execution step to reach 600 seconds and dominate job execution; test retries remain part of that executed step.",
         "",
-        "| Run / attempt | Job | Result | Job seconds | Queue seconds | Test-command seconds | Family min/max seconds | Native test seconds |",
+        "| Run / attempt | Job | Result | Job seconds | Queue seconds | Test-command seconds | Family min/max seconds | Qualifying test-step seconds |",
         "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |",
     ]
     for sample in samples:
         url = f"https://github.com/{repository}/actions/runs/{sample.run_id}/job/{sample.job_id}"
         queue = "unknown" if sample.queue_seconds is None else f"{sample.queue_seconds:g}"
         test_time = "unknown" if sample.test_step_seconds is None else f"{sample.test_step_seconds:g}"
-        lines.append(f"| [{sample.run_id} / {sample.attempt}]({url}) | {_safe(sample.job_name)} | {sample.conclusion} | {sample.runner_seconds:g} | {queue} | {test_time} | {sample.fastest_job_seconds:g} / {sample.runner_seconds:g} ({sample.family_jobs} jobs) | {sample.native_test_seconds if sample.native_test_seconds is not None else 'unknown'} |")
+        lines.append(f"| [{sample.run_id} / {sample.attempt}]({url}) | {_safe(sample.job_name)} | {sample.conclusion} | {sample.runner_seconds:g} | {queue} | {test_time} | {sample.fastest_job_seconds:g} / {sample.runner_seconds:g} ({sample.family_jobs} jobs) | {sample.qualifying_test_step_seconds if sample.qualifying_test_step_seconds is not None else 'unknown'} |")
     lines += ["", f"Threshold: **{THRESHOLD_SECONDS} seconds or more**. Qualifying attempt completed: `{trigger.completed_at}`; GitHub run head SHA: `{trigger.head_sha}` (the workflow may check out a different merge/head revision).", "", "Longest steps in the qualifying job:"]
     lines += [f"- {_safe(step.name)}: {step.seconds:g} seconds." for step in trigger.steps]
     lines += ["", trigger.marker]
@@ -404,7 +396,7 @@ def issue_body(repository: str, observation: Observation, trigger: Sample, sourc
     source_links = "\n".join(f"- [{path}](https://github.com/{repository}/blob/{quote(source_ref, safe='')}/{quote(path, safe='/')})" for path in family.source_paths)
     template_path = Path(__file__).resolve().parents[1] / ".github" / "ci-duration-issue.md"
     return Template(template_path.read_text(encoding="utf-8")).substitute(
-        identity=_key(repository, observation) + f"\n<!-- ci-duration-policy:v2:recurring-native-tests:{source_ref} -->",
+        identity=_key(repository, observation) + f"\n<!-- ci-duration-policy:v3:separated-test-step:{source_ref} -->",
         family_name=_safe(family.name),
         threshold=THRESHOLD_SECONDS,
         workflow_path=observation.workflow.path,
@@ -458,8 +450,20 @@ def run_monitor(client: Client, workflows: tuple[Workflow, ...], repository: str
     actions: list[dict[str, object]] = []
     prepared = False
     processed: set[int] = set()
+    admission = []
     for observation in observations:
-        slow = [sample for sample in observation.samples if sample.diagnostic_reason is None and sample.native_test_seconds is not None and sample.native_test_seconds >= THRESHOLD_SECONDS]
+        key = _key(repository, observation)
+        existing = [issue.number for issue in managed if issue.state == "open" and
+                    (key in issue.body.splitlines() or any(key in comment.splitlines() for comment in issue.comments))]
+        eligible = [sample for sample in observation.samples if sample.diagnostic_reason is None and sample.qualifying_test_step_seconds is not None]
+        if observation.samples or existing:
+            admission.append({"workflow": observation.workflow.path, "family": observation.family.key,
+                              "qualifying_job_ids": list(dict.fromkeys(sample.job_id for sample in eligible)),
+                              "existing_open_issues": existing,
+                              "classification": "qualifies-existing" if eligible and existing else "qualifies-new" if eligible else "insufficient-evidence",
+                              "diagnostic_samples": len(observation.samples) - len(eligible)})
+    for observation in observations:
+        slow = [sample for sample in observation.samples if sample.diagnostic_reason is None and sample.qualifying_test_step_seconds is not None and sample.runner_seconds >= THRESHOLD_SECONDS]
         if not slow:
             continue
         key = _key(repository, observation)
@@ -473,12 +477,7 @@ def run_monitor(client: Client, workflows: tuple[Workflow, ...], repository: str
             slow = [sample for sample in slow if _time(sample.completed_at) > max(closed)]
         if not slow:
             continue
-        # Require two distinct runs of the same current job variant. Reruns,
-        # parallel shards and retained attempt rows are not independent recurrence.
-        recurring = [sample for sample in slow if len({other.run_id for other in slow if other.job_name == sample.job_name}) >= 2]
-        if not recurring:
-            continue
-        trigger = recurring[-1]
+        trigger = slow[-1]
         marker_present = issue is not None and (trigger.marker in issue.body or any(trigger.marker in comment for comment in issue.comments))
         identity_comment = issue is not None and any(key in comment.splitlines() for comment in issue.comments)
         submitted = _submitted(client, issue) if issue is not None else False
@@ -524,7 +523,7 @@ def run_monitor(client: Client, workflows: tuple[Workflow, ...], repository: str
             continue
         retained = "\n".join([issue.body, *issue.comments])
         keys = re.findall(r"^<!-- ci-duration-monitor:v1:[0-9a-f]{24} -->$", retained, re.MULTILINE)
-        if f"<!-- ci-duration-policy:v2:recurring-native-tests:{source.sha} -->" not in issue.body or not keys or len(set(keys)) != 1 or _submitted(client, issue):
+        if f"<!-- ci-duration-policy:v3:separated-test-step:{source.sha} -->" not in issue.body or not keys or len(set(keys)) != 1 or _submitted(client, issue):
             continue
         if not _complete_specification(issue):
             logger.warning("Pending managed issue {} no longer has a complete specification; not submitting", issue.number)
@@ -553,6 +552,14 @@ def run_monitor(client: Client, workflows: tuple[Workflow, ...], repository: str
         "threshold_seconds": THRESHOLD_SECONDS,
         "publish": publish,
         "actions": actions,
+        "admission": admission,
+        "admission_summary": {
+            "qualifying_candidates": sum(len(item["qualifying_job_ids"]) for item in admission),
+            "qualifying_families_existing": sum(item["classification"] == "qualifies-existing" for item in admission),
+            "qualifying_families_new": sum(item["classification"] == "qualifies-new" for item in admission),
+            "insufficient_families": sum(item["classification"] == "insufficient-evidence" for item in admission),
+            "diagnostic_samples": sum(item["diagnostic_samples"] for item in admission),
+        },
         "workflow_totals": workflow_totals,
         "observations": [{"workflow": item.workflow.path, "family": item.family.key, "samples": [asdict(sample) for sample in item.samples]} for item in observations],
     }
@@ -602,6 +609,8 @@ def main(argv: list[str] | None = None, *, client_factory: Callable[[str, str], 
         report = run_monitor(client_factory(token, args.repository), read_config(args.config), args.repository, args.source_ref, now=now or datetime.now(timezone.utc), lookback_hours=args.lookback_hours, publish=args.publish)
         (args.output_dir / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         summary = f"# CI duration monitor\n\nMode: {'publish' if args.publish else 'dry run'}. Runs created in the last {args.lookback_hours} hours; threshold >= {THRESHOLD_SECONDS} seconds.\n\n"
+        admission_summary = cast(dict[str, int], report["admission_summary"])
+        summary += f"Admission before existing issue handling: {admission_summary['qualifying_candidates']} qualifying jobs; {admission_summary['qualifying_families_existing']} qualifying families with existing issues; {admission_summary['qualifying_families_new']} new qualifying families; {admission_summary['insufficient_families']} families with insufficient evidence.\n\n"
         summary += "\n".join(f"- {item['action']}: `{item['workflow']}` / `{item['family']}` (issue {item['issue'] or 'not created'})." for item in cast(list[dict[str, object]], report["actions"])) or "No qualifying job families."
         totals = cast(list[dict[str, object]], report["workflow_totals"])
         report_only = [item for item in totals if not item["long_job"]]

@@ -16,7 +16,7 @@
                         "client/vitest.base.config.ts"
                     ],
                     "guidance": "Inspect the unit Vitest project and native test durations. Split or rebalance complete test selections only when the test step is the bottleneck; preserve the unit and base-path coverage checks and failure propagation.",
-                    "measurement": "vitest"
+                    "measurement": "test-step"
                 },
                 {
                     "key": "integration-tests",
@@ -30,7 +30,7 @@
                         ".github/actions/setup-test-env/action.yml"
                     ],
                     "guidance": "Inspect integration test durations and fixture requirements before partitioning the selection. Preserve every integration test, emulator-backed behavior and native failure propagation.",
-                    "measurement": "vitest"
+                    "measurement": "test-step"
                 },
                 {
                     "key": "server-tests",
@@ -40,10 +40,14 @@
                     "source_paths": [
                         ".github/workflows/ci-test-server.yml",
                         "server/package.json",
-                        ".github/actions/setup-test-env/action.yml"
+                        ".github/actions/setup-test-env/action.yml",
+                        "scripts/run-server-tests.sh",
+                        "scripts/run-server-test-command.sh",
+                        "scripts/setup.sh",
+                        "server/tests/loaders/pin-server-deps.mjs"
                     ],
                     "guidance": "Inspect the Mocha server test command and native file durations. Preserve test discovery, required service setup and original failures when splitting or rebalancing the suite.",
-                    "measurement": "diagnostic"
+                    "measurement": "test-step"
                 },
                 {
                     "key": "project-directory-tests",
@@ -52,10 +56,12 @@
                     "test_step_pattern": "^Run canonical project directory tests$",
                     "source_paths": [
                         ".github/workflows/ci-test-server.yml",
-                        "server/package.json"
+                        "server/package.json",
+                        "server/tests/loaders/pin-server-deps.mjs",
+                        ".github/actions/setup-test-env/action.yml"
                     ],
                     "guidance": "Inspect the canonical project directory, provider, websocket and cloud entrypoint tests. Preserve all four explicitly selected files and their real emulator behavior.",
-                    "measurement": "diagnostic"
+                    "measurement": "test-step"
                 },
                 {
                     "key": "e2e-chromium",
@@ -74,8 +80,8 @@
                         "client/e2e/reporters/firefox-selection-reporter.ts"
                     ],
                     "guidance": "Compare native Playwright durations across every Chromium project. Existing new-2, new-3 and tables partitions already have coverage and completion guards; preserve the exact collected selection, browser coverage, artifact identity and failure aggregation. Separate dependency/service startup from test execution before choosing further sharding.",
-                    "measurement": "playwright",
-                    "diagnostic_job_pattern": "^(?:e2e-test / )?e2e-test \\(new-3[ab]\\)$"
+                    "measurement": "test-step",
+                    "diagnostic_job_pattern": "^(?:e2e-test / )?e2e-test \\(onprem\\)$"
                 },
                 {
                     "key": "e2e-firefox",
@@ -95,7 +101,7 @@
                         "client/e2e/reporters/firefox-selection-reporter.ts"
                     ],
                     "guidance": "Inspect the Firefox selection runner and actual browser execution receipts. Keep Firefox separate from Chromium; preserve its complete curated selection, zero-test rejection and failure evidence when balancing work.",
-                    "measurement": "playwright"
+                    "measurement": "test-step"
                 }
             ]
         },
@@ -115,7 +121,7 @@
                         "client/vitest.base.config.ts"
                     ],
                     "guidance": "Inspect the unit Vitest project and native test durations. Split or rebalance complete test selections only when the test step is the bottleneck; preserve the unit and base-path coverage checks and failure propagation.",
-                    "measurement": "vitest"
+                    "measurement": "test-step"
                 }
             ]
         },
@@ -134,7 +140,7 @@
                         ".github/actions/setup-test-env/action.yml"
                     ],
                     "guidance": "Inspect integration test durations and fixture requirements before partitioning the selection. Preserve every integration test, emulator-backed behavior and native failure propagation.",
-                    "measurement": "vitest"
+                    "measurement": "test-step"
                 }
             ]
         },
@@ -149,10 +155,14 @@
                     "source_paths": [
                         ".github/workflows/ci-test-server.yml",
                         "server/package.json",
-                        ".github/actions/setup-test-env/action.yml"
+                        ".github/actions/setup-test-env/action.yml",
+                        "scripts/run-server-tests.sh",
+                        "scripts/run-server-test-command.sh",
+                        "scripts/setup.sh",
+                        "server/tests/loaders/pin-server-deps.mjs"
                     ],
                     "guidance": "Inspect the Mocha server test command and native file durations. Preserve test discovery, required service setup and original failures when splitting or rebalancing the suite.",
-                    "measurement": "diagnostic"
+                    "measurement": "test-step"
                 },
                 {
                     "key": "project-directory-tests",
@@ -161,10 +171,12 @@
                     "test_step_pattern": "^Run canonical project directory tests$",
                     "source_paths": [
                         ".github/workflows/ci-test-server.yml",
-                        "server/package.json"
+                        "server/package.json",
+                        "server/tests/loaders/pin-server-deps.mjs",
+                        ".github/actions/setup-test-env/action.yml"
                     ],
                     "guidance": "Inspect the canonical project directory, provider, websocket and cloud entrypoint tests. Preserve all four explicitly selected files and their real emulator behavior.",
-                    "measurement": "diagnostic"
+                    "measurement": "test-step"
                 }
             ]
         },
@@ -188,8 +200,8 @@
                         "client/e2e/reporters/firefox-selection-reporter.ts"
                     ],
                     "guidance": "Compare native Playwright durations across every Chromium project. Existing new-2, new-3 and tables partitions already have coverage and completion guards; preserve the exact collected selection, browser coverage, artifact identity and failure aggregation. Separate dependency/service startup from test execution before choosing further sharding.",
-                    "measurement": "playwright",
-                    "diagnostic_job_pattern": "^(?:e2e-test / )?e2e-test \\(new-3[ab]\\)$"
+                    "measurement": "test-step",
+                    "diagnostic_job_pattern": "^(?:e2e-test / )?e2e-test \\(onprem\\)$"
                 },
                 {
                     "key": "e2e-firefox",
@@ -209,7 +221,7 @@
                         "client/e2e/reporters/firefox-selection-reporter.ts"
                     ],
                     "guidance": "Inspect the Firefox selection runner and actual browser execution receipts. Keep Firefox separate from Chromium; preserve its complete curated selection, zero-test rejection and failure evidence when balancing work.",
-                    "measurement": "playwright"
+                    "measurement": "test-step"
                 }
             ]
         },
@@ -228,7 +240,7 @@
                         "client/package.json"
                     ],
                     "guidance": "Inspect the workflow and slow step to distinguish dependency acquisition, service startup, build work and native tests. Only split independently verifiable work, retaining all existing checks and failure propagation.",
-                    "measurement": "playwright"
+                    "measurement": "diagnostic"
                 }
             ]
         },
@@ -281,7 +293,7 @@
                         "client/package.json"
                     ],
                     "guidance": "Inspect the workflow and slow step to distinguish dependency acquisition, service startup, build work and native tests. Only split independently verifiable work, retaining all existing checks and failure propagation.",
-                    "measurement": "playwright"
+                    "measurement": "diagnostic"
                 }
             ]
         },
@@ -300,7 +312,7 @@
                         "client/package.json"
                     ],
                     "guidance": "Inspect the workflow and slow step to distinguish dependency acquisition, service startup, build work and native tests. Only split independently verifiable work, retaining all existing checks and failure propagation.",
-                    "measurement": "playwright"
+                    "measurement": "diagnostic"
                 }
             ]
         }

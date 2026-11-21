@@ -1,0 +1,494 @@
+[
+    {
+        "family": "unit-tests",
+        "existing_issue": 5995,
+        "run": {
+            "event": "pull_request",
+            "head_branch": "issue-5981-attempt-0-codex-cloud",
+            "head_sha": "b64fdf51ae23970e4f68631d5f22c9bec71eab61",
+            "id": 44866341647,
+            "pull_requests": [
+                {
+                    "base": {
+                        "ref": "main",
+                        "repo": {
+                            "id": 987528414,
+                            "name": "outliner",
+                            "url": "https://api.github.com/repos/outliner-online/outliner"
+                        },
+                        "sha": "e271e9fe27927877fc95e2e1fc4781a59920918c"
+                    },
+                    "head": {
+                        "ref": "issue-5981-attempt-0-codex-cloud",
+                        "repo": {
+                            "id": 987528414,
+                            "name": "outliner",
+                            "url": "https://api.github.com/repos/outliner-online/outliner"
+                        },
+                        "sha": "67ca80857d2627587c6b8976009dad402600649d"
+                    },
+                    "id": 5424234055,
+                    "number": 5994,
+                    "url": "https://api.github.com/repos/outliner-online/outliner/pulls/5994"
+                }
+            ],
+            "status": "completed",
+            "run_attempt": 1,
+            "repository": {
+                "id": 987528414,
+                "full_name": "outliner-online/outliner"
+            },
+            "head_repository": {
+                "id": 987528414,
+                "full_name": "outliner-online/outliner"
+            },
+            "path": ".github/workflows/ci.yml",
+            "run_started_at": "2026-11-21T04:32:28Z"
+        },
+        "job": {
+            "id": 136731411619,
+            "run_id": 44866341647,
+            "run_attempt": 1,
+            "name": "unit-test / unit-test",
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-11-21T04:32:28Z",
+            "completed_at": "2026-11-21T04:47:15Z",
+            "created_at": "2026-11-21T04:31:51Z",
+            "steps": [
+                {
+                    "name": "Set up job",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 1,
+                    "started_at": "2026-11-21T04:32:29Z",
+                    "completed_at": "2026-11-21T04:32:29Z"
+                },
+                {
+                    "name": "Initialize containers",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 2,
+                    "started_at": "2026-11-21T04:32:29Z",
+                    "completed_at": "2026-11-21T04:33:41Z"
+                },
+                {
+                    "name": "Checkout code",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 3,
+                    "started_at": "2026-11-21T04:33:41Z",
+                    "completed_at": "2026-11-21T04:33:43Z"
+                },
+                {
+                    "name": "Setup Test Environment",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 4,
+                    "started_at": "2026-11-21T04:33:43Z",
+                    "completed_at": "2026-11-21T04:35:10Z"
+                },
+                {
+                    "name": "Run unit tests",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 5,
+                    "started_at": "2026-11-21T04:35:10Z",
+                    "completed_at": "2026-11-21T04:47:11Z"
+                },
+                {
+                    "name": "Summarise failures",
+                    "status": "completed",
+                    "conclusion": "skipped",
+                    "number": 6,
+                    "started_at": "2026-11-21T04:47:11Z",
+                    "completed_at": "2026-11-21T04:47:11Z"
+                },
+                {
+                    "name": "Upload logs",
+                    "status": "completed",
+                    "conclusion": "skipped",
+                    "number": 7,
+                    "started_at": "2026-11-21T04:47:11Z",
+                    "completed_at": "2026-11-21T04:47:11Z"
+                },
+                {
+                    "name": "Post Checkout code",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 13,
+                    "started_at": "2026-11-21T04:47:11Z",
+                    "completed_at": "2026-11-21T04:47:12Z"
+                },
+                {
+                    "name": "Stop containers",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 14,
+                    "started_at": "2026-11-21T04:47:12Z",
+                    "completed_at": "2026-11-21T04:47:13Z"
+                },
+                {
+                    "name": "Complete job",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 15,
+                    "started_at": "2026-11-21T04:47:13Z",
+                    "completed_at": "2026-11-21T04:47:13Z"
+                }
+            ]
+        }
+    },
+    {
+        "family": "server-tests",
+        "existing_issue": 5996,
+        "run": {
+            "event": "pull_request",
+            "head_branch": "issue-5981-attempt-0-codex-cloud",
+            "head_sha": "b64fdf51ae23970e4f68631d5f22c9bec71eab61",
+            "id": 44866341647,
+            "pull_requests": [
+                {
+                    "base": {
+                        "ref": "main",
+                        "repo": {
+                            "id": 987528414,
+                            "name": "outliner",
+                            "url": "https://api.github.com/repos/outliner-online/outliner"
+                        },
+                        "sha": "e271e9fe27927877fc95e2e1fc4781a59920918c"
+                    },
+                    "head": {
+                        "ref": "issue-5981-attempt-0-codex-cloud",
+                        "repo": {
+                            "id": 987528414,
+                            "name": "outliner",
+                            "url": "https://api.github.com/repos/outliner-online/outliner"
+                        },
+                        "sha": "67ca80857d2627587c6b8976009dad402600649d"
+                    },
+                    "id": 5424234055,
+                    "number": 5994,
+                    "url": "https://api.github.com/repos/outliner-online/outliner/pulls/5994"
+                }
+            ],
+            "status": "completed",
+            "run_attempt": 1,
+            "repository": {
+                "id": 987528414,
+                "full_name": "outliner-online/outliner"
+            },
+            "head_repository": {
+                "id": 987528414,
+                "full_name": "outliner-online/outliner"
+            },
+            "path": ".github/workflows/ci.yml",
+            "run_started_at": "2026-11-21T04:32:35Z"
+        },
+        "job": {
+            "id": 136731411435,
+            "run_id": 44866341647,
+            "run_attempt": 1,
+            "name": "server-test / server-test",
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-11-21T04:32:35Z",
+            "completed_at": "2026-11-21T04:48:40Z",
+            "created_at": "2026-11-21T04:31:51Z",
+            "steps": [
+                {
+                    "name": "Set up job",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 1,
+                    "started_at": "2026-11-21T04:32:36Z",
+                    "completed_at": "2026-11-21T04:32:36Z"
+                },
+                {
+                    "name": "Initialize containers",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 2,
+                    "started_at": "2026-11-21T04:32:36Z",
+                    "completed_at": "2026-11-21T04:33:42Z"
+                },
+                {
+                    "name": "Checkout code",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 3,
+                    "started_at": "2026-11-21T04:33:42Z",
+                    "completed_at": "2026-11-21T04:33:44Z"
+                },
+                {
+                    "name": "Setup Test Environment",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 4,
+                    "started_at": "2026-11-21T04:33:44Z",
+                    "completed_at": "2026-11-21T04:35:14Z"
+                },
+                {
+                    "name": "Run server tests",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 5,
+                    "started_at": "2026-11-21T04:35:14Z",
+                    "completed_at": "2026-11-21T04:48:36Z"
+                },
+                {
+                    "name": "Summarise failures",
+                    "status": "completed",
+                    "conclusion": "skipped",
+                    "number": 6,
+                    "started_at": "2026-11-21T04:48:36Z",
+                    "completed_at": "2026-11-21T04:48:36Z"
+                },
+                {
+                    "name": "Upload logs",
+                    "status": "completed",
+                    "conclusion": "skipped",
+                    "number": 7,
+                    "started_at": "2026-11-21T04:48:36Z",
+                    "completed_at": "2026-11-21T04:48:36Z"
+                },
+                {
+                    "name": "Post Checkout code",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 13,
+                    "started_at": "2026-11-21T04:48:36Z",
+                    "completed_at": "2026-11-21T04:48:37Z"
+                },
+                {
+                    "name": "Stop containers",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 14,
+                    "started_at": "2026-11-21T04:48:37Z",
+                    "completed_at": "2026-11-21T04:48:37Z"
+                },
+                {
+                    "name": "Complete job",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 15,
+                    "started_at": "2026-11-21T04:48:37Z",
+                    "completed_at": "2026-11-21T04:48:37Z"
+                }
+            ]
+        }
+    },
+    {
+        "family": "e2e-chromium",
+        "existing_issue": 5997,
+        "run": {
+            "event": "pull_request",
+            "head_branch": "issue-5981-attempt-0-codex-cloud",
+            "head_repository": {
+                "id": 987528414,
+                "full_name": "outliner-online/outliner"
+            },
+            "head_sha": "67ca80857d2627587c6b8976009dad402600649d",
+            "id": 44885392240,
+            "path": ".github/workflows/ci.yml",
+            "pull_requests": [
+                {
+                    "base": {
+                        "ref": "main",
+                        "repo": {
+                            "id": 987528414,
+                            "name": "outliner",
+                            "url": "https://api.github.com/repos/outliner-online/outliner"
+                        },
+                        "sha": "e271e9fe27927877fc95e2e1fc4781a59920918c"
+                    },
+                    "head": {
+                        "ref": "issue-5981-attempt-0-codex-cloud",
+                        "repo": {
+                            "id": 987528414,
+                            "name": "outliner",
+                            "url": "https://api.github.com/repos/outliner-online/outliner"
+                        },
+                        "sha": "67ca80857d2627587c6b8976009dad402600649d"
+                    },
+                    "id": 5424234055,
+                    "number": 5994,
+                    "url": "https://api.github.com/repos/outliner-online/outliner/pulls/5994"
+                }
+            ],
+            "repository": {
+                "id": 987528414,
+                "full_name": "outliner-online/outliner"
+            },
+            "status": "completed",
+            "run_attempt": 2,
+            "run_started_at": "2026-11-21T08:34:53Z"
+        },
+        "job": {
+            "id": 136798530012,
+            "run_id": 44885392240,
+            "run_attempt": 2,
+            "name": "e2e-test / e2e-test (new-4)",
+            "status": "completed",
+            "conclusion": "success",
+            "started_at": "2026-11-21T08:34:53Z",
+            "completed_at": "2026-11-21T08:53:03Z",
+            "created_at": "2026-11-21T09:11:12Z",
+            "steps": [
+                {
+                    "name": "Set up job",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 1,
+                    "started_at": "2026-11-21T08:34:54Z",
+                    "completed_at": "2026-11-21T08:34:55Z"
+                },
+                {
+                    "name": "Checkout code",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 2,
+                    "started_at": "2026-11-21T08:34:55Z",
+                    "completed_at": "2026-11-21T08:34:56Z"
+                },
+                {
+                    "name": "Initialize execution evidence",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 3,
+                    "started_at": "2026-11-21T08:34:56Z",
+                    "completed_at": "2026-11-21T08:34:57Z"
+                },
+                {
+                    "name": "Setup E2E dependencies",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 4,
+                    "started_at": "2026-11-21T08:34:57Z",
+                    "completed_at": "2026-11-21T08:35:40Z"
+                },
+                {
+                    "name": "Verify Firefox execution results and failure evidence",
+                    "status": "completed",
+                    "conclusion": "skipped",
+                    "number": 5,
+                    "started_at": "2026-11-21T08:35:40Z",
+                    "completed_at": "2026-11-21T08:35:40Z"
+                },
+                {
+                    "name": "Build server",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 6,
+                    "started_at": "2026-11-21T08:35:40Z",
+                    "completed_at": "2026-11-21T08:35:47Z"
+                },
+                {
+                    "name": "Run E2E-specific startup (services + readiness)",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 7,
+                    "started_at": "2026-11-21T08:35:47Z",
+                    "completed_at": "2026-11-21T08:36:15Z"
+                },
+                {
+                    "name": "Run E2E tests (new-4)",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 8,
+                    "started_at": "2026-11-21T08:36:15Z",
+                    "completed_at": "2026-11-21T08:52:58Z"
+                },
+                {
+                    "name": "Verify retry-free Yjs offline synchronization without Tinylicious",
+                    "status": "completed",
+                    "conclusion": "skipped",
+                    "number": 9,
+                    "started_at": "2026-11-21T08:52:58Z",
+                    "completed_at": "2026-11-21T08:52:58Z"
+                },
+                {
+                    "name": "Record retry-free Grid clipboard verification",
+                    "status": "completed",
+                    "conclusion": "skipped",
+                    "number": 10,
+                    "started_at": "2026-11-21T08:52:58Z",
+                    "completed_at": "2026-11-21T08:52:58Z"
+                },
+                {
+                    "name": "Record retry-free Grid resize wheel verification",
+                    "status": "completed",
+                    "conclusion": "skipped",
+                    "number": 11,
+                    "started_at": "2026-11-21T08:52:58Z",
+                    "completed_at": "2026-11-21T08:52:58Z"
+                },
+                {
+                    "name": "Summarise failures",
+                    "status": "completed",
+                    "conclusion": "skipped",
+                    "number": 12,
+                    "started_at": "2026-11-21T08:52:58Z",
+                    "completed_at": "2026-11-21T08:52:58Z"
+                },
+                {
+                    "name": "Verify startup evidence",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 13,
+                    "started_at": "2026-11-21T08:52:58Z",
+                    "completed_at": "2026-11-21T08:52:58Z"
+                },
+                {
+                    "name": "Record setup and execution status",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 14,
+                    "started_at": "2026-11-21T08:52:58Z",
+                    "completed_at": "2026-11-21T08:52:58Z"
+                },
+                {
+                    "name": "Upload Logs & Artifacts",
+                    "status": "completed",
+                    "conclusion": "skipped",
+                    "number": 15,
+                    "started_at": "2026-11-21T08:52:58Z",
+                    "completed_at": "2026-11-21T08:52:58Z"
+                },
+                {
+                    "name": "Upload safe startup diagnostics",
+                    "status": "completed",
+                    "conclusion": "skipped",
+                    "number": 16,
+                    "started_at": "2026-11-21T08:52:58Z",
+                    "completed_at": "2026-11-21T08:52:58Z"
+                },
+                {
+                    "name": "Post Setup E2E dependencies",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 31,
+                    "started_at": "2026-11-21T08:52:58Z",
+                    "completed_at": "2026-11-21T08:53:00Z"
+                },
+                {
+                    "name": "Post Checkout code",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 32,
+                    "started_at": "2026-11-21T08:53:00Z",
+                    "completed_at": "2026-11-21T08:53:01Z"
+                },
+                {
+                    "name": "Complete job",
+                    "status": "completed",
+                    "conclusion": "success",
+                    "number": 33,
+                    "started_at": "2026-11-21T08:53:01Z",
+                    "completed_at": "2026-11-21T08:53:01Z"
+                }
+            ]
+        }
+    }
+]

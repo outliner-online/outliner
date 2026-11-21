@@ -47,7 +47,7 @@ class MonitorHTTPTest(unittest.TestCase):
                 self.send_response(result.status)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
-                self.wfile.write(result.data.encode() if self.path.endswith("/logs") else json.dumps(result.data).encode())
+                self.wfile.write(json.dumps(result.data).encode())
 
             def log_message(self, *_):
                 pass
@@ -63,7 +63,7 @@ class MonitorHTTPTest(unittest.TestCase):
                     "families": [{
                         "key": "tests", "name": "Tests", "job_pattern": r"Tests \(\d+/\d+\)",
                         "test_step_pattern": "^Run tests$", "source_paths": [".github/workflows/ci.yml"],
-                        "guidance": "Inspect actual durations and preserve complete test selection.", "measurement": "vitest",
+                        "guidance": "Inspect actual durations and preserve complete test selection.", "measurement": "test-step",
                     }],
                 }]}))
                 command = [sys.executable, str(ROOT / "scripts/ci_duration_monitor.py"),

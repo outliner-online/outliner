@@ -1,4 +1,4 @@
-"""Fail-closed eligibility for recurring, current test-work duration evidence."""
+"""Verify current workflow provenance and separated test execution contracts."""
 
 from __future__ import annotations
 
@@ -9,37 +9,6 @@ from urllib.parse import quote
 
 import yaml
 
-
-def native_tests(log: str, measurement: str) -> tuple[float, int] | None:
-    """Use native test timings, never command/harness or job elapsed time.
-
-    Only successful, retry-free summaries with multiple independently named files
-    are supported. Unknown reporter formats stay diagnostic.
-    """
-    log = re.sub(r"\x1b\[[0-9;]*m", "", log)
-    log = re.sub(r"(?m)^\d{4}-\d\d-\d\dT[0-9:.]+Z\s*", "", log)
-    if measurement == "vitest":
-        summaries = re.findall(r"(?m)^\s*Test Files\s+(\d+) passed \((\d+)\)\s*$", log)
-        tests = re.findall(r"(?m)^\s*Tests\s+(\d+) passed \((\d+)\)\s*$", log)
-        durations = re.findall(r"Duration\s+[^\n]*\btests\s+([\d.]+)(ms|s)\b", log)
-        if not summaries or len(summaries) != len(durations) or len(tests) != len(summaries) or len(re.findall(r"(?m)^\s*Test Files\s+", log)) != len(summaries):
-            return None
-        if any(a != b for a, b in [*summaries, *tests]) or re.search(r"(?:\(retry x\d+\)|retry #\d+|\bretried\b)", log, re.I):
-            return None
-        independent = [(int(summary[0]), float(value) / (1000 if unit == "ms" else 1))
-                       for summary, (value, unit) in zip(summaries, durations) if int(summary[0]) >= 2]
-        return (sum(seconds for _, seconds in independent), sum(files for files, _ in independent)) if independent else None
-    if measurement == "playwright":
-        # The list reporter prints one completed result per native test. Require
-        # one final passing summary, no retries/failures, and distinct spec files.
-        if len(re.findall(r"\b\d+ passed \(", log)) != 1 or re.search(r"(?:\b\d+ (?:failed|flaky|skipped|did not run)\b|retry #\d+)", log, re.I):
-            return None
-        rows = re.findall(r"[✓✔]\s+\d+\s+\[[^\]]+\]\s+[^\n]*?([^\s/]+\.spec\.[cm]?[jt]s):\d+:\d+[^\n]*?\(([\d.]+)(ms|s|m)\)", log)
-        passed = re.search(r"\b(\d+) passed \(", log)
-        if passed is None or len(rows) != int(passed[1]) or len({file for file, _, _ in rows}) < 2:
-            return None
-        return sum(float(value) * {"ms": .001, "s": 1, "m": 60}[unit] for _, value, unit in rows), len({file for file, _, _ in rows})
-    return None
 
 
 class CurrentSource:
@@ -52,6 +21,7 @@ class CurrentSource:
         if metadata.get("full_name") != repository:
             raise ValueError("Repository identity could not be verified")
         self.repository = repository
+        self.repository_id = metadata.get("id")
         self.branch = metadata["default_branch"]
         self.sha = call(client, "GET", f"branches/{quote(self.branch, safe='')}")["commit"]["sha"]
         self.cache = {}
@@ -109,8 +79,21 @@ class CurrentSource:
         return result
 
     def reason(self, workflow, family, run: dict, job_name: str) -> str | None:
-        if run.get("head_branch") != self.branch or run.get("event") not in {"push", "schedule", "workflow_dispatch"}:
-            return "not a default-branch production execution"
+        if run.get("event") == "pull_request":
+            # GitHub's run payload provides the PR/base repository identities.
+            # Its head SHA can move after a run; source is verified at this run's
+            # immutable head_sha below rather than trusting the latest PR head.
+            refs = run.get("pull_requests", [])
+            if not self.repository_id or not any(
+                ref.get("base", {}).get("ref") == self.branch
+                and ref.get("base", {}).get("repo", {}).get("id") == self.repository_id
+                and ref.get("head", {}).get("repo", {}).get("id") == self.repository_id
+                and ref.get("head", {}).get("ref") == run.get("head_branch")
+                for ref in refs
+            ):
+                return "unverified default-branch PR workflow provenance"
+        elif run.get("head_branch") != self.branch or run.get("event") not in {"push", "schedule", "workflow_dispatch"}:
+            return "not a default-branch or verified PR test execution"
         if run.get("head_repository", {}).get("full_name") != self.repository or run.get("repository", {}).get("full_name") != self.repository:
             return "unverified run repository"
         if workflow.path not in self.inventories:
@@ -120,15 +103,21 @@ class CurrentSource:
         if job_name not in inventory:
             return "job/variant is absent from the current active workflow"
         if family.diagnostic_job_pattern and re.fullmatch(family.diagnostic_job_pattern, job_name):
-            return "current variant uses an unsupported native reporter; diagnostic only"
-        if family.measurement not in {"vitest", "playwright"}:
-            return "no supported native test measurement for this entrypoint"
+            return "current variant mixes build/preparation with test execution"
+        if family.measurement != "test-step":
+            return "no separated test execution contract for this entrypoint"
         paths, steps = inventory[job_name]
         if not any(re.search(family.test_step_pattern, step) for step in steps):
             return "configured test step is absent from the current job entrypoint"
         paths = set(family.source_paths) | paths
         for path in paths:
             current = self.content(path, self.sha)
-            if current is None or self.content(path, run.get("head_sha", "")) != current:
+            if current is None:
+                return "declared execution source is absent from current default branch"
+            if self.content(path, run.get("head_sha", "")) != current:
                 return "workflow/test entrypoint differs from current default branch"
         return None
+
+    def execution_step_names(self, workflow, family, job_name):
+        return {name for name in self.inventories[workflow.path][job_name][1]
+                if re.search(family.test_step_pattern, name)}

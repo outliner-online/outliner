@@ -1,8 +1,6 @@
 """Repository mappings and real HTTP transport regressions for the CI monitor."""
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from http.client import IncompleteRead
-import ssl
 import importlib.util
 import json
 from pathlib import Path
@@ -10,8 +8,6 @@ import re
 import sys
 import threading
 import unittest
-from unittest.mock import patch
-from urllib.error import HTTPError, URLError
 from urllib.request import Request
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -85,16 +81,6 @@ class GitHubTransportTest(unittest.TestCase):
             def respond(self):
                 body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
                 requests.append((self.command, self.path, json.loads(body) if body else None, dict(self.headers)))
-                if self.path.endswith("/actions/jobs/123/logs"):
-                    self.send_response(302)
-                    self.send_header("Location", "/native-logs")
-                    self.end_headers()
-                    return
-                if self.path == "/native-logs":
-                    self.send_response(200)
-                    self.end_headers()
-                    self.wfile.write(b"native test logs")
-                    return
                 if self.path.endswith(("/unavailable", "/malformed")):
                     self.send_response(503 if self.path.endswith("/unavailable") else 200)
                     self.end_headers()
@@ -127,45 +113,11 @@ class GitHubTransportTest(unittest.TestCase):
         self.assertEqual(self.requests[1][:3], ("POST", "/repos/example/repo/issues/42/labels", {"labels": ["review-ready"]}))
         self.assertEqual(self.requests[1][3]["Authorization"], "Bearer fixture-token")
 
-    def test_native_log_same_origin_redirect_decodes_text(self):
-        result = self.client.request("GET", "actions/jobs/123/logs")
-        self.assertEqual((result.status, result.data), (200, "native test logs"))
-        self.assertEqual(self.requests[0][3]["Authorization"], "Bearer fixture-token")
-        self.assertEqual(self.requests[1][3]["Authorization"], "Bearer fixture-token")
-
-    def test_verified_storage_redirect_strips_credentials_and_isolates_unavailability(self):
-        storage = "https://productionresultssa0.blob.core.windows.net/logs?sig=secret-fixture"
-        request = Request("https://api.github.com/repos/example/repo/actions/jobs/123/logs", headers={"Authorization": "Bearer fixture"})
-        handler = transport.SafeRedirect(native_log=True)
-        redirected = handler.redirect_request(request, None, 302, "Found", {}, storage)
-        self.assertFalse(redirected.has_header("Authorization"))
-        for failure in [URLError("secret-fixture"), HTTPError(storage, 403, "secret-fixture", {}, None), IncompleteRead(b"partial", 100)]:
-            def opener(handler):
-                class Opener:
-                    def open(self, request, **kwargs):
-                        handler.redirect_request(request, None, 302, "Found", {}, storage)
-                        raise failure
-                return Opener()
-            with patch.object(transport, "build_opener", side_effect=opener):
-                with self.assertRaises(transport.NativeLogUnavailable) as caught:
-                    self.client.request("GET", "actions/jobs/123/logs")
-                self.assertNotIn("secret-fixture", str(caught.exception))
-                self.assertNotIn("https", str(caught.exception))
-        with patch.object(transport, "build_opener", side_effect=opener):
-            failure = URLError(ssl.SSLCertVerificationError("secret-fixture"))
-            with self.assertRaisesRegex(RuntimeError, "Untrusted GitHub transport certificate"):
-                self.client.request("GET", "actions/jobs/123/logs")
-
-    def test_untrusted_log_redirects_and_api_auth_remain_systemic(self):
-        request = Request("https://api.github.com/repos/example/repo/actions/jobs/123/logs", headers={"Authorization": "Bearer fixture"})
-        for target in ["https://attacker.example/logs?sig=secret", "http://productionresultssa0.blob.core.windows.net/logs", "https://productionresultssa0.blob.core.windows.net.attacker.example/logs", "https://productionresultssa0.blob.core.windows.net:secret/logs"]:
-            with self.assertRaisesRegex(RuntimeError, "Refusing") as caught:
-                transport.SafeRedirect(native_log=True).redirect_request(request, None, 302, "Found", {}, target)
-            self.assertNotIn("secret", str(caught.exception))
-        error = HTTPError(request.full_url, 403, "Denied", {}, None)
-        with patch.object(transport, "build_opener") as opener:
-            opener.return_value.open.side_effect = error
-            self.assertEqual(self.client.request("GET", "actions/jobs/123/logs").status, 403)
+    def test_metadata_redirect_cannot_escape_the_api_origin(self):
+        request = Request("https://api.github.com/repos/example/repo")
+        with self.assertRaisesRegex(RuntimeError, "untrusted metadata redirect") as caught:
+            transport.MetadataRedirect().redirect_request(request, None, 302, "Found", {}, "https://foreign.example/?sig=secret")
+        self.assertNotIn("secret", str(caught.exception))
 
     def test_http_error_preserves_status_but_success_requires_json(self):
         response = self.client.request("GET", "unavailable")

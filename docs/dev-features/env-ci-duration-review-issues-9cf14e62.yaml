@@ -1,7 +1,7 @@
 id: ENV-9cf14e62
 title: Daily CI duration review issues
 title-ja: CI実行時間を毎日監視してレビュー用Issueを作成する
-description: The scheduled CI duration monitor reads completed GitHub Actions attempts, distinguishes runner work from queueing, and reconciles one review issue per configured workflow and logical job family only after two distinct successful default-branch runs of the same current job variant demonstrate at least ten minutes of native test work across multiple test files. Setup, incomplete, retired and unknown evidence stays diagnostic; shared setup timing never creates per-family issues. New complete English issue bodies are submitted with review-ready in a final operation. Existing reviewer edits and consumed readiness labels are preserved.
+description: The daily CI monitor uses GitHub-native step timestamps and conclusions to admit verified current test jobs whose separated execution step reaches 600 seconds. Same-repository PRs against the default branch are supported. Setup-only, unknown, incomplete and retired evidence remains diagnostic. Admission is reported before the existing issue duplicate and closure checks. Server CI preserves its exact preparation in a named step before the unchanged Mocha selection; local npm test still prepares first.
 category: environment
 status: implemented
 components:
@@ -11,8 +11,12 @@ components:
 - scripts/ci_duration_monitor.py
 - scripts/ci_duration_github.py
 - scripts/ci_duration_policy.py
+- scripts/run-server-test-command.sh
+- scripts/run-server-tests.sh
+- .github/workflows/ci-test-server.yml
 tests:
 - scripts/tests/test_ci_duration_monitor.py
 - scripts/tests/test_ci_duration_monitor_config.py
 - scripts/tests/test_ci_duration_monitor_http.py
 - scripts/tests/test_ci_duration_monitor_policy.py
+- scripts/tests/test_server_test_boundary.py

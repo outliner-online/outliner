@@ -1,20 +1,18 @@
-"""Policy regressions using native owner-closed shapes and current repo sources.
-
-The GitHub fixture is the explicit isolated API boundary; no live issue writes.
-"""
+"""GitHub-native admission before unchanged issue reconciliation; never live writes."""
 
 import copy
 from datetime import timedelta
 import json
-import re
 from pathlib import Path
+import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 
+import yaml
 import test_ci_duration_monitor as fixtures
 from test_ci_duration_monitor import GitHub, NOW, REPOSITORY, Result, job, stamp
 from scripts import ci_duration_monitor as monitor
-from scripts.ci_duration_policy import native_tests
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -24,304 +22,183 @@ class PolicyTests(unittest.TestCase):
     run_cli = fixtures.MonitorTests.run_cli
     report = fixtures.MonitorTests.report
 
-    def set_jobs(self, jobs, *, runs=2):
-        self.github.runs = [{**copy.deepcopy(self.github.runs[0]), "id": run_id} for run_id in range(10, 10 + runs)]
-        self.github.jobs = {(run["id"], 1): copy.deepcopy(jobs) for run in self.github.runs}
-        for run in self.github.runs:
-            for item in self.github.jobs[(run["id"], 1)]:
-                item["id"] += run["id"] * 1000
-
-    def test_single_slow_run_attempts_and_different_shards_are_not_recurrence(self):
-        self.assertEqual(self.run_cli(recurring=False), 0)
-        self.assertEqual(self.github.mutations, [])
-        self.github.runs[0]["run_attempt"] = 2
-        self.github.jobs[(10, 2)] = [job(2, attempt=2)]
-        self.assertEqual(self.run_cli(recurring=False), 0)
-        self.assertEqual(self.github.mutations, [])
-        self.github.runs[0]["run_attempt"] = 1
-        self.github.runs.append({**self.github.runs[0], "id": 11})
-        self.github.jobs[(11, 1)] = [job(3, name="Tests (2/4)")]
-        self.assertEqual(self.run_cli(recurring=False), 0)
-        self.assertEqual(self.github.mutations, [])
-
-    def test_default_branch_repository_workflow_and_native_measurements_fail_closed(self):
-        for change in ("branch", "event", "repository", "source", "inactive", "unknown-variant", "no-native", "one-file", "retry", "short-tests", "logs-unavailable"):
-            with self.subTest(change=change):
-                self.github = GitHub()
-                self.set_jobs([job(seconds=700)])
-                original = self.github.request
-
-                def request(method, path, payload=None):
-                    if change == "logs-unavailable" and path.startswith("actions/jobs/"):
-                        return Result(404, {})
-                    if change == "source" and path.startswith("contents/") and "ref=" + "a" * 40 in path:
-                        return Result(404, {})
-                    if change == "inactive" and path.startswith("actions/workflows/") and "/runs?" not in path:
-                        return Result(200, {"state": "disabled_manually", "path": ".github/workflows/ci.yml"})
-                    return original(method, path, payload)
-
-                for run in self.github.runs:
-                    if change == "branch": run["head_branch"] = "old-prototype"
-                    if change == "event": run["event"] = "pull_request"
-                    if change == "repository": run["head_repository"] = {"full_name": "other/repo"}
-                for jobs in self.github.jobs.values():
-                    for item in jobs:
-                        if change == "unknown-variant": item["name"] = "Tests (retired)"
-                        if change in {"no-native", "one-file", "retry", "short-tests"}:
-                            self.github.logs[item["id"]] = {
-                                "no-native": "Run tests took 700 seconds",
-                                "one-file": "Test Files 1 passed (1)\n Tests 2 passed (2)\n Duration 700s (tests 700s)",
-                                "retry": "Test Files 2 passed (2)\n Tests 2 passed (2)\n Duration 700s (tests 700s) (retry x1)",
-                                "short-tests": "Test Files 2 passed (2)\n Tests 2 passed (2)\n Duration 700s (tests 12s)",
-                            }[change]
-                with patch.object(self.github, "request", side_effect=request):
-                    self.assertEqual(self.run_cli(recurring=False), 0)
-                self.assertEqual(self.github.mutations, [])
-                self.assertTrue(all(sample["diagnostic_reason"] for obs in self.report()["observations"] for sample in obs["samples"]))
-
-    def test_real_five_owner_closed_shapes_remain_diagnostic_on_repeat(self):
-        workflows = monitor.read_config(ROOT / ".github/ci-duration-monitor.json")
-        self.github.sources = {str(path.relative_to(ROOT)): path.read_text() for path in (ROOT / ".github").rglob("*.yml")}
+    def repository_sources(self):
+        workflows = monitor.read_config(ROOT / '.github/ci-duration-monitor.json')
+        self.github.sources = {str(p.relative_to(ROOT)): p.read_text() for p in (ROOT / '.github').rglob('*.yml')}
         for workflow in workflows:
             for family in workflow.families:
-                for path in family.source_paths:
-                    self.github.sources[path] = (ROOT / path).read_text()
-        fixtures = json.loads((ROOT / "scripts/tests/fixtures/ci-duration/owner-closed.json").read_text())
-        for row in fixtures:
-            with self.subTest(issue=row["issue"]):
-                workflow = next(item for item in workflows if any(re.fullmatch(f.job_pattern, row["name"]) for f in item.families)) if row["issue"] != 6003 else next(w for w in workflows if w.path.endswith("ci-test-container-build.yml"))
-                template = job(row["job_id"], seconds={5998:708,5999:698,6000:603,6001:640,6003:657}[row["issue"]], name=row["name"], conclusion=row["conclusion"])
-                # Preserve the exact native step timings and outcomes; move the
-                # enclosing run timestamps into this deterministic scan window.
-                template["steps"] = row["steps"]
-                self.github.runs = [{**GitHub().runs[0], "path": workflow.path}]
-                self.set_jobs([template])
-                for jobs in self.github.jobs.values():
-                    for item in jobs:
-                        for step in item["steps"]:
-                            seconds = monitor._seconds(step.get("started_at"), step.get("completed_at"))
-                            if seconds is not None:
-                                step.update(started_at=stamp(-seconds), completed_at=stamp())
-                if row["issue"] == 6003:
-                    for run in self.github.runs:
-                        run.update(event="pull_request", head_branch="fix/direct-runner-apt-provenance")
-                self.github.issues, self.github.calls = [], []
-                for _ in range(2):
-                    with patch.object(monitor, "logger"):
-                        report = monitor.run_monitor(self.github, (workflow,), REPOSITORY, "b"*40, now=NOW, lookback_hours=48, publish=True)
-                    self.assertEqual(report["actions"], [])
-                    samples = [s for o in report["observations"] for s in o["samples"]]
-                    self.assertEqual(len(samples), 2)
-                    self.assertTrue(all(s["diagnostic_reason"] for s in samples))
-                    self.assertTrue(all(s["steps"] for s in samples))
-                self.assertEqual(self.github.mutations, [])
-                # Identical later evidence must not restart an owner-closed family.
-                observations, _ = monitor.collect(self.github, (workflow,), NOW.replace(day=19), monitor.CurrentSource(self.github, monitor._call, REPOSITORY))
-                observed = next(o for o in observations if o.samples)
-                self.github.issues = [{"number": row["issue"], "body": monitor._key(REPOSITORY, observed), "state": "closed", "closed_at": stamp(-1), "labels": [{"name": monitor.MANAGED_LABEL}]}]
-                with patch.object(monitor, "logger"):
-                    monitor.run_monitor(self.github, (workflow,), REPOSITORY, "b"*40, now=NOW, lookback_hours=48, publish=True)
-                self.assertEqual(self.github.mutations, [])
+                for source in family.source_paths:
+                    self.github.sources[source] = (ROOT / source).read_text()
+        return workflows
 
-    def test_manual_supported_native_work_opens_one_issue_and_new_regression_survives_closure(self):
-        for run in self.github.runs:
-            run["event"] = "workflow_dispatch"
-        self.set_jobs([job(seconds=700)])
+    def test_single_completed_separated_execution_is_a_candidate(self):
         self.assertEqual(self.run_cli(recurring=False), 0)
         self.assertEqual(len(self.github.issues), 1)
-        self.assertEqual(self.run_cli(recurring=False), 0)
-        self.assertEqual(len(self.github.mutations), 3)
-        self.github.issues[0].update(state="closed", closed_at=stamp())
-        self.assertEqual(self.run_cli(recurring=False), 0)
-        self.assertEqual(len(self.github.issues), 1)
-        for run_id in [12, 13]:
-            self.github.runs.append({**self.github.runs[0], "id": run_id})
-            candidate = job(run_id, seconds=700)
-            candidate["completed_at"] = stamp(run_id - 11)
-            self.github.jobs[(run_id, 1)] = [candidate]
-            self.assertEqual(self.run_cli(recurring=False, now=NOW + timedelta(seconds=3)), 0)
-            self.assertEqual(len(self.github.issues), 1 if run_id == 12 else 2)
-        self.assertEqual(self.github.issues[0]["state"], "closed")
+        self.assertEqual(self.report()['admission'][0]['classification'], 'qualifies-new')
 
-    def test_common_dependency_acquisition_stays_one_shared_diagnostic(self):
-        workflows = monitor.read_config(ROOT / ".github/ci-duration-monitor.json")
-        selected = tuple(w for w in workflows if "ci-schedule-hosting-" in w.path)
-        self.github.sources = {str(path.relative_to(ROOT)): path.read_text() for path in (ROOT / ".github").rglob("*.yml")}
+    def test_owner_intervals_under_separated_contract_qualify_before_existing_duplicates(self):
+        workflows = self.repository_sources()
+        workflow = next(w for w in workflows if w.path.endswith('/ci.yml'))
+        records = json.loads((ROOT / 'scripts/tests/fixtures/ci-duration/owner-test-steps.json').read_text())
         self.github.runs, self.github.jobs = [], {}
-        for index, workflow in enumerate(selected):
-            for family in workflow.families:
-                for path in family.source_paths:
-                    self.github.sources[path] = (ROOT / path).read_text()
-            for offset in range(2):
-                run_id = 10 + 2*index + offset
-                self.github.runs.append({**GitHub().runs[0], "id": run_id, "path": workflow.path})
-                candidate = job(run_id, 640, name=workflow.families[0].key)
-                candidate["steps"] = [
-                    {"name": "Install locked dependencies and emulator tools", "status": "completed", "conclusion": "success", "started_at": stamp(-595), "completed_at": stamp()},
-                    {"name": "Verify real private Hosting and Functions boundary", "status": "completed", "conclusion": "success", "started_at": stamp(-34), "completed_at": stamp()},
-                ]
-                self.github.jobs[(run_id, 1)] = [candidate]
-        with patch.object(monitor, "logger"):
-            result = monitor.run_monitor(self.github, selected, REPOSITORY, "b"*40, now=NOW, lookback_hours=48, publish=True)
-        self.assertEqual(result["actions"], [])
-        self.assertEqual(len(result["shared_setup_diagnostics"]), 1)
-        self.assertEqual(len(result["shared_setup_diagnostics"][0]["observations"]), 4)
-        self.assertEqual(self.github.mutations, [])
+        # These exact API intervals are applied to the reviewed current separated
+        # execution contract. Historical server wrapper timing is not retroactively
+        # certified as pure test time: live provenance still requires that contract.
+        for row in records:
+            run = copy.deepcopy(row['run'])
+            run.update(repository={'full_name':REPOSITORY}, head_repository={'full_name':REPOSITORY})
+            if run['id'] not in [r['id'] for r in self.github.runs]: self.github.runs.append(run)
+            self.github.jobs.setdefault((run['id'], row['job']['run_attempt']), []).append(row['job'])
+            # The real latest view can report attempt 2. Older attempts are empty
+            # in this boundary fixture; no duplicate execution is manufactured.
+            for attempt in range(1, row['job']['run_attempt']): self.github.jobs.setdefault((run['id'], attempt), [])
+        now = NOW + timedelta(hours=10)
+        with patch.object(monitor, 'logger'):
+            report = monitor.run_monitor(self.github, (workflow,), REPOSITORY, 'ignored', now=now, lookback_hours=48, publish=False)
+        admitted = {a['family']: a for a in report['admission'] if a['qualifying_job_ids']}
+        self.assertEqual(set(admitted), {'unit-tests','server-tests','e2e-chromium'})
+        self.assertEqual(report['admission_summary']['qualifying_candidates'],3)
+        self.assertEqual(report['admission_summary']['qualifying_families_new'],3)
+        measured = {s['job_id']:s['qualifying_test_step_seconds'] for o in report['observations'] for s in o['samples'] if s['diagnostic_reason'] is None}
+        self.assertEqual(measured, {136731411619:721,136731411435:802,136798530012:1003})
+        observations = [o for o in monitor.collect(self.github,(workflow,),NOW-timedelta(days=2),monitor.CurrentSource(self.github,monitor._call,REPOSITORY))[0] if o.samples]
+        for row in records:
+            observation = next(o for o in observations if o.family.key==row['family'])
+            sample = next(s for s in observation.samples if s.job_id==row['job']['id'])
+            key = monitor._key(REPOSITORY,observation)
+            body = key+'\n\nOwner-reviewed Objective and Requirements stay exactly as queued.\n'+sample.marker
+            self.github.issues.append({'number':row['existing_issue'],'state':'open','closed_at':None,'body':body,'labels':[{'name':monitor.MANAGED_LABEL},{'name':monitor.READY_LABEL}]})
+            self.github.comments[row['existing_issue']] = [{'body':key}]
+        original_bodies = [i['body'] for i in self.github.issues]
+        self.github.calls.clear()
+        for _ in range(2):
+            with patch.object(monitor,'logger'):
+                report=monitor.run_monitor(self.github,(workflow,),REPOSITORY,'ignored',now=now,lookback_hours=48,publish=True)
+            self.assertEqual({a['classification'] for a in report['admission'] if a['qualifying_job_ids']},{'qualifies-existing'})
+            self.assertEqual({a['action'] for a in report['actions']},{'unchanged'})
+        self.assertEqual(self.github.mutations,[])
+        self.assertEqual([i['body'] for i in self.github.issues],original_bodies)
+        self.assertFalse(any('/logs' in path or '/artifacts' in path for _,path,_ in self.github.calls))
 
-    def test_verified_main_and_manual_entrypoints_accept_supported_absolute_reports(self):
-        workflows = monitor.read_config(ROOT / ".github/ci-duration-monitor.json")
-        sources = {str(path.relative_to(ROOT)): path.read_text() for path in (ROOT / ".github").rglob("*.yml")}
-        for workflow in workflows:
-            for family in workflow.families:
-                for path in family.source_paths:
-                    sources[path] = (ROOT / path).read_text()
-        cases = [
-            ("ci.yml", "unit-test / unit-test", "Run unit tests", "vitest"),
-            ("ci-test-unit.yml", "unit-test", "Run unit tests", "vitest"),
-            ("ci.yml", "e2e-test / e2e-test (basic)", "Run E2E tests (basic)", "playwright"),
-            ("ci-test-e2e.yml", "e2e-test (firefox-selection-new)", "Run E2E tests (firefox-selection-new)", "playwright"),
-        ]
-        for filename, name, step, adapter in cases:
-            with self.subTest(entrypoint=filename, job=name):
-                self.github = GitHub()
-                self.github.sources = sources
-                workflow = next(w for w in workflows if w.path.endswith("/" + filename))
-                self.github.runs[0].update(path=workflow.path, event="workflow_dispatch")
-                candidate = job(seconds=700, name=name)
-                candidate["steps"][0]["name"] = step
-                self.set_jobs([candidate])
-                for jobs in self.github.jobs.values():
-                    for item in jobs:
-                        self.github.logs[item["id"]] = (
-                            "Test Files 20 passed (20)\n Tests 40 passed (40)\nDuration 700s (tests 650s)\n"
-                            "Test Files 1 passed (1)\n Tests 1 passed (1)\nDuration 1s (tests 1s)" if adapter == "vitest" else
-                            "✓ 1 [chromium] › first.spec.ts:1:1 › a (325s)\n✓ 2 [chromium] › second.spec.ts:1:1 › b (325s)\n2 passed (11m)"
-                        )
+    def test_old_mixed_server_boundary_is_not_retroactively_certified(self):
+        workflows=self.repository_sources();workflow=next(w for w in workflows if w.path.endswith('/ci.yml'))
+        row=next(r for r in json.loads((ROOT/'scripts/tests/fixtures/ci-duration/owner-test-steps.json').read_text()) if r['family']=='server-tests')
+        run=copy.deepcopy(row['run']);run.update(repository={'full_name':REPOSITORY},head_repository={'full_name':REPOSITORY})
+        self.github.runs=[run];self.github.jobs={(run['id'],1):[row['job']]}
+        original=self.github.request
+        def historical(method,path,payload=None):
+            if path.startswith('contents/scripts/run-server-test-command.sh') and 'ref='+run['head_sha'] in path:return Result(404,{})
+            return original(method,path,payload)
+        with patch.object(self.github,'request',side_effect=historical), patch.object(monitor,'logger'):
+            report=monitor.run_monitor(self.github,(workflow,),REPOSITORY,'ignored',now=NOW+timedelta(hours=10),lookback_hours=48,publish=False)
+        self.assertEqual(report['admission_summary']['qualifying_candidates'],0)
+        self.assertEqual(report['observations'][2]['samples'][0]['diagnostic_reason'],'workflow/test entrypoint differs from current default branch')
+        self.assertEqual(self.github.mutations,[])
+
+    def test_all_five_owner_closed_false_shapes_remain_nonpublished(self):
+        workflows=self.repository_sources()
+        records=json.loads((ROOT/'scripts/tests/fixtures/ci-duration/owner-closed.json').read_text())
+        durations={5998:708,5999:698,6000:603,6001:640,6003:657}
+        for row in records:
+            with self.subTest(issue=row['issue']):
+                path='.github/workflows/ci.yml' if row['issue']==5998 else '.github/workflows/ci-onprem.yml' if row['issue']==5999 else '.github/workflows/ci-schedule-hosting-page.yml' if row['issue']==6000 else '.github/workflows/ci-schedule-hosting-service.yml' if row['issue']==6001 else '.github/workflows/ci-test-container-build.yml'
+                workflow=next(w for w in workflows if w.path==path)
+                candidate=job(row['job_id'],durations[row['issue']],name=row['name'],conclusion=row['conclusion'])
+                candidate['steps']=copy.deepcopy(row['steps'])
+                for step in candidate['steps']:
+                    seconds=monitor._seconds(step.get('started_at'),step.get('completed_at'))
+                    if seconds is not None: step.update(started_at=stamp(-seconds),completed_at=stamp())
+                self.github.runs=[{**GitHub().runs[0],'path':path}]
+                self.github.jobs={(10,1):[candidate]}
+                self.github.issues,self.github.comments,self.github.calls=[],{},[]
+                source=monitor.CurrentSource(self.github,monitor._call,REPOSITORY)
+                observations,_=monitor.collect(self.github,(workflow,),NOW-timedelta(days=2),source)
+                observation=next(o for o in observations if o.samples)
+                self.github.issues=[{'number':row['issue'],'state':'closed','closed_at':stamp(-1),'body':monitor._key(REPOSITORY,observation),'labels':[{'name':monitor.MANAGED_LABEL}]}]
                 for _ in range(2):
-                    with patch.object(monitor, "logger"):
-                        result = monitor.run_monitor(self.github, (workflow,), REPOSITORY, "ignored-ref", now=NOW, lookback_hours=48, publish=True)
-                    self.assertEqual(len(result["actions"]), 1)
-                    self.assertEqual(len(self.github.issues), 1)
-                    self.assertEqual(len(self.github.mutations), 3)
-                    self.assertIn("blob/" + "b"*40, self.github.issues[0]["body"])
+                    with patch.object(monitor,'logger'):
+                        report=monitor.run_monitor(self.github,(workflow,),REPOSITORY,'ignored',now=NOW,lookback_hours=48,publish=True)
+                    self.assertEqual(report['actions'],[])
+                    self.assertTrue(all(s['diagnostic_reason'] for o in report['observations'] for s in o['samples']))
+                self.assertEqual(self.github.mutations,[])
+                self.assertEqual(self.github.issues[0]['state'],'closed')
 
-    def test_current_variant_still_qualifies_when_sibling_is_setup_dominated(self):
-        self.set_jobs([job(seconds=700), job(2, seconds=900, name="Tests (2/4)")])
-        for jobs in self.github.jobs.values():
-            jobs[1]["steps"][0]["started_at"] = stamp(-40)
-        self.assertEqual(self.run_cli(recurring=False), 0)
-        self.assertEqual(len(self.github.issues), 1)
-        self.assertIn("Tests (1/4)", self.github.issues[0]["body"])
+    def test_current_main_manual_and_verified_pr_routes(self):
+        for event in ['push','workflow_dispatch','pull_request']:
+            with self.subTest(event=event):
+                self.github=GitHub()
+                run=self.github.runs[0];run['event']=event
+                if event=='pull_request':
+                    run['head_branch']='current-feature'
+                    run['pull_requests']=[{'base':{'ref':'main','repo':{'id':987528414}},'head':{'ref':'current-feature','repo':{'id':987528414}}}]
+                self.assertEqual(self.run_cli(recurring=False),0)
+                self.assertEqual(len(self.github.issues),1)
 
-    def test_real_native_reporter_samples_are_measured_without_inventing_times(self):
-        samples = json.loads((ROOT / "scripts/tests/fixtures/ci-duration/native-reporter-samples.json").read_text())
-        # Current Vitest 5 prints percentages rather than absolute phase times.
-        # A wall duration times a rounded percentage is not a native measurement.
-        self.assertIn("tests 64%", samples["unit"]["log"])
-        self.assertIsNone(native_tests(samples["unit"]["log"], "vitest"))
-        seconds, files = native_tests(samples["playwright"]["log"], "playwright")
-        self.assertEqual((round(seconds, 3), files), (351.967, 35))
-        self.assertIsNone(native_tests(samples["new3"]["log"], "playwright"))
+    def test_current_browser_variants_use_steps_not_reporter_format(self):
+        workflows=self.repository_sources();workflow=next(w for w in workflows if w.path.endswith('/ci.yml'))
+        for variant in ['new-4','new-3a','new-3b','firefox-selection-new','onprem']:
+            self.github.runs=[{**GitHub().runs[0],'path':workflow.path}]
+            candidate=job(seconds=900,name='e2e-test / e2e-test ('+variant+')')
+            candidate['steps'][0]['name']='Run E2E tests ('+variant+')'
+            self.github.jobs={(10,1):[candidate]};self.github.issues=[]
+            with patch.object(monitor,'logger'):
+                result=monitor.run_monitor(self.github,(workflow,),REPOSITORY,'ignored',now=NOW,lookback_hours=48,publish=False)
+            admitted=[a for a in result['admission'] if a['qualifying_job_ids']]
+            self.assertEqual(len(admitted),0 if variant=='onprem' else 1)
 
-    def mixed_native_fixture(self):
-        config = json.loads(self.config.read_text())
-        family = {**config["workflows"][0]["families"][0], "key": "unavailable", "name": "Unavailable", "job_pattern": "Unavailable tests"}
-        config["workflows"][0]["families"].append(family)
-        self.config.write_text(json.dumps(config))
-        self.github.sources[".github/workflows/ci.yml"] += "  unavailable:\n    name: Unavailable tests\n    steps: [{name: Run tests}]\n"
-        self.set_jobs([job(1, 700), job(2, 700, name="Unavailable tests")])
+    def test_unknown_branch_fork_base_variant_and_source_are_diagnostic(self):
+        for mode in ['branch','unverified-pr','foreign-base','retired','source','inactive','wrong-step','step-failed','step-short','setup-dominates']:
+            with self.subTest(mode=mode):
+                self.github=GitHub();candidate=job(seconds=900);self.github.jobs[(10,1)]=[candidate]
+                run=self.github.runs[0]
+                if mode=='branch':run['head_branch']='prototype'
+                if mode=='unverified-pr':run['event']='pull_request'
+                if mode=='foreign-base':run.update(event='pull_request',pull_requests=[{'base':{'ref':'main','repo':{'id':99}},'head':{'ref':'main','repo':{'id':987528414}}}])
+                if mode=='retired':candidate['name']='Tests (retired)'
+                if mode=='wrong-step':candidate['steps'][0]['name']='Run tests from retired variant'
+                if mode=='step-failed':candidate['steps'][0]['conclusion']='failure'
+                if mode=='step-short':candidate['steps'][0]['started_at']=stamp(-599)
+                if mode=='setup-dominates':candidate.update(started_at=stamp(-1300));candidate['steps'][0]['started_at']=stamp(-610)
+                original=self.github.request
+                def request(method,path,payload=None):
+                    if mode=='source' and path.startswith('contents/') and 'ref='+'a'*40 in path:return Result(404,{})
+                    if mode=='inactive' and path.startswith('actions/workflows/') and '/runs?' not in path:return Result(200,{'state':'disabled_manually','path':'.github/workflows/ci.yml'})
+                    return original(method,path,payload)
+                with patch.object(self.github,'request',side_effect=request):self.assertEqual(self.run_cli(recurring=False),0)
+                self.assertEqual(self.github.mutations,[])
 
-    def test_unavailable_native_logs_do_not_block_independent_eligible_family(self):
-        for failure in [monitor.NativeLogUnavailable("Verified native log storage is unavailable"), Result(404, {}), Result(410, {}), Result(503, {})]:
-            with self.subTest(failure=str(failure)):
-                self.setUp()
-                self.mixed_native_fixture()
-                original = self.github.request
-                reads = []
-                def unavailable(method, path, payload=None):
-                    if path.startswith("actions/jobs/") and path.endswith("/logs") and path.split("/")[2] in {"10002", "11002"}:
-                        reads.append(path)
-                        if isinstance(failure, Exception): raise failure
-                        return failure
-                    return original(method, path, payload)
-                with patch.object(self.github, "request", side_effect=unavailable):
-                    self.assertEqual(self.run_cli(recurring=False), 0)
-                    self.assertEqual(self.run_cli(recurring=False), 0)
-                self.assertEqual(len(self.github.issues), 1)
-                self.assertEqual(len(self.github.mutations), 3)
-                samples = [sample for observation in self.report()["observations"] if observation["family"] == "unavailable" for sample in observation["samples"]]
-                self.assertEqual(len(samples), 2)
-                self.assertTrue(all(sample["diagnostic_reason"] and sample["native_test_seconds"] is None for sample in samples))
-                self.assertEqual(len(reads), 12 if isinstance(failure, Exception) or failure.status == 503 else 4)
-
-    def test_systemic_native_failures_stop_before_any_issue_write(self):
-        for failure in [Result(401, {}), Result(403, {}), Result(429, {}), ConnectionError("API unavailable"), RuntimeError("Refusing an untrusted GitHub redirect")]:
-            with self.subTest(failure=str(failure)):
-                self.setUp()
-                self.mixed_native_fixture()
-                self.github.jobs[(10, 1)] = self.github.jobs[(10, 1)][:1]
-                original = self.github.request
-                def unavailable(method, path, payload=None):
-                    if path.startswith("actions/jobs/") and path.endswith("/logs") and path.split("/")[2] == "11002":
-                        if isinstance(failure, Exception): raise failure
-                        return failure
-                    return original(method, path, payload)
-                with patch.object(self.github, "request", side_effect=unavailable):
-                    self.assertEqual(self.run_cli(recurring=False), 1)
-                self.assertEqual(self.github.mutations, [])
-
-    def test_current_line_only_new3_variants_are_explicitly_diagnostic(self):
-        workflows = monitor.read_config(ROOT / ".github/ci-duration-monitor.json")
-        self.github.sources = {str(path.relative_to(ROOT)): path.read_text() for path in (ROOT / ".github").rglob("*.yml")}
-        for filename, prefix in [("ci.yml", "e2e-test / "), ("ci-test-e2e.yml", "")]:
-            workflow = next(w for w in workflows if w.path.endswith("/" + filename))
-            family = next(f for f in workflow.families if f.key == "e2e-chromium")
-            source = monitor.CurrentSource(self.github, monitor._call, REPOSITORY)
-            for variant in ["new-3a", "new-3b"]:
-                name = prefix + "e2e-test (" + variant + ")"
-                self.assertRegex(name, family.diagnostic_job_pattern)
-                self.assertEqual(source.reason(workflow, family, self.github.runs[0], name), "current variant uses an unsupported native reporter; diagnostic only")
-
-    def test_retired_prototype_is_absent_even_on_default_branch_same_workflow(self):
-        source = monitor.CurrentSource(self.github, monitor._call, REPOSITORY)
-        workflows = monitor.read_config(ROOT / ".github/ci-duration-monitor.json")
-        workflow = next(w for w in workflows if w.path.endswith("ci-test-container-build.yml"))
-        self.github.sources[workflow.path] = (ROOT / workflow.path).read_text()
-        fallback = monitor.Family("retired", "retired", ".*", ".*", (workflow.path,), "diagnostic")
-        reason = source.reason(workflow, fallback, self.github.runs[0], "Prepared runtime smoke (not E2E migration)")
-        self.assertEqual(reason, "job/variant is absent from the current active workflow")
-
-    def test_legacy_pending_submission_cannot_bypass_policy(self):
-        self.assertEqual(self.run_cli(), 0)
-        self.github.issues[0]["body"] = self.github.issues[0]["body"].replace("<!-- ci-duration-policy:v2:recurring-native-tests:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb -->", "")
-        self.github.issues[0]["labels"] = [{"name": monitor.MANAGED_LABEL}]
-        self.github.events = {}
-        self.github.runs = []
-        self.github.calls = []
-        self.assertEqual(self.run_cli(), 0)
-        self.assertEqual(self.github.mutations, [])
-
-    def test_retained_receipt_cannot_submit_after_default_source_changes(self):
-        self.github.reject_before = "issues/1/labels"
-        self.assertEqual(self.run_cli(), 1)
-        self.github.runs, self.github.calls = [], []
-        original = self.github.request
-        def moved(method, path, payload=None):
-            if path == "branches/main":
-                return Result(200, {"commit": {"sha": "c"*40}})
-            return original(method, path, payload)
-        with patch.object(self.github, "request", side_effect=moved):
-            self.assertEqual(self.run_cli(), 0)
-        self.assertEqual(self.github.mutations, [])
-
-    def test_native_reporters_reject_harness_and_accept_independent_tests(self):
-        self.assertEqual(native_tests("Test Files 2 passed (2)\n Tests 3 passed (3)\nDuration 700s (setup 650s, tests 34s)", "vitest"), (34, 2))
-        log = "✓ 1 [chromium] › first.spec.ts:1:1 › a (310s)\n✓ 2 [chromium] › second.spec.ts:1:1 › b (310s)\n2 passed (11m)"
-        self.assertEqual(native_tests(log, "playwright"), (620, 2))
-        self.assertEqual(native_tests("2026-11-21T00:00:00.000Z " + log.replace("a (310s)", "failed request handling (310s)"), "playwright"), (620, 2))
-        self.assertIsNone(native_tests(log + " 1 flaky", "playwright"))
-        self.assertIsNone(native_tests(log.replace("second.spec.ts", "first.spec.ts"), "playwright"))
+    def test_sys_auth_source_and_pagination_fail_before_writes(self):
+        for target in ['','branches/main','contents/','/jobs?']:
+            self.github=GitHub();original=self.github.request
+            def request(method,path,payload=None):
+                if (path==target if target in ['', 'branches/main'] else target in path):return Result(403,{})
+                return original(method,path,payload)
+            with patch.object(self.github,'request',side_effect=request):self.assertEqual(self.run_cli(),1)
+            self.assertEqual(self.github.mutations,[])
 
 
-if __name__ == "__main__":
-    unittest.main()
+class ServerBoundaryTest(unittest.TestCase):
+    def test_exact_preparation_and_execution_contract(self):
+        workflow=yaml.safe_load((ROOT/'.github/workflows/ci-test-server.yml').read_text())
+        steps=workflow['jobs']['server-test']['steps'];prep=next(s for s in steps if s.get('name')=='Prepare server test runtime');execution=next(s for s in steps if s.get('name')=='Run server tests')
+        self.assertEqual(prep['run'].splitlines()[0],'SKIP_SERVER_START=1 SKIP_PORT_WAIT=1 bash scripts/setup.sh')
+        self.assertIn('test -x server/node_modules/.bin/mocha',prep['run'])
+        self.assertIn('test -f server/node_modules/ts-node/esm.mjs',prep['run'])
+        self.assertEqual(prep['env'],execution['env'])
+        self.assertLess(steps.index(prep),steps.index(execution))
+        package=json.loads((ROOT/'server/package.json').read_text())
+        self.assertEqual(package['scripts']['test'],'bash ../scripts/run-server-tests.sh')
+        self.assertEqual(package['scripts']['test:prepared'],'bash ../scripts/run-server-test-command.sh')
+        self.assertNotIn('pretest',package['scripts'])
+        self.assertNotIn('posttest',package['scripts'])
+        self.assertIn('npm run test:prepared',execution['run'])
+        old=subprocess.check_output(['git','show','30f1495475a2c1a48c2750360bacfd3509372199:scripts/run-server-tests.sh'],cwd=ROOT,text=True)
+        actual=(ROOT/'scripts/run-server-test-command.sh').read_text()
+        self.assertEqual(old[old.index('cd "$ROOT_DIR/server"'):],actual[actual.index('cd "$ROOT_DIR/server"'):])
+        self.assertNotIn('bash scripts/setup.sh',actual)
+        self.assertIn('Server test runtime is not prepared',actual)
+        self.assertIn('SKIP_SERVER_START=1 SKIP_PORT_WAIT=1 bash "$ROOT_DIR/scripts/setup.sh"',(ROOT/'scripts/run-server-tests.sh').read_text())
+
+
+
+if __name__=='__main__':unittest.main()

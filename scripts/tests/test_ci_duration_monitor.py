@@ -62,7 +62,6 @@ class GitHub:
             ".github/workflows/ci.yml": "jobs:\n  tests:\n    name: Tests (${{ matrix.shard }})\n    strategy:\n      matrix:\n        shard: [" + ", ".join(f"'{i}/{n}'" for n in [4, 101] for i in range(1, n+1)) + "]\n    steps: [{name: Run tests}]\n  server:\n    name: server-test / server-test\n    steps: [{name: Run tests}]\n",
             "scripts/test.sh": "native test fixture entrypoint",
         }
-        self.logs = {}
 
     def request(self, method: str, path: str, payload: dict[str, object] | None = None) -> Result:
         self.calls.append((method, path, copy.deepcopy(payload)))
@@ -75,19 +74,12 @@ class GitHub:
 
         if method == "GET":
             if route == "":
-                return Result(200, {"full_name": REPOSITORY, "default_branch": "main"})
+                return Result(200, {"id": 987528414, "full_name": REPOSITORY, "default_branch": "main"})
             if route == "branches/main":
                 return Result(200, {"commit": {"sha": "b" * 40}})
             if route.startswith("contents/"):
                 source = self.sources.get(route.removeprefix("contents/"))
                 return Result(200, {"type": "file", "encoding": "base64", "content": base64.b64encode(source.encode()).decode()}) if source is not None else Result(404, {})
-            if route.startswith("actions/jobs/"):
-                number = int(route.split("/")[2])
-                if number in self.logs:
-                    return Result(200, self.logs[number])
-                item = next(j for jobs in self.jobs.values() for j in jobs if j["id"] == number)
-                duration = monitor._seconds(item["started_at"], item["completed_at"])
-                return Result(200, f"Test Files 2 passed (2)\n Tests 4 passed (4)\nDuration {duration}s (transform 0s, setup 0s, collect 0s, tests {duration}s, environment 0s)\n")
             if route.startswith("actions/workflows/") and not route.endswith("/runs"):
                 return Result(200, {"state": "active", "path": ".github/workflows/" + route.split("/")[-1]})
             if route.startswith("actions/workflows/"):
@@ -160,7 +152,7 @@ class MonitorTests(unittest.TestCase):
                     "workflows": [
                         {
                             "path": ".github/workflows/ci.yml",
-                            "families": [{"key": "tests", "name": "Tests", "job_pattern": r"Tests \(\d+/\d+\)", "test_step_pattern": "^Run tests$", "source_paths": [".github/workflows/ci.yml", "scripts/test.sh"], "guidance": "Retain the existing complete test selection and aggregate check.", "measurement": "vitest"}],
+                            "families": [{"key": "tests", "name": "Tests", "job_pattern": r"Tests \(\d+/\d+\)", "test_step_pattern": "^Run tests$", "source_paths": [".github/workflows/ci.yml", "scripts/test.sh"], "guidance": "Retain the existing complete test selection and aggregate check.", "measurement": "test-step"}],
                         }
                     ]
                 }
@@ -253,6 +245,7 @@ class MonitorTests(unittest.TestCase):
             self.github.jobs[(run_id, 1)] = [job(run_id, 100)]
         self.github.jobs[(10, 1)] = [job(seconds=610)]
         self.github.jobs[(10, 1)][0]["completed_at"] = stamp(-10)
+        self.github.jobs[(10, 1)][0]["steps"][0]["completed_at"] = stamp(-10)
         self.assertEqual(self.run_cli(), 0)
         self.assertEqual(len(self.github.issues), 1)
         self.assertIn("10 / 1", self.github.issues[0]["body"])

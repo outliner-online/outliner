@@ -1,148 +1,113 @@
 # CI duration review issues
 
-The **CI Duration Monitor** runs daily at **21:43 UTC (06:43 JST)**. It retains
-job, queue, command and longest-step timings, but creates an improvement issue
-only for a recurring, verified test-work slowdown. Scheduled runs can start late.
+The daily workflow runs at **21:43 UTC (06:43 JST)**. Qualification uses GitHub's
+native job/step `started_at`, `completed_at`, `status` and `conclusion` fields.
+There is no log parsing, reporter instrumentation, JSON test-result admission,
+percentage conversion, per-file timing requirement or two-run admission barrier.
+The monitor does not implement sharding.
 
-## Automatic issue eligibility
+## Admission before existing duplicate handling
 
-All of these conditions must hold:
+A candidate needs all of the following:
 
-1. GitHub verifies the repository identity and current default branch SHA. The
-   observed execution is a `push`, `schedule` or `workflow_dispatch` on that
-   branch in that repository. Feature-branch and PR runs remain diagnostic.
-2. The configured workflow is active at its exact path. Its current YAML declares
-   the exact observed job/variant, including local reusable workflows and static
-   matrix expansion. Workflow display names alone confer no authority. Dynamic
-   matrices and unsupported matrix include/exclude rules remain diagnostic.
-3. The configured native measurement adapter applies to the actual job's declared
-   test step. The workflow chain and declared implementation source files at the
-   observed SHA are byte-identical to the verified default-branch sources.
-4. The job and matched test steps succeed with complete timings. Command elapsed
-   time reaches **600 seconds** and at least half of runner execution. Setup,
-   dependency acquisition, builds, failed startup, skipped tests, incomplete
-   commands, queue time and workflow totals cannot qualify on their own.
-5. A supported native report demonstrates at least **600 seconds of test work**
-   in multiple test files. Native timings are separate from command elapsed time.
-   Unknown formats, unavailable logs, retries, failures and skipped tests remain
-   diagnostic. Summed native test durations can overlap under parallel execution;
-   they describe work, not a predicted end-to-end saving or proof of a safe split.
-6. At least **two distinct runs of the same job variant** meet these conditions.
-   Different shards, retries and retained rows in later attempts do not establish
-   recurrence. Every observed family member is evaluated, including a slow test
-   job whose total is shorter than a sibling delayed by setup.
+1. Verified repository/default-branch metadata and an active workflow at its
+   exact configured path. Its current YAML, local reusable workflow chain and
+   static matrix declare the exact job variant and execution step names.
+2. Either a default-branch push/manual/scheduled execution, or a same-repository
+   PR run with GitHub-native PR/base repository identities targeting the default
+   branch. Workflow/entrypoint source bytes at the immutable observed SHA must
+   match the verified default branch. A matching display name alone is not proof.
+3. A configured, reviewed **separated execution contract**. All matching exact
+   test steps must complete successfully, with usable intervals inside the job.
+   Their total execution must reach **600 seconds** and at least half of the job's
+   runner execution. Setup, acquisition, build, queue time and workflow totals
+   cannot qualify a family on their own.
 
-## Profiles and measurements
+Normal retries remain part of the successful test execution step. A successful
+Playwright retry does not erase a genuine ten-minute test process. Step elapsed
+time includes the normal test harness and fixtures; it is not claimed as pure
+individual test-body time or a prediction of sharding savings.
 
-[`.github/ci-duration-monitor.json`](../.github/ci-duration-monitor.json) declares
-families, exact entrypoints and the measurement adapter. The actual current
-workflow inventory is an additional gate, not a regex fallback.
+`report.json` exposes `admission` and `admission_summary` before existing issue
+reconciliation: qualifying candidate job IDs, matching open issues, families
+that qualify with an existing issue, new qualifying families, and insufficient
+or diagnostic evidence. **Insufficient evidence is not reported as duplication.**
+The existing repository/workflow/family identity, open-issue lookup, evidence
+markers, reviewer-body preservation, consumed readiness and closure checks remain
+unchanged. Already recorded queued evidence remains unchanged; new evidence follows
+existing reconciliation. Closed issues stay closed unless later qualifying
+execution satisfies the existing post-closure rule.
 
-| Entrypoint                                                                            | Native measurement policy                                                                                                                                                                                                                                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Main CI and direct manual unit/integration workflows                                  | `vitest`: successful native test/file counts and the native `tests` duration, excluding transform/setup/collection/environment timings. Single-file summary blocks contribute no qualifying work. The inspected current Vitest 5 output supplies rounded phase percentages, which stay diagnostic; the adapter never multiplies wall time by those percentages or invents absolute times.                    |
-| Main CI and direct manual Chromium/Firefox E2E workflows                              | `playwright`: one complete passing list-reporter summary, matching individual native test timings across distinct spec files, without retries. Line-only or unrecognized output stays diagnostic. Current `new-3a`/`new-3b` force `line,json,html` without list timings; the config explicitly marks those variants diagnostic through `diagnostic_job_pattern`. Their tests and verification are unchanged. |
-| On-premises Compose and schedule Hosting page/service contracts                       | The same `playwright` rule applies to their actual declared verification step; startup/build time inside a wrapper alone cannot qualify. A single spec remains diagnostic.                                                                                                                                                                                                                                   |
-| Server, canonical project-directory, devcontainer probe and container-tool validation | `diagnostic`: their current Mocha/probe/tool entrypoints do not expose the supported independent-file native timing format. Retain evidence until a verified measurement adapter is available.                                                                                                                                                                                                               |
-| Unconfigured build, lint, guard or historical job variants                            | Diagnostic only; a fallback family preserves its exact job name and timings.                                                                                                                                                                                                                                                                                                                                 |
+## Actual execution boundaries
 
-Manual invocation is therefore eligible when it uses a supported current
-entrypoint on the default branch and supplies recurring native evidence. There
-is no blanket manual/support-workflow exclusion. Adding a future adapter must
-include real reporter fixtures and actual entrypoint verification.
+| Family                                                       | Execution boundary                                                                                                                                                                                                                                                                                                                                                               |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Unit                                                         | Existing `Setup Test Environment`, then `Run unit tests`: the existing package command runs both unit Vitest and base-path Vitest verification. No command or selection changes.                                                                                                                                                                                                 |
+| Integration                                                  | Existing setup, then the existing `Run integration tests` Vitest command.                                                                                                                                                                                                                                                                                                        |
+| Server                                                       | Existing setup plus `Prepare server test runtime` runs the exact former `SKIP_SERVER_START=1 SKIP_PORT_WAIT=1 bash scripts/setup.sh` with the original environment. `Run server tests` invokes `npm run test:prepared`, retaining npm’s executable PATH/context for the prepared Mocha command, with the same loaders, exclusions, timeout, `--exit`, pipefail and log pipeline. |
+| Canonical project directory                                  | Existing setup, then the existing explicit four-file Mocha command.                                                                                                                                                                                                                                                                                                              |
+| Chromium/Firefox E2E                                         | Existing dependency setup/build/startup, then exact `Run E2E tests (variant)`. This includes current `new-4`, `new-3a` and `new-3b`; reporter format is irrelevant. The `onprem` matrix variant still builds production output inside its wrapper and remains diagnostic.                                                                                                        |
+| Compose, Hosting wrappers, devcontainer and container guards | Diagnostic until their own acquisition/preflight can be verified as separated from execution. Unknown fallback jobs remain diagnostic.                                                                                                                                                                                                                                           |
 
-The original owner-closed examples remain diagnostic: Firefox dependency setup
-failed after 700s without executing tests (#5998); Compose spent 376s installing
-Playwright versus 268s in verification (#5999); the Hosting contracts spent 553s
-and 595s acquiring dependencies versus 41s and 34s verifying (#6000/#6001). The
-649s image build in #6003 belonged to an unsuccessful, retired PR prototype named
-`Prepared runtime smoke (not E2E migration)`, absent from the current workflow.
-These are not five independent recurring test-work optimizations. Cross-family
-steps taking at least 300s are grouped as `shared_setup_diagnostics` when seen in
-multiple families and runs. That grouping is retained evidence, never an issue.
+`npm test` in `server` retains its local default: perform the same preparation,
+then execute the same Mocha selection. The CI-only prepared command is factored
+into `scripts/run-server-test-command.sh`; it does not replace preparation with
+trust in `.setup-installed`. The prepared path verifies local Mocha and ts-node prerequisites and fails rather
+than allowing npx to acquire a missing runner inside the timed execution.
+Generic setup can still install, build, stop PM2/
+emulators and wait even when a sentinel exists, so that work is explicitly timed
+outside the CI test step. Required checks, retries, job timeouts and topology are
+preserved. No full test suite is added or repeated.
 
-## Discovery, closure and submission recovery
+## Owner evidence and historical limits
 
-The default scan discovers completed runs **created in the preceding 48 hours**,
-inspects every attempt and paginates jobs separately. The report retains unknown
-queue times when GitHub supplies an out-of-order creation/start interval. The
-original job completion remains authoritative; a retained attempt row is not a
-new execution. Run search truncation fails explicitly.
+GitHub job `136798530012`, run `44885392240`, attempt 2, reports new-4 success:
+**1,090 job seconds**, **1,003 test-step seconds**, 43 dependency seconds and 28
+startup seconds. The actual test command ran about 08:36:15.684–08:52:58.233 UTC;
+its one legitimate retry remains inside the measured execution. This is an
+eligible execution candidate before lookup of existing Chromium issue #5997.
+Unit job `136731411619` reports **887 job / 721 execution seconds**, with setup
+already separated. Server job `136731411435` reports **965 / 802 seconds**, but
+its historical wrapper included nested generic preparation: that historical
+802 seconds is not retroactively relabeled as pure Mocha time. Forward server
+measurement is trustworthy only with the reviewed separated preparation contract.
+The exact measured API rows are regression fixtures for the current contract.
 
-The existing repository/workflow/family identity marker and
-`ci-duration-monitor` label deduplicate open issues across overlapping scans.
-Reviewer-edited bodies and consumed `review-ready` labels remain preserved.
-New evidence is appended in comments. Creation, durable identity comment and
-final `review-ready` submission remain separate operations; mutation failures
-are never blindly retried.
+The closed false positives remain diagnostic: #5998 failed dependency setup
+without tests; #5999 spent 376s installing Playwright versus 268s verifying;
+#6000/#6001 spent 553s/595s acquiring dependencies versus 41s/34s verifying;
+#6003 was a retired PR prototype with a 649s image build. Setup timing is retained,
+including shared cross-family setup groups, without creating per-family issues.
 
-Closed issues stay closed. A later issue requires **two new qualifying runs
-completed after the latest closure**; identical later setup failures or retired
-variants cannot recreate or reopen the closed issue. Genuinely new actionable
-regressions remain eligible without permanent family suppression.
+A read-only scan before this change merges cannot certify the new server helper
+as default-branch source. Its historical mixed boundary remains explicit
+insufficient evidence. Existing queued #5995/#5996/#5997 are not modified by
+verification, and an admission count of zero must never be called merely a
+successful duplicate check.
 
-Only submissions carrying the new policy receipt for the currently verified
-source SHA may recover readiness from retained evidence after runs age out.
-Legacy total-duration submissions cannot bypass the eligibility gate. A source
-change requires fresh qualification. Incomplete reviewer-edited specifications
-still withhold readiness. The repository must already provide `review-ready`.
-The monitor may create its own managed label after qualification.
+## Operation and verification
 
-## Running and inspecting
+Default discovery covers completed runs created in the prior 48 hours, with
+attempt-specific paginated jobs. Old retained job completion timestamps remain
+authoritative. Incomplete pagination, auth, source or workflow metadata fails
+closed before writes. No log/artifact endpoint is needed for qualification.
 
-In Actions, choose **CI Duration Monitor → Run workflow** on the default branch.
-`dry_run` defaults to `true`; only explicitly publishing invocations and scheduled
-runs can mutate issues. Pull-request/push executions run regression verification.
-Scheduled/manual reconciliation is serialized by the existing concurrency group.
-
-For a read-only local scan:
+Manual invocation defaults to dry-run. Pull requests/pushes run verification;
+publication remains confined to the existing authorized workflow events and
+permissions. Mutations are never blindly retried. Interrupted valid submissions
+retain their complete-body/identity/final-readiness sequence; only a current
+separated-step policy receipt can recover a retained submission without new data.
 
 ```bash
 python -m pip install loguru==0.7.3 PyYAML==6.0.3
-python scripts/ci_duration_monitor.py \
-    --repository outliner-online/outliner \
-    --config .github/ci-duration-monitor.json
-```
-
-`--source-ref` is retained for CLI compatibility; source links always use the
-GitHub-verified default SHA. `--lookback-hours N` extends discovery for recovery.
-`--output-dir PATH` chooses the report/log destination. Add `--publish` only when
-issue publication is intended. The existing token permissions remain
-`contents: read`, `actions: read`, `issues: write`; regression jobs are read-only.
-`GITHUB_API_URL` selects the REST endpoint. Native logs are read through the same
-transport and never copied into issue bodies.
-
-Reports and logs go to `ci-duration-monitor-output/` and Actions retains them for
-14 days. `report.json` includes verification provenance, per-sample diagnostic
-reasons, native timings and shared setup evidence. The summary lists actions and
-workflow-only delays. Transient GET failures receive bounded retries; unresolved
-API failures in authentication, rate limits, repository/source verification or pagination
-fail the whole scan before issue writes. Untrusted redirects also fail the scan.
-A verified native log storage outage/expired object is different: after bounded
-read retries, only that candidate becomes diagnostic and unrelated qualifying
-families can proceed. The transport recognizes only HTTPS
-`productionresults*.blob.core.windows.net` log redirects, strips credentials, and
-never puts signed URLs in diagnostics. API log 404/410 and bounded 502/503/504
-responses are also candidate-only admission failures; API 401/403/429 and API
-transport failures remain systemic. Unknown redirect hosts remain untrusted.
-
-Native reporter fixture provenance: GitHub run `44868248412`, unit job
-`136737097531`, basic E2E job `136741558553`, and line-only new-3a job
-`136741559827`, at main SHA `30f1495475a2c1a48c2750360bacfd3509372199`.
-The fixtures retain only reporter rows/summaries, with ANSI colors removed.
-The native basic report measures 351.967 summed test seconds across 35 files;
-its wall summary is 1.5 minutes. The unit report prints `tests 64%`, not an
-absolute native duration. Neither observation is represented as a new slow-test
-measurement.
-
-## Focused verification
-
-```bash
+python scripts/ci_duration_monitor.py --repository outliner-online/outliner
 python -m unittest discover -s scripts/tests -p 'test_ci_duration_monitor*.py' -v
+# With the existing server dependencies installed:
+python -m unittest discover -s scripts/tests -p 'test_server_test_boundary.py' -v
 ```
 
-The tests use an isolated GitHub stub and a real local HTTP fixture server. They
-cover the five native owner-closed step shapes, repeat scans, closure and fresh
-regressions, branch/repository/source/variant negatives, manual supported tests,
-recurrence, native timing formats, pagination, interrupted submission and retained
-recovery. Verification does not create or change live GitHub issues.
+The CLI is read-only without `--publish`; `--lookback-hours` and `--output-dir`
+control discovery and reports. Tests use isolated GitHub/HTTP boundaries and
+small real Mocha fixtures to check selection, failure exit and setup parity.
+They never change live issues. Reports/logs are retained by the existing Actions
+artifact step for 14 days; logs contain metadata identifiers, not signed log URLs.

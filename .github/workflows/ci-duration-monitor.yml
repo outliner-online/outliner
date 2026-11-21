@@ -18,6 +18,10 @@ on:
       - 'scripts/ci_duration_monitor.py'
       - 'scripts/ci_duration_github.py'
       - 'scripts/ci_duration_policy.py'
+      - '.github/workflows/ci-test-server.yml'
+      - 'scripts/run-server-tests.sh'
+      - 'scripts/run-server-test-command.sh'
+      - 'scripts/tests/test_server_test_boundary.py'
       - 'scripts/tests/test_ci_duration_monitor*.py'
       - 'scripts/tests/fixtures/ci-duration/**'
   push:
@@ -29,6 +33,10 @@ on:
       - 'scripts/ci_duration_monitor.py'
       - 'scripts/ci_duration_github.py'
       - 'scripts/ci_duration_policy.py'
+      - '.github/workflows/ci-test-server.yml'
+      - 'scripts/run-server-tests.sh'
+      - 'scripts/run-server-test-command.sh'
+      - 'scripts/tests/test_server_test_boundary.py'
       - 'scripts/tests/test_ci_duration_monitor*.py'
       - 'scripts/tests/fixtures/ci-duration/**'
 
