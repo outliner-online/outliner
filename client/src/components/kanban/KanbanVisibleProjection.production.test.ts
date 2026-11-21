@@ -104,9 +104,26 @@ describe("production Kanban visible projection", { timeout: 30000 }, () => {
         expect(latest?.lanes.flatMap(lane => lane.cards.map(card => card.occurrenceKey))).not.toEqual(firstOccurrences);
         expect(latest?.visible?.status === "ready" && latest.visible.content.lanes).toEqual(readBoard(view.container));
 
-        const repeatedQueryId = latest!.provenance!.evidence!.queryId;
+        updateKanban(projectDoc, kanbanId, {
+            query: "SELECT id, title, detail, hidden FROM tasks ORDER BY id",
+        });
+        await waitFor(() => expect(latest?.status).toBe("invalid"), { timeout: 15000 });
+        expect(latest).toMatchObject({
+            current: false,
+            lanes: [],
+            visible: {
+                status: "non-ready",
+                reason: 'Grouping result column "status" is missing',
+            },
+        });
+        expect("content" in latest!.visible!).toBe(false);
+
         updateKanban(projectDoc, kanbanId, { query: `${query.replace("ORDER BY", "WHERE false ORDER BY")}` });
-        await waitFor(() => expect(latest?.provenance?.evidence?.queryId).not.toBe(repeatedQueryId), {
+        await waitFor(() => {
+            expect(latest?.status).toBe("success");
+            expect(latest?.current).toBe(true);
+            expect(latest?.visible?.status).toBe("ready");
+        }, {
             timeout: 15000,
         });
         expect(view.getByTestId("kanban-empty")).toHaveTextContent("The query returned no cards.");
