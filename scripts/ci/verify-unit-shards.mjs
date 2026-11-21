@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 
@@ -11,6 +12,8 @@ const runId = process.env.GITHUB_RUN_ID;
 const runAttempt = process.env.GITHUB_RUN_ATTEMPT;
 if (!runId || !runAttempt) throw new Error("GITHUB_RUN_ID and GITHUB_RUN_ATTEMPT are required");
 const clientDir = path.resolve("client");
+const clientRequire = createRequire(path.join(clientDir, "package.json"));
+const { createCoverageMap } = clientRequire("@vitest/istanbul-lib-coverage");
 const vitestBin = process.env.UNIT_VITEST_BIN ?? path.join(clientDir, "node_modules/.bin/vitest");
 const configArgs = process.env.UNIT_VITEST_CONFIG ? [`--config=${process.env.UNIT_VITEST_CONFIG}`] : [];
 
@@ -53,14 +56,6 @@ function compareIdentities(actual, expected) {
         );
     }
 }
-function mapDefinitions(data) {
-    return JSON.stringify({
-        path: data.path,
-        statementMap: Object.values(data.statementMap).map(JSON.stringify).sort(),
-        fnMap: Object.values(data.fnMap).map(JSON.stringify).sort(),
-        branchMap: Object.values(data.branchMap).map(JSON.stringify).sort(),
-    });
-}
 function repositoryCoverageInventory() {
     if (process.env.UNIT_COVERAGE_MANIFEST) {
         return JSON.parse(fs.readFileSync(process.env.UNIT_COVERAGE_MANIFEST, "utf8")).map((file) => path.resolve(file))
@@ -86,25 +81,13 @@ function repositoryCoverageInventory() {
         )
         .map((file) => path.resolve(file)).sort();
 }
-function mergeCoverage(target, coverage) {
+function validateCoverageMaps(coverage) {
     for (const [file, data] of Object.entries(coverage)) {
-        if (!target[file]) {
-            target[file] = structuredClone(data);
-            continue;
-        }
         for (const [mapName, counterName] of [["statementMap", "s"], ["fnMap", "f"], ["branchMap", "b"]]) {
-            const targetIds = new Map(
-                Object.entries(target[file][mapName]).map(([id, definition]) => [JSON.stringify(definition), id]),
-            );
-            for (const [id, count] of Object.entries(data[counterName])) {
-                const targetId = targetIds.get(JSON.stringify(data[mapName][id]));
-                if (targetId === undefined) throw new Error(`coverage definition missing while merging ${file}`);
-                if (Array.isArray(count)) {
-                    const previous = target[file][counterName][targetId];
-                    target[file][counterName][targetId] = count.map((value, index) => previous[index] + value);
-                } else {
-                    target[file][counterName][targetId] += count;
-                }
+            const definitions = Object.keys(data[mapName]).sort();
+            const counters = Object.keys(data[counterName]).sort();
+            if (JSON.stringify(definitions) !== JSON.stringify(counters)) {
+                throw new Error(`coverage ${mapName} does not match ${counterName} counters: ${file}`);
             }
         }
     }
@@ -121,10 +104,9 @@ const expected = expectedIdentities(JSON.parse(fs.readFileSync(nativeSelectionPa
 fs.rmSync(nativeSelectionPath);
 if (!expected.length) throw new Error("native unit selection is empty");
 const executed = [];
-const mergedCoverage = {};
+const mergedCoverage = createCoverageMap({});
 const expectedCoverageFiles = repositoryCoverageInventory();
 let nativeCoverageFiles;
-let expectedCoverageDefinitions;
 for (let shard = 1; shard <= shardCount; shard++) {
     const shardDir = path.join(artifactDir, `unit-shard-${shard}-${runId}-${runAttempt}`);
     const reportPath = path.join(shardDir, "unit-evidence", `shard-${shard}.json`);
@@ -151,22 +133,14 @@ for (let shard = 1; shard <= shardCount; shard++) {
     if (JSON.stringify(coverageFiles) !== JSON.stringify(nativeCoverageFiles)) {
         throw new Error(`native coverage file set differs for shard ${shard}`);
     }
-    const definitions = Object.fromEntries(
-        Object.entries(coverage).map(([file, data]) => [path.resolve(file), mapDefinitions(data)]),
-    );
-    expectedCoverageDefinitions ??= definitions;
-    for (const file of expectedCoverageFiles) {
-        if (definitions[file] !== expectedCoverageDefinitions[file]) {
-            throw new Error(`coverage map definitions differ for shard ${shard}: ${file}`);
-        }
-    }
-    mergeCoverage(mergedCoverage, coverage);
+    validateCoverageMaps(coverage);
+    mergedCoverage.merge(coverage);
 }
 compareIdentities(executed, expected);
-if (Object.keys(mergedCoverage).length !== nativeCoverageFiles.length) {
+if (mergedCoverage.files().length !== nativeCoverageFiles.length) {
     throw new Error("merged coverage is incomplete");
 }
 const output = path.resolve("coverage/unit_and_integration/coverage-final.json");
 fs.mkdirSync(path.dirname(output), { recursive: true });
-fs.writeFileSync(output, JSON.stringify(mergedCoverage));
+fs.writeFileSync(output, JSON.stringify(mergedCoverage.toJSON()));
 console.log(`Verified ${expected.length} executed unit tests and ${expectedCoverageFiles.length} coverage files.`);
