@@ -215,13 +215,15 @@ onDestroy(() => { operations?.cancel(); kanban.entry.unobserveDeep(observer); ru
         <p class="diagnostic" role="alert" data-testid={`kanban-${projection.status}`}>{projection.message ?? "Board unavailable"}</p>
     {:else if !projection.current}
         <p class="diagnostic" role="status">Showing a non-current result while the board refreshes.</p>
-    {:else if projection.lanes.length === 0}
-        <p data-testid="kanban-empty">The query returned no cards.</p>
     {:else}
+        {#if projection.lanes.every(lane => lane.cards.length === 0)}
+            <p data-testid="kanban-empty">The query returned no cards.</p>
+        {/if}
         {#if operationState === "pending"}<p role="status">Card change pending…</p>{/if}
         {#if operationMessage}<p class="error" role="alert" data-testid="kanban-operation-message">{operationMessage}</p>{/if}
-        <div class="lanes" data-testid="kanban-lanes">
-            {#each projection.lanes as lane, laneIndex (`${lane.key === null ? "null" : `string:${lane.key}`}:${laneIndex}`)}
+        {#if projection.lanes.length > 0}
+            <div class="lanes" data-testid="kanban-lanes">
+                {#each projection.lanes as lane, laneIndex (`${lane.key === null ? "null" : `string:${lane.key}`}:${laneIndex}`)}
                 {@const visibleLane = projection.visible?.status === "ready" ? projection.visible.content.lanes[laneIndex] : undefined}
                 <section class="lane" role="list" data-lane-kind={lane.key === null ? "null" : lane.key === "" ? "empty" : "string"}
                     ondragover={event => { if (dragged) { event.preventDefault(); event.stopPropagation(); } }}
@@ -255,8 +257,9 @@ onDestroy(() => { operations?.cancel(); kanban.entry.unobserveDeep(observer); ru
                         </article>
                     {/each}
                 </section>
-            {/each}
-        </div>
+                {/each}
+            </div>
+        {/if}
     {/if}
 </div>
 
