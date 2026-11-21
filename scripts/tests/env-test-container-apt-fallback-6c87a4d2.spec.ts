@@ -33,8 +33,8 @@ test("the image uses the bounded installer and CI runs its Docker regression", (
     expect(integration).toContain("dpkg --remove --force-depends");
     expect(integration).toContain("verify-missing-netcat-openbsd");
     expect(integration).toContain("verify-missing-python3-pip");
-    expect(integration).toContain("unavailable_outer_watchdog_seconds=45");
     expect(integration).toContain("unavailable_inner_watchdog_seconds=40");
+    expect(integration).toContain("unavailable_launch_allowance_seconds=15");
     expect(integration).toContain("Dockerfile.fixture");
     expect(integration).toContain("outliner-apt-regression:fixture");
     expect(integration).toContain("negative_case_setup_timeout_seconds=30");
@@ -44,6 +44,7 @@ test("the image uses the bounded installer and CI runs its Docker regression", (
         'timeout "$negative_case_setup_timeout_seconds" docker build --no-cache',
     );
     expect(integration).toContain("docker run --rm outliner-apt-regression:unavailable");
+    expect(integration).toContain("run-bounded-unavailable-case.sh");
     const unavailableSetup = integration.indexOf(
         '-f "$fixture/Dockerfile.unavailable" -t outliner-apt-regression:unavailable',
     );

@@ -14,9 +14,9 @@ readonly unavailable_shutdown_grace_seconds=5
 # This receipt-producing watchdog runs inside the already-provisioned fixture.
 # It leaves five seconds beyond the fetch timeout and shutdown grace.
 readonly unavailable_inner_watchdog_seconds=40
-# The host watchdog starts immediately before docker run and remains outside
-# the receipt-producing watchdog, so it cannot win during normal completion.
-readonly unavailable_outer_watchdog_seconds=45
+# Container startup has its own explicit allowance. The host wrapper composes
+# it with the inner watchdog and shutdown grace (15 + 40 + 5 = 60 seconds).
+readonly unavailable_launch_allowance_seconds=15
 # Docker/BuildKit must finish the unavailable image in this separately enforced
 # preparation phase. Only a subsequent docker run starts the case watchdog,
 # composing a 75-second maximum for unavailable setup plus case execution.
@@ -121,9 +121,11 @@ for negative_case in unavailable slow missing; do
     fi
 
     set +e
-    timeout --signal=TERM --kill-after="$unavailable_shutdown_grace_seconds" \
-        "$unavailable_outer_watchdog_seconds" \
-        docker run --rm outliner-apt-regression:unavailable >"$log" 2>&1
+    "$repo_root/scripts/tests/run-bounded-unavailable-case.sh" \
+        "$unavailable_launch_allowance_seconds" \
+        "$unavailable_inner_watchdog_seconds" \
+        "$unavailable_shutdown_grace_seconds" "$log" \
+        docker run --rm outliner-apt-regression:unavailable
     status=$?
     set -e
     if ! "$repo_root/scripts/tests/verify-container-negative-case.sh" "$negative_case" "$status" "$log"; then

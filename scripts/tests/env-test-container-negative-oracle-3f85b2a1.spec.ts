@@ -12,6 +12,7 @@ import { expect, test } from "vitest";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const verifier = path.join(repoRoot, "scripts", "tests", "verify-container-negative-case.sh");
+const unavailableRunner = path.join(repoRoot, "scripts", "tests", "run-bounded-unavailable-case.sh");
 
 const unavailableEvidence = `
 APT fetch attempt: primary host 127.0.0.1:18081
@@ -95,4 +96,30 @@ test("rejects an unexpectedly successful image build", () => {
     const result = verify(0, unavailableEvidence);
     expect(result.ok).toBe(false);
     expect(result.output).toContain("unexpectedly built successfully");
+});
+
+test("the host wrapper preserves delayed startup and the full inner allowance", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "apt-unavailable-runner-"));
+    const logPath = path.join(directory, "run.log");
+    try {
+        let status: number | undefined;
+        try {
+            execFileSync(unavailableRunner, ["1", "1", "1", logPath, "bash", "-ceu", `
+sleep 0.6
+set +e
+timeout --signal=TERM --kill-after=0.3 0.4 bash -c "trap '' TERM; sleep 5"
+status=$?
+set -e
+echo "INSTALLER_EXIT_STATUS=$status"
+exit "$status"
+`], { stdio: "ignore", timeout: 5000 });
+        } catch (error) {
+            status = (error as { status?: number; }).status;
+        }
+        expect(status).toBeGreaterThan(0);
+        expect(status).not.toBe(124);
+        expect(fs.readFileSync(logPath, "utf8")).toMatch(/INSTALLER_EXIT_STATUS=[1-9][0-9]*/);
+    } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
 });
