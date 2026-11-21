@@ -35,6 +35,9 @@ export function deriveCalendarDayVisibleModel(input: CalendarDayVisibleModelInpu
     if (input.context.viewType !== "day") {
         return { ready: false, reason: "The bounded production projection currently supports Day mode." };
     }
+    if (input.settings.groupAxes.length > 0) {
+        return { ready: false, reason: "Grouped Day projection is not ready." };
+    }
     const accepted = deriveAcceptedCalendarEntries({
         current: input.current,
         result: input.result,

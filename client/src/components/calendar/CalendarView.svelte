@@ -119,6 +119,11 @@ let queryError = $state<string | undefined>(undefined);
 let writeError = $state<string | undefined>(undefined);
 let catalogResultCurrent = $state(false);
 let acceptedDayModel = $state<CalendarDayVisibleModel | undefined>(undefined);
+let acceptedDayEvidence: {
+    result: TableQueryResult;
+    context: CalendarObservationContextV1;
+    rangeLabel: string;
+} | undefined;
 let anchorUtcMs = $state(untrack(() => observationContext?.anchorUtcMs) ?? Date.now());
 let optimisticOverrides = $state<OptimisticOverrides>(createOptimisticOverrides());
 let showCreateDialog = $state(false);
@@ -310,6 +315,34 @@ const pgSchema = projectSchemaName(projectId);
 // svelte-ignore state_referenced_locally
 const session = createTableEngineSession({ projectDoc: project.ydoc, projectId });
 
+function publishAcceptedDayModel(currentSettings: CalendarSettings): void {
+    if (!acceptedDayEvidence) return;
+    const derived = deriveCalendarDayVisibleModel({
+        current: true,
+        result: acceptedDayEvidence.result,
+        settings: currentSettings,
+        project,
+        context: acceptedDayEvidence.context,
+        title: currentSettings.name,
+        rangeLabel: acceptedDayEvidence.rangeLabel,
+    });
+    if (derived.ready) {
+        acceptedDayModel = derived.model;
+        onVisibleProjection?.({ ready: true, projection: derived.model.projection });
+    } else {
+        acceptedDayModel = undefined;
+        onVisibleProjection?.(derived);
+    }
+}
+
+function invalidateDayObservation(): void {
+    acceptedDayEvidence = undefined;
+    acceptedDayModel = undefined;
+    if (effectiveViewType === "day") {
+        onVisibleProjection?.({ ready: false, reason: "Accepted Calendar SQL evidence is stale or unavailable." });
+    }
+}
+
 async function runQuery() {
     const generation = ++queryGeneration;
 
@@ -320,6 +353,7 @@ async function runQuery() {
     const currentTimeZone = timeZone;
     const currentSettings = settings;
     const currentRangeBounds = { startUtcMs: range.start, endUtcMs: range.end };
+    const currentRangeLabel = rangeLabel;
     const currentViewType = effectiveViewType;
     const currentDayContext: CalendarObservationContextV1 | undefined = currentViewType === "day"
         ? {
@@ -350,22 +384,8 @@ async function runQuery() {
         queryError = undefined;
         catalogResultCurrent = true;
         if (currentDayContext) {
-            const derived = deriveCalendarDayVisibleModel({
-                current: true,
-                result: outcome.result,
-                settings: currentSettings,
-                project,
-                context: currentDayContext,
-                title: currentSettings.name,
-                rangeLabel,
-            });
-            if (derived.ready) {
-                acceptedDayModel = derived.model;
-                onVisibleProjection?.({ ready: true, projection: derived.model.projection });
-            } else {
-                acceptedDayModel = undefined;
-                onVisibleProjection?.(derived);
-            }
+            acceptedDayEvidence = { result: outcome.result, context: currentDayContext, rangeLabel: currentRangeLabel };
+            publishAcceptedDayModel(currentSettings);
         }
         // The query result is authoritative: drop any optimistic placement
         // whose row has now come back, whether or not it agrees with the
@@ -375,19 +395,21 @@ async function runQuery() {
         catalogResultCurrent = false;
         queryError = outcome.error;
         if (currentDayContext) {
-            acceptedDayModel = undefined;
-            onVisibleProjection?.({ ready: false, reason: "Accepted Calendar SQL evidence is stale or unavailable." });
+            invalidateDayObservation();
         }
     }
 }
 
-function scheduleRequery(invalidateCurrentResult = false) {
+function scheduleRequery(invalidateCurrentResult = false, invalidateObservation = false) {
+    if (invalidateObservation) {
+        // Cancel an in-flight generation before the debounce. Its captured
+        // range must never be paired with labels from the new navigation.
+        queryGeneration++;
+        invalidateDayObservation();
+    }
     if (invalidateCurrentResult) {
         catalogResultCurrent = false;
-        acceptedDayModel = undefined;
-        if (effectiveViewType === "day") {
-            onVisibleProjection?.({ ready: false, reason: "Accepted Calendar SQL evidence is stale or unavailable." });
-        }
+        invalidateDayObservation();
     }
     if (requeryTimer !== undefined) clearTimeout(requeryTimer);
     requeryTimer = setTimeout(() => {
@@ -412,6 +434,10 @@ function refreshMirror() {
         // must not temporarily revoke drag/write authority while the
         // debounced refresh confirms that unchanged result.
         scheduleRequery();
+    } else if (catalogResultCurrent && acceptedDayEvidence) {
+        // Role/grouping/lane presentation changes reuse the accepted rows but
+        // must rebuild both the production Day model and its projection.
+        publishAcceptedDayModel(next);
     }
     if (!isInitialSyncDone) {
         isInitialSyncDone = true;
@@ -450,19 +476,19 @@ function commitGanttScale(scale: GanttScale) {
 
 function goToday() {
     anchorUtcMs = todayAnchor(timeZone, Date.now());
-    scheduleRequery();
+    scheduleRequery(false, true);
 }
 function goPrev() {
     anchorUtcMs = isGantt
         ? shiftGanttAnchor(anchorUtcMs, ganttScale, timeZone, -1)
         : shiftAnchor(anchorUtcMs, viewType, weekStart, timeZone, -1);
-    scheduleRequery();
+    scheduleRequery(false, true);
 }
 function goNext() {
     anchorUtcMs = isGantt
         ? shiftGanttAnchor(anchorUtcMs, ganttScale, timeZone, 1)
         : shiftAnchor(anchorUtcMs, viewType, weekStart, timeZone, 1);
-    scheduleRequery();
+    scheduleRequery(false, true);
 }
 
 // The range boundaries are instants at the *calendar zone's* midnight, so

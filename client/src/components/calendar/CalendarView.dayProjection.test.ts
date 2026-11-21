@@ -1,9 +1,10 @@
 import type { CalendarObservationContextV1, CalendarProjectionResult } from "$shared/notifications/calendarProjection";
-import { configure, render, waitFor } from "@testing-library/svelte";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { configure, fireEvent, render, waitFor } from "@testing-library/svelte";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { Items, Project } from "../../schema/app-schema";
 import { computeViewRange } from "../../services/calendar/calendarGridRange";
+import * as runner from "../../services/calendar/calendarQueryRunner";
 import { createCalendar, destroyCalendarUndoManager } from "../../services/calendar/calendarService";
 import { globalUndoRouter } from "../../services/undo/undoRouter.svelte";
 import { resetPgliteForTests } from "../../services/yjstable/pgliteService";
@@ -85,5 +86,159 @@ describe("CalendarView Day projection boundary", { timeout: 30000 }, () => {
         expect(component.getByTestId(`calendar-entry-item:${item.key}`)).toBeTruthy();
 
         destroyCalendarUndoManager(projectDoc);
+    });
+
+    it("re-derives the DOM and projection after a committed title-role-only edit", async () => {
+        const projectId = "proj-calendar-day-role-projection";
+        const projectDoc = new Y.Doc({ guid: projectId });
+        const project = Project.fromDoc(projectDoc);
+        const page = new Items(projectDoc, project.tree, "root").addNode("tester");
+        const item = new Items(projectDoc, project.tree, page.key).addNode("tester");
+        item.text = "Primary title";
+        const anchorUtcMs = Date.now();
+        item.start = new Date(anchorUtcMs).toISOString();
+        item.allDay = false;
+        item.duration = "PT30M";
+        const calendarId = createCalendar(project, {
+            name: "Role projection",
+            query:
+                "SELECT id, text AS primary_title, 'Alternate title' AS alternate_title, all_day, start_at, duration, "
+                + "'item' AS source_kind, id AS source_id FROM outline_items",
+            viewType: "day",
+            timezone: "UTC",
+            roleTitle: "primary_title",
+            roleStart: "start_at",
+            roleAllDay: "all_day",
+            roleDuration: "duration",
+        });
+        const range = computeViewRange(anchorUtcMs, "day", 1, "UTC");
+        const projections: CalendarProjectionResult[] = [];
+        const component = render(CalendarView, {
+            props: {
+                project,
+                projectId,
+                calendarId,
+                observationContext: {
+                    version: 1,
+                    locale: "en-US",
+                    timeZone: "UTC",
+                    weekStart: 1,
+                    viewType: "day",
+                    anchorUtcMs,
+                    rangeStartUtcMs: range.start,
+                    rangeEndUtcMs: range.end,
+                    monthLaneFilter: null,
+                    collapsedEntryKeys: [],
+                },
+                onVisibleProjection: result => projections.push(result),
+            },
+        });
+        const entry = () => component.getByTestId(`calendar-entry-item:${item.key}`);
+        await waitFor(() => expect(entry().textContent).toContain("Primary title"));
+
+        const calendarMap = projectDoc.getMap("calendars").get(calendarId) as Y.Map<unknown>;
+        calendarMap.set("roleTitle", "alternate_title");
+        await waitFor(() => expect(entry().textContent).toContain("Alternate title"));
+        await waitFor(() => {
+            const latest = projections.at(-1);
+            expect(latest?.ready && latest.projection.content.map(value => value.title)).toContain("Alternate title");
+        });
+    });
+
+    it("keeps grouped Day rendering but reports its projection as non-ready", async () => {
+        const projectId = "proj-calendar-grouped-day-projection";
+        const projectDoc = new Y.Doc({ guid: projectId });
+        const project = Project.fromDoc(projectDoc);
+        const page = new Items(projectDoc, project.tree, "root").addNode("tester");
+        const item = new Items(projectDoc, project.tree, page.key).addNode("tester");
+        item.text = "Grouped entry";
+        const anchorUtcMs = Date.now();
+        item.start = new Date(anchorUtcMs).toISOString();
+        item.allDay = false;
+        item.duration = "PT30M";
+        const calendarId = createCalendar(project, {
+            name: "Grouped Day",
+            query: "SELECT id, text AS title, 'Team A' AS team, all_day, start_at, duration, "
+                + "'item' AS source_kind, id AS source_id FROM outline_items",
+            viewType: "day",
+            timezone: "UTC",
+            roleTitle: "title",
+            roleStart: "start_at",
+            roleAllDay: "all_day",
+            roleDuration: "duration",
+            groupAxes: ["team"],
+        });
+        const range = computeViewRange(anchorUtcMs, "day", 1, "UTC");
+        const projections: CalendarProjectionResult[] = [];
+        const component = render(CalendarView, {
+            props: {
+                project,
+                projectId,
+                calendarId,
+                observationContext: {
+                    version: 1,
+                    locale: "en-US",
+                    timeZone: "UTC",
+                    weekStart: 1,
+                    viewType: "day",
+                    anchorUtcMs,
+                    rangeStartUtcMs: range.start,
+                    rangeEndUtcMs: range.end,
+                    monthLaneFilter: null,
+                    collapsedEntryKeys: [],
+                },
+                onVisibleProjection: result => projections.push(result),
+            },
+        });
+        await waitFor(() => expect(component.getByTestId("calendar-lane-time-grid")).toBeTruthy());
+        await waitFor(() => expect(projections.at(-1)).toEqual({
+            ready: false,
+            reason: "Grouped Day projection is not ready.",
+        }));
+    });
+
+    it("cannot publish a previous Day response after navigation invalidates its generation", async () => {
+        const projectId = "proj-calendar-day-navigation-generation";
+        const projectDoc = new Y.Doc({ guid: projectId });
+        const project = Project.fromDoc(projectDoc);
+        const calendarId = createCalendar(project, {
+            name: "Navigation generation",
+            query: "SELECT 1 AS id, 'Old day' AS title, now() AS start_at",
+            viewType: "day",
+            timezone: "UTC",
+            roleTitle: "title",
+            roleStart: "start_at",
+        });
+        let firstResolve: ((value: runner.CalendarQueryOutcome) => void) | undefined;
+        let secondResolve: ((value: runner.CalendarQueryOutcome) => void) | undefined;
+        let calls = 0;
+        const spy = vi.spyOn(runner, "runCalendarQuery").mockImplementation(async () => {
+            calls++;
+            return new Promise(resolve => {
+                if (calls === 1) firstResolve = resolve;
+                else secondResolve = resolve;
+            });
+        });
+        const projections: CalendarProjectionResult[] = [];
+        const component = render(CalendarView, {
+            props: { project, projectId, calendarId, onVisibleProjection: result => projections.push(result) },
+        });
+        await waitFor(() => expect(calls).toBe(1));
+        await fireEvent.click(component.getByTestId("calendar-nav-next"));
+        expect(projections.at(-1)).toEqual({
+            ready: false,
+            reason: "Accepted Calendar SQL evidence is stale or unavailable.",
+        });
+        firstResolve!({
+            result: {
+                columns: ["id", "title", "start_at"],
+                rows: [{ id: 1, title: "Old day", start_at: new Date().toISOString() }],
+            },
+        });
+        await waitFor(() => expect(calls).toBe(2));
+        expect(projections.some(result => result.ready)).toBe(false);
+        secondResolve!({ result: { columns: [], rows: [] } });
+        await waitFor(() => expect(projections.some(result => result.ready)).toBe(true));
+        spy.mockRestore();
     });
 });
