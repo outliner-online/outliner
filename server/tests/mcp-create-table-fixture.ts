@@ -219,6 +219,7 @@ export async function startMcpTestServer(options: {
         production: rpcClient(server.server),
         auditDestination: auditLease.destination,
         waitForAuditDestination: auditLease.wait,
+        releaseAuditDestination: auditLease.release,
         get domainCalls() {
             return domainCalls;
         },

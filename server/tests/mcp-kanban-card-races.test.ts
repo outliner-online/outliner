@@ -83,6 +83,7 @@ describe("Kanban card mutation races and effect disclosure", function() {
             const args = updateArgs(read, card, "old-service");
             expect((await first.mcp.call("update_kanban_card", args)).payload).to.include({ applied: true });
             const restarted = await restartFromStorage(first.dir, first.acl);
+            first.releaseAuditDestination();
             second = await startMcpTestServer({ ...restarted, acl: first.acl });
             const result = await second.mcp.call("update_kanban_card", args);
             expect(result.payload).to.include({ code: "stale_revision", reason: "observation_unavailable" });

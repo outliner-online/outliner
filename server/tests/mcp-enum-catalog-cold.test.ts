@@ -49,6 +49,7 @@ describe("MCP ENUM cold reconstruction (#5534 REQ-008)", function() {
             await withRoom(fixture.server.hocuspocus, `projects/${PROJECT}/tables/${tableId}`, () => {});
 
             await stopTestServer(fixture.server);
+            fixture.releaseAuditDestination();
             restarted = await startTestServer(fixture.dir, fixture.acl);
             const cold = rpcClient(restarted.server);
             const schema = await cold.call("get_relation_schema", { projectId: PROJECT, relation: "cold_rows" });
