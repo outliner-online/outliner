@@ -3,6 +3,7 @@
  * Real APT/dpkg/browser tests in disposable Ubuntu containers; no command mocks.
  */
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +12,10 @@ import { afterAll, beforeAll, expect, test } from "vitest";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const image = `outliner-direct-os-regression:${process.pid}`;
+const owner = randomUUID().slice(0, 8);
+const scenarios = ["success", "unavailable", "slow", "missing", "nonroot-success", "nonroot-playwright-slow"];
+const preparedContainers = new Set<string>();
+const containerName = (scenario: string) => `outliner-direct-os-${process.pid}-${owner}-${scenario}`;
 let buildContext: string | undefined;
 const output = (result: ReturnType<typeof spawnSync>) => `${result.stdout ?? ""}${result.stderr ?? ""}`;
 
@@ -25,40 +30,74 @@ beforeAll(() => {
     // Honor a managed environment's trusted CA without disabling TLS checks.
     const ca = process.env.NODE_EXTRA_CA_CERTS;
     const trust = ca ? ["--secret", `id=environment-ca,src=${ca}`] : [];
+    // Image construction and fresh, unstarted containers share the original
+    // provisioning budget. No acquisition runs before the per-case clock.
+    const provisioningDeadline = performance.now() + 900000;
+    const remainingProvisioning = () => {
+        const remaining = Math.floor(provisioningDeadline - performance.now());
+        if (remaining <= 0) throw new Error("Fixture provisioning deadline exceeded");
+        return remaining;
+    };
     const build = spawnSync("docker", ["build", ...trust, "-t", image, buildContext], {
         cwd: root,
         encoding: "utf8",
-        timeout: 900000,
+        timeout: remainingProvisioning(),
         maxBuffer: 20 * 1024 * 1024,
     });
     console.log(output(build));
     expect(build.error).toBeUndefined();
     expect(build.status).toBe(0);
+    for (const scenario of scenarios) {
+        const name = containerName(scenario);
+        preparedContainers.add(name); // Reclaim our uniquely named partial create on failure, too.
+        const created = spawnSync("docker", [
+            "create",
+            "--rm",
+            "--name",
+            name,
+            "-v",
+            `${join(root, "scripts")}:/source/scripts:ro`,
+            image,
+            "bash",
+            "/source/scripts/tests/fixtures/direct-runner-os/run-case.sh",
+            scenario,
+        ], { encoding: "utf8", timeout: remainingProvisioning(), maxBuffer: 1024 * 1024 });
+        expect(created.error, output(created)).toBeUndefined();
+        expect(created.status, output(created)).toBe(0);
+    }
 }, 920000);
 
 afterAll(() => {
-    if (buildContext) rmSync(buildContext, { recursive: true, force: true });
-    spawnSync("docker", ["image", "rm", "-f", image], { encoding: "utf8", timeout: 30000 });
+    let cleanup: ReturnType<typeof spawnSync> | undefined;
+    try {
+        if (preparedContainers.size) {
+            cleanup = spawnSync("docker", ["rm", "-f", ...preparedContainers], { timeout: 10000 });
+        }
+    } finally {
+        try {
+            if (buildContext) rmSync(buildContext, { recursive: true, force: true });
+        } finally {
+            spawnSync("docker", ["image", "rm", "-f", image], { encoding: "utf8", timeout: 30000 });
+        }
+    }
+    if (cleanup) {
+        expect(cleanup.error, "Unstarted fixture cleanup must complete").toBeUndefined();
+        expect(cleanup.status).toBe(0);
+    }
 });
 
 function run(scenario: string, limit: number) {
-    const name = `outliner-direct-os-${process.pid}-${scenario}`;
+    const name = containerName(scenario);
+    expect(preparedContainers.delete(name), "Each case requires its own fresh, unused container").toBe(true);
     const started = performance.now();
-    const result = spawnSync("docker", [
-        "run",
-        "--rm",
-        "--name",
-        name,
-        "-v",
-        `${join(root, "scripts")}:/source/scripts:ro`,
-        image,
-        "bash",
-        "/source/scripts/tests/fixtures/direct-runner-os/run-case.sh",
-        scenario,
-    ], { encoding: "utf8", timeout: limit, maxBuffer: 20 * 1024 * 1024 });
+    const result = spawnSync("docker", ["start", "--attach", name], {
+        encoding: "utf8",
+        timeout: limit,
+        maxBuffer: 20 * 1024 * 1024,
+    });
     const elapsed = performance.now() - started;
     console.log(`${scenario}: elapsed=${elapsed}ms exit=${result.status}\n${output(result)}`);
-    if (result.error) spawnSync("docker", ["rm", "-f", name], { timeout: 10000 });
+    if (result.error || result.status !== 0) spawnSync("docker", ["rm", "-f", name], { timeout: 10000 });
     expect(result.error, "Independent outer harness must not terminate the acquisition").toBeUndefined();
     expect(result.signal).toBeNull();
     return { result, elapsed, log: output(result) };
