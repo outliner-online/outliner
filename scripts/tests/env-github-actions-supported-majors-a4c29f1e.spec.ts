@@ -144,7 +144,7 @@ test("a delayed hosted build consumes the same monotonic deadline as container p
     expect(deadline.run).toContain("observe-build.py");
     expect(build.uses).toBe("./.github/actions/bounded-buildx");
     expect(build.with.context).toBe("scripts/tests/fixtures/direct-runner-os/deadline-control");
-    expect(build.with.network).toBe("host");
+    expect(build.with["add-host"]).toBe("host.docker.internal=host-gateway");
     expect(build.with["no-cache"]).toBe(true);
     expect(build["continue-on-error"]).toBe(true);
     expect(acquisition.if).toBe("steps.delayed-build.outcome == 'success'");

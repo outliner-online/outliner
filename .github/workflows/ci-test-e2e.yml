@@ -160,7 +160,7 @@ jobs:
           context: scripts/tests/fixtures/direct-runner-os/deadline-control
           load: true
           tags: outliner-direct-os-regression:deadline-control
-          network: host
+          add-host: host.docker.internal=host-gateway
           no-cache: true
       - name: Acquisition must stay blocked after deadline expiry
         if: steps.delayed-build.outcome == 'success'

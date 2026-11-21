@@ -18,7 +18,7 @@ if (input("file")) args.push("--file", input("file"));
 if (input("load") === "true") args.push("--load");
 if (input("cache-from")) args.push("--cache-from", input("cache-from"));
 if (input("cache-to")) args.push("--cache-to", input("cache-to"));
-if (input("network")) args.push("--network", input("network"));
+if (input("add-host")) args.push("--add-host", input("add-host"));
 if (input("no-cache") === "true") args.push("--no-cache");
 args.push(input("context"));
 

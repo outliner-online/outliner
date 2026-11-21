@@ -14,7 +14,7 @@ inputs:
     required: false
   cache-to:
     required: false
-  network:
+  add-host:
     required: false
   no-cache:
     required: false

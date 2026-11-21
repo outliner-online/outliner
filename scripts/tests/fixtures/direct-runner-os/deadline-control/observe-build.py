@@ -18,7 +18,7 @@ def record(event):
 
 server = socket.socket()
 server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-server.bind(("127.0.0.1", 18083))
+server.bind(("0.0.0.0", 18083))
 server.listen(1)
 record("observer-ready")
 connection, _ = server.accept()
