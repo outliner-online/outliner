@@ -69,22 +69,31 @@ describe("Grid table projection", () => {
 
     it("preserves duplicate multiplicity while ignoring hidden and identity churn", () => {
         const first = projectGridTable(base());
-        const changed: any = base();
-        changed.rows[0] = { ...changed.rows[0], secret: "changed" };
-        changed.rowTargets = [{ logicalRowId: "replacement" }, { logicalRowId: "other" }];
+        const changed: GridProjectionInput = {
+            ...base(),
+            rows: [{ ...base().rows[0], secret: "changed" }, base().rows[1]],
+            rowTargets: [{ logicalRowId: "replacement" }, { logicalRowId: "other" }],
+        };
         expect(projectGridTable(changed)).toEqual(first);
-        changed.rows = changed.rows.slice(0, 1);
-        changed.rowTargets = changed.rowTargets.slice(0, 1);
-        expect(projectGridTable(changed)).not.toEqual(first);
+        expect(
+            projectGridTable({
+                ...changed,
+                rows: changed.rows.slice(0, 1),
+                rowTargets: changed.rowTargets.slice(0, 1),
+            }),
+        )
+            .not.toEqual(first);
     });
 
     it("excludes renderer identity when displayed text is unchanged", () => {
-        const text: any = base();
-        text.columns = ["id"];
-        text.rows = [{ id: 42 }];
-        text.rowTargets = [{ logicalRowId: "one" }];
-        text.resultColumns = [{ name: "id", typeId: 25 }];
-        text.componentTypes = { id: "text" };
+        const text: GridProjectionInput = {
+            ...base(),
+            columns: ["id"],
+            rows: [{ id: 42 }],
+            rowTargets: [{ logicalRowId: "one" }],
+            resultColumns: [{ name: "id", typeId: 25 }],
+            componentTypes: { id: "text" },
+        };
         const number = { ...text, componentTypes: { id: "number" } };
         expect(projectGridTable(number)).toEqual(projectGridTable(text));
     });
@@ -101,29 +110,37 @@ describe("Grid table projection", () => {
     });
 
     it("selects occurrence-aligned heterogeneous fields and falls back only for authoritative ambiguity", () => {
-        const input: any = base();
-        input.columns = ["value"];
-        input.rows = [{ value: "true" }, { value: "true" }];
-        input.rowTargets = [
-            { logicalRowId: "a", source: { sourceKind: "alpha", sourceId: "1" } },
-            { logicalRowId: "b", source: { sourceKind: "beta", sourceId: "2" } },
-        ];
-        input.resultColumns = [{ name: "value", typeId: 25 }];
-        input.physicalColumns = [
-            {
-                outputColumn: "value",
-                physicalColumn: "value",
-                source: { kind: "table", id: "a", sqlName: "alpha", schemaRevision: "1" },
-                field: { name: "value", kind: "boolean", dataType: "boolean", isNullable: false, isPrimaryKey: false },
-            },
-            {
-                outputColumn: "value",
-                physicalColumn: "value",
-                source: { kind: "table", id: "b", sqlName: "beta", schemaRevision: "1" },
-                field: { name: "value", kind: "text", dataType: "text", isNullable: false, isPrimaryKey: false },
-            },
-        ];
-        input.metadataStatus = "resolved";
+        const input: GridProjectionInput = {
+            ...base(),
+            columns: ["value"],
+            rows: [{ value: "true" }, { value: "true" }],
+            rowTargets: [
+                { logicalRowId: "a", source: { sourceKind: "alpha", sourceId: "1" } },
+                { logicalRowId: "b", source: { sourceKind: "beta", sourceId: "2" } },
+            ],
+            resultColumns: [{ name: "value", typeId: 25 }],
+            physicalColumns: [
+                {
+                    outputColumn: "value",
+                    physicalColumn: "value",
+                    source: { kind: "table", id: "a", sqlName: "alpha", schemaRevision: "1" },
+                    field: {
+                        name: "value",
+                        kind: "boolean",
+                        dataType: "boolean",
+                        isNullable: false,
+                        isPrimaryKey: false,
+                    },
+                },
+                {
+                    outputColumn: "value",
+                    physicalColumn: "value",
+                    source: { kind: "table", id: "b", sqlName: "beta", schemaRevision: "1" },
+                    field: { name: "value", kind: "text", dataType: "text", isNullable: false, isPrimaryKey: false },
+                },
+            ],
+            metadataStatus: "resolved",
+        };
         expect(projectGridTable(input)).toMatchObject({
             status: "ready",
             projection: {
