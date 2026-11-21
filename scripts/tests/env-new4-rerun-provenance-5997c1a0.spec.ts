@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { parse } from "yaml";
 import { collectNew4ShardOutcomes } from "../ci/collect-new4-shard-outcomes.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -79,6 +80,22 @@ function writeAttemptOneArtifacts(directory: string, runId: string, commit: stri
     }
 }
 
+function runRequiredCheck(directory: string, outcomesFile: string, runId: string, commit: string) {
+    const workflow = parse(fs.readFileSync(path.join(root, ".github/workflows/ci-test-e2e.yml"), "utf8"));
+    const step = workflow.jobs["new-4-complete"].steps.at(-1);
+    const command = step.run
+        .replaceAll("new-4-evidence/outcomes.json", "__OUTCOMES_FILE__")
+        .replaceAll("new-4-evidence", JSON.stringify(directory))
+        .replaceAll("__OUTCOMES_FILE__", JSON.stringify(outcomesFile))
+        .replaceAll('"${{ github.run_id }}"', JSON.stringify(runId))
+        .replaceAll('"${{ github.run_attempt }}"', '"2"')
+        .replaceAll('"${{ github.sha }}"', JSON.stringify(commit));
+    return spawnSync("bash", ["-c", command], {
+        cwd: root,
+        env: { ...process.env, COLLECTION_RESULT: "success" },
+    });
+}
+
 describe("ENV-5997c1a0: failed-job rerun provenance", () => {
     it.each([
         [false, 0, "retains successful evidence when neither target shard reruns"],
@@ -98,16 +115,25 @@ describe("ENV-5997c1a0: failed-job rerun provenance", () => {
         );
         const outcomesFile = path.join(directory, "outcomes.json");
         fs.writeFileSync(outcomesFile, JSON.stringify(outcomes));
-        const result = spawnSync(process.execPath, [
-            path.join(root, "scripts/ci/verify-new4-shards.mjs"),
-            directory,
-            outcomesFile,
-            runId,
-            "2",
-            commit,
-        ]);
+        // Execute the exact final step of the production required-check job,
+        // rather than bypassing that wiring by invoking the verifier directly.
+        const result = runRequiredCheck(directory, outcomesFile, runId, commit);
         expect(result.status).toBe(expectedStatus);
         expect(outcomes.shards[1].attempt).toBe(1);
         expect(outcomes.shards[2].attempt).toBe(rerunSecondShard ? 2 : 1);
+    });
+
+    it("keeps the calling workflow and unchanged Firefox verification connected", () => {
+        const caller = parse(fs.readFileSync(path.join(root, ".github/workflows/ci.yml"), "utf8"));
+        expect(caller.jobs["e2e-test"].uses).toBe("./.github/workflows/ci-test-e2e.yml");
+        const reusable = parse(fs.readFileSync(path.join(root, ".github/workflows/ci-test-e2e.yml"), "utf8"));
+        const projects = reusable.jobs["e2e-test"].strategy.matrix.project;
+        expect(projects.filter((project: string) => project.startsWith("firefox-selection-"))).toEqual([
+            "firefox-selection-core-4",
+            "firefox-selection-core-4b",
+            "firefox-selection-new",
+            "firefox-selection-basic",
+        ]);
+        expect(reusable.jobs["new-4-complete"].name).toBe("e2e-test (new-4)");
     });
 });

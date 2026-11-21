@@ -81,7 +81,7 @@ class PlaywrightBoundaryTest(unittest.TestCase):
             if new4_shard:
                 workflow = (ROOT / '.github/workflows/ci-test-e2e.yml').read_text()
                 branch = workflow.split('elif [[ "$project" =~ ^new-4-([12])$ ]]; then')[1].split('elif ')[0]
-                command = branch.split('-- npm run github:test:e2e -- ', 1)[1].strip()
+                command = branch.split('npm run github:test:e2e -- ', 1)[1].split('2>&1 | tee', 1)[0].rstrip(' \\\n')
                 command = command.replace('../scripts/ci/new4-execution-reporter.mjs',
                                           str(ROOT / 'scripts/ci/new4-execution-reporter.mjs'))
                 cli_arguments = shlex.split(command.replace('"$shard"', new4_shard).replace('\\\n', ' '))
@@ -154,12 +154,6 @@ class PlaywrightBoundaryTest(unittest.TestCase):
 
     def test_new4_shipped_command_failure_is_nonzero(self):
         self.run_probe('failure', new4_shard='2/2')
-
-    def test_new4_shipped_command_timeout_retains_diagnostics(self):
-        self.run_probe('timeout', new4_shard='1/2')
-
-    def test_new4_shipped_command_incomplete_report_cannot_pass(self):
-        self.run_probe('incomplete', new4_shard='2/2')
 
     def test_new3_shipped_command_failure_is_nonzero(self):
         self.run_probe('failure', new3_half='new-3b')

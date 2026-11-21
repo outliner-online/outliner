@@ -20,7 +20,7 @@ describe("ENV-5997c1a0: complete native new-4 sharding", () => {
         expect(result.halves.every(count => count > 0)).toBe(true);
     }, 120_000);
 
-    it("preserves identity, bounded failure evidence, and the required aggregate check", () => {
+    it("preserves identity, the original command deadline, and the required aggregate check", () => {
         const workflow = parse(fs.readFileSync(workflowPath, "utf8"));
         const job = workflow.jobs["e2e-test"];
         expect(job.env.E2E_PROJECT).toContain("startsWith(matrix.project, 'new-4-') && 'new-4'");
@@ -32,7 +32,15 @@ describe("ENV-5997c1a0: complete native new-4 sharding", () => {
         expect(run).toContain(
             'PLAYWRIGHT_COLLECTION_OUTPUT="../job_logs/${project}-expected-${E2E_EXECUTION_ID}.json"',
         );
-        expect(run).toContain("--timeout-seconds=1200 --job-budget-seconds=1320 --grace-seconds=10");
+        const new4Branch = run.split('elif [[ "$project" =~ ^new-4-([12])$ ]]; then')[1].split("elif ")[0];
+        expect(new4Branch).toContain("PLAYWRIGHT_HTML_OPEN=never npm run github:test:e2e");
+        expect(new4Branch).not.toContain("run-bounded-e2e.py");
+        expect(job["timeout-minutes"]).toBe(30);
+        const simulatedSetupSeconds = 137;
+        const originalRemainingSeconds = 30 * 60 - simulatedSetupSeconds;
+        const shardedRemainingSeconds = job["timeout-minutes"] * 60 - simulatedSetupSeconds;
+        expect(shardedRemainingSeconds).toBe(originalRemainingSeconds);
+        expect(shardedRemainingSeconds).toBeGreaterThan(1_200);
 
         const gate = workflow.jobs["new-4-complete"];
         expect(gate.name).toBe("e2e-test (new-4)");
