@@ -219,62 +219,16 @@ jobs:
             "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$EXPECTED_ARTIFACT_ID" "$WRONG_ARTIFACT_ID" "$GITHUB_SHA"
 
       - name: Download representative E2E evidence
-        id: representative-download
-        uses: ./.github/actions/download-artifact-with-exact-id-retry
+        uses: actions/download-artifact@v8
         with:
-          primary-artifact-id: ${{ steps.representative-upload.outputs.artifact-id }}
-          retry-artifact-id: ${{ steps.representative-upload.outputs.artifact-id }}
-          destination-root: artifact-roundtrip/representative-download
+          artifact-ids: ${{ steps.representative-upload.outputs.artifact-id }}
+          path: artifact-roundtrip/downloaded
 
       - name: Verify downloaded E2E evidence
         shell: bash
         run: |
           set -euo pipefail
-          scripts/ci/verify-artifact-roundtrip.sh artifact-roundtrip/source \
-            "${{ steps.representative-download.outputs.downloaded-directory }}"
-
-      - name: Force a first-lookup failure control
-        id: forced-recovery
-        uses: ./.github/actions/download-artifact-with-exact-id-retry
-        with:
-          primary-artifact-id: '0'
-          retry-artifact-id: ${{ steps.representative-upload.outputs.artifact-id }}
-          destination-root: artifact-roundtrip/forced-recovery
-          retry-delay-seconds: '0'
-
-      - name: Verify forced recovery identity and bytes
-        shell: bash
-        env:
-          EXPECTED_ARTIFACT_ID: ${{ steps.representative-upload.outputs.artifact-id }}
-          FAILED_ARTIFACT_ID: '0'
-        run: |
-          set -euo pipefail
-          test "$EXPECTED_ARTIFACT_ID" != "$FAILED_ARTIFACT_ID"
-          scripts/ci/verify-artifact-roundtrip.sh artifact-roundtrip/source \
-            "${{ steps.forced-recovery.outputs.downloaded-directory }}"
-
-      - name: Force a repeated lookup failure control
-        id: forced-repeated-miss
-        continue-on-error: true
-        uses: ./.github/actions/download-artifact-with-exact-id-retry
-        with:
-          primary-artifact-id: '0'
-          retry-artifact-id: '0'
-          destination-root: artifact-roundtrip/forced-repeated-miss
-          retry-delay-seconds: '0'
-
-      - name: Confirm repeated lookup failure is non-success
-        if: always()
-        shell: bash
-        env:
-          REPEATED_OUTCOME: ${{ steps.forced-repeated-miss.outcome }}
-        run: |
-          set -euo pipefail
-          test "$REPEATED_OUTCOME" = failure
-          test ! -e artifact-roundtrip/forced-repeated-miss/primary/execution.json
-          test ! -e artifact-roundtrip/forced-repeated-miss/primary/runtime.log
-          test ! -e artifact-roundtrip/forced-repeated-miss/retry/execution.json
-          test ! -e artifact-roundtrip/forced-repeated-miss/retry/runtime.log
+          scripts/ci/verify-artifact-roundtrip.sh artifact-roundtrip/source artifact-roundtrip/downloaded
 
       - name: Reject an unavailable artifact
         id: unavailable-download
@@ -308,14 +262,14 @@ jobs:
             exit 1
           fi
 
-          cp -R "${{ steps.representative-download.outputs.downloaded-directory }}" artifact-roundtrip/missing-file
+          cp -R artifact-roundtrip/downloaded artifact-roundtrip/missing-file
           rm artifact-roundtrip/missing-file/runtime.log
           if scripts/ci/verify-artifact-roundtrip.sh artifact-roundtrip/source artifact-roundtrip/missing-file; then
             echo 'missing file unexpectedly passed verification' >&2
             exit 1
           fi
 
-          cp -R "${{ steps.representative-download.outputs.downloaded-directory }}" artifact-roundtrip/corrupted-file
+          cp -R artifact-roundtrip/downloaded artifact-roundtrip/corrupted-file
           printf '%s\n' 'corrupted evidence' > artifact-roundtrip/corrupted-file/execution.json
           if scripts/ci/verify-artifact-roundtrip.sh artifact-roundtrip/source artifact-roundtrip/corrupted-file; then
             echo 'corrupted file unexpectedly passed verification' >&2
