@@ -67,14 +67,15 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
         const notes = getTableHandles(projectDoc, createTable(projectDoc, "Notes", "notes"))!;
         setSchemaText(
             choices,
-            "CREATE TABLE choices (id TEXT PRIMARY KEY, status TEXT NOT NULL CHECK (status IN ('true', 'false')), hidden TEXT)",
+            "CREATE TABLE choices (id TEXT PRIMARY KEY, observed_on DATE NOT NULL, hidden TEXT)",
         );
-        setSchemaText(notes, "CREATE TABLE notes (id TEXT PRIMARY KEY, status TEXT NOT NULL, hidden TEXT)");
-        addRecord(choices, { status: "true", hidden: "choice-secret" }, "same");
-        addRecord(notes, { status: "true", hidden: "note-secret" }, "same");
+        setSchemaText(notes, "CREATE TABLE notes (id TEXT PRIMARY KEY, observed_at TIMESTAMP NOT NULL, hidden TEXT)");
+        addRecord(choices, { observed_on: "2026-11-21", hidden: "choice-secret" }, "same");
+        addRecord(notes, { observed_at: "2026-11-22 12:34:56", hidden: "note-secret" }, "same");
         const branchA =
-            "SELECT 'choices' AS source_kind, id AS source_id, status AS value, hidden AS hidden FROM choices";
-        const branchB = "SELECT 'notes' AS source_kind, id AS source_id, status AS value, hidden AS hidden FROM notes";
+            "SELECT 'choices' AS source_kind, id AS source_id, observed_on AS value, hidden AS hidden FROM choices";
+        const branchB =
+            "SELECT 'notes' AS source_kind, id AS source_id, observed_at AS value, hidden AS hidden FROM notes";
         const grid = getGridHandles(
             projectDoc,
             createGrid(projectDoc, {
@@ -90,40 +91,55 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
             await waitFor(() => expect(view.container.querySelectorAll("tbody tr")).toHaveLength(2), {
                 timeout: 30000,
             });
-            // Both UNION branches expose the same alias and PostgreSQL text
-            // OID, but accepted source schemas select a constrained option
-            // versus free text. Assert the rendered controls, not only helper
-            // metadata, before comparing their displayed semantic values.
-            await waitFor(() => expect(view.container.querySelectorAll("td[data-col='value'] select")).toHaveLength(1));
-            expect(view.container.querySelectorAll("td[data-col='value'] button")).toHaveLength(1);
-            expect(view.container.querySelector<HTMLSelectElement>("td[data-col='value'] select")).toHaveValue("true");
-            expect(view.container.querySelector("td[data-col='value'] button")).toHaveTextContent("true");
+            // PostgreSQL promotes DATE and TIMESTAMP branches to one result
+            // OID, while accepted source schemas still select date versus
+            // text rendering. Tie each native control and projection cell to
+            // its occurrence so a source-blind text fallback cannot pass.
+            const dateCell = view.container.querySelector("tr[data-record-id='choices:same'] td[data-col='value']")!;
+            const textCell = view.container.querySelector("tr[data-record-id='notes:same'] td[data-col='value']")!;
+            await waitFor(() => expect(dateCell.querySelector("input[type='date']")).toHaveValue("2026-11-21"));
+            expect(textCell.querySelector("button")).toHaveTextContent("2026-11-22T12:34:56.000Z");
+            const displayedDate = (dateCell.querySelector("input[type='date']") as HTMLInputElement).value;
+            const displayedTimestamp = textCell.querySelector("button")!.textContent!;
+            expect(displayedTimestamp).not.toBe(displayedDate);
             await waitFor(() => expect(getGridProjection(grid.gridId).status).toBe("ready"));
             const initial = getGridProjection(grid.gridId);
             expect(initial).toMatchObject({
                 status: "ready",
-                projection: { columns: [{ label: "value" }], rows: [[{ value: "true" }], [{ value: "true" }]] },
+                projection: {
+                    columns: [{ label: "value" }],
+                    rows: [[{ value: displayedDate }], [{ value: displayedTimestamp }]],
+                },
             });
 
-            // Select and text display the same semantic value; changing only
-            // renderer identity or hidden backing data remains neutral.
+            // Retain renderer inputs outside equality: an explicit text
+            // override changes only the date's displayed normalization.
             setGridComponentField(grid, "value", "type", "text");
             await waitFor(() => expect(view.container.querySelectorAll("td[data-col='value'] button")).toHaveLength(2));
-            await waitFor(() =>
-                expect(getGridProjection(grid.gridId)).toMatchObject({
-                    status: "ready",
-                    projection: { rows: [[{ value: "true" }], [{ value: "true" }]] },
-                })
-            );
-            setRecordValue(choices, "same", "hidden", "changed-secret");
             const textProjection = getGridProjection(grid.gridId);
+            if (textProjection.status !== "ready") throw new Error("Expected accepted text projection");
+            expect(textProjection).not.toEqual(initial);
+
+            // Prove the changed hidden value reached a fresh accepted result,
+            // then hide it again and compare only the displayed table content.
+            setRecordValue(choices, "same", "hidden", "changed-secret");
+            setGridComponentField(grid, "hidden", "hidden", false);
+            await waitFor(() =>
+                expect(view.container.querySelector("tr[data-record-id='choices:same'] td[data-col='hidden']"))
+                    .toHaveTextContent("changed-secret")
+            );
+            setGridComponentField(grid, "hidden", "hidden", true);
+            await waitFor(() => expect(view.container.querySelector("td[data-col='hidden']")).toBeNull());
             await waitFor(() => expect(getGridProjection(grid.gridId)).toEqual(textProjection));
 
-            setRecordValue(notes, "same", "status", "changed-visible");
+            setRecordValue(notes, "same", "observed_at", "2026-11-23 01:02:03");
             await waitFor(() => expect(getGridProjection(grid.gridId)).not.toEqual(textProjection));
-            expect([...view.container.querySelectorAll("td[data-col='value'] button")].map(cell => cell.textContent))
-                .toContain("changed-visible");
-            setRecordValue(notes, "same", "status", "true");
+            await waitFor(() =>
+                expect(
+                    view.container.querySelector("tr[data-record-id='notes:same'] td[data-col='value'] button"),
+                ).toHaveTextContent("2026-11-23T01:02:03.000Z")
+            );
+            setRecordValue(notes, "same", "observed_at", "2026-11-22 12:34:56");
             await waitFor(() => expect(getGridProjection(grid.gridId)).toEqual(textProjection));
 
             // A duplicate occurrence remains independently represented.
@@ -132,7 +148,10 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
             await waitFor(() =>
                 expect(getGridProjection(grid.gridId)).toMatchObject({
                     status: "ready",
-                    projection: { rows: [[{ value: "true" }], [{ value: "true" }], [{ value: "true" }]] },
+                    projection: {
+                        rows: [textProjection.projection.rows[0], textProjection.projection.rows[0],
+                            textProjection.projection.rows[1]],
+                    },
                 })
             );
 
@@ -140,12 +159,20 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
             setGridComponentField(grid, "value", "type", undefined);
             setGridQuery(
                 grid,
-                "SELECT status AS value FROM choices UNION ALL SELECT status AS value FROM notes ORDER BY value",
+                "SELECT observed_on AS value FROM choices UNION ALL SELECT observed_at AS value FROM notes ORDER BY value",
             );
             await waitFor(() => expect(view.container.querySelectorAll("tbody tr")).toHaveLength(2));
             await waitFor(() => expect(view.container.querySelectorAll("td[data-col='value'] button")).toHaveLength(2));
-            expect(view.container.querySelector("td[data-col='value'] select")).toBeNull();
-            await waitFor(() => expect(getGridProjection(grid.gridId)).toMatchObject({ status: "ready" }));
+            expect(view.container.querySelector("td[data-col='value'] input[type='date']")).toBeNull();
+            const ambiguousValues = [...view.container.querySelectorAll("td[data-col='value'] button")].map(cell =>
+                cell.textContent!
+            );
+            await waitFor(() =>
+                expect(getGridProjection(grid.gridId)).toMatchObject({
+                    status: "ready",
+                    projection: { rows: ambiguousValues.map(value => [{ value }]) },
+                })
+            );
 
             // The UI deliberately retains the last successful rows while a
             // replacement query is invalid, but comparable content must not
@@ -156,7 +183,7 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
             expect(view.container.querySelectorAll("tbody tr")).toHaveLength(2);
             setGridQuery(
                 grid,
-                "SELECT status AS value FROM choices UNION ALL SELECT status AS value FROM notes ORDER BY value",
+                "SELECT observed_on AS value FROM choices UNION ALL SELECT observed_at AS value FROM notes ORDER BY value",
             );
             await waitFor(() => expect(getGridProjection(grid.gridId)).toMatchObject({ status: "ready" }));
         } finally {
