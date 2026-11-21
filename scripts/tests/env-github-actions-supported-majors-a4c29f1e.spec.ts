@@ -162,7 +162,7 @@ test("the hosted delayed real build exercises the bounded Buildx entry point", (
     expect(verification.run).toContain("test ! -e job_logs/unexpected-scenario-launch");
 });
 
-test("the acquisition preparation control build consumes the remaining shared deadline", () => {
+test("the acquisition preparation control build preserves its local cap within the shared deadline", () => {
     const e2e = parseWorkflow("ci-test-e2e.yml");
     const acquisitionSource = fs.readFileSync(
         path.join(root, "scripts/tests/env-direct-runner-os-acquisition-5921b0ad.spec.ts"),
@@ -192,9 +192,11 @@ test("the acquisition preparation control build consumes the remaining shared de
     );
     expect(build.run).toContain("env-direct-runner-os-acquisition-5921b0ad.spec.ts");
     expect(build["continue-on-error"]).toBe(true);
-    expect(acquisitionSource).toContain("timeout: remainingProvisioning()");
+    expect(acquisitionSource).toContain("const failureControlTimeoutMs = 30_000");
+    expect(acquisitionSource).toContain("timeout: Math.min(failureControlTimeoutMs, remainingProvisioningMs)");
     expect(acquisitionSource).toContain("DIRECT_RUNNER_OS_FAILURE_CONTROL_CONTEXT");
     expect(acquisitionSource).toContain("Fixture provisioning deadline exceeded during the failure-control build");
+    expect(acquisitionSource).toContain("Failure-control build exceeded its 30000ms local timeout");
     expect(acquisition.if).toBe("steps.delayed-build.outcome == 'success'");
     expect(verification.run).toContain('event.event === "client-closed"');
     expect(verification.run).toContain('event.event === "natural-completion"');
