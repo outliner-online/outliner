@@ -220,56 +220,27 @@ jobs:
 
       - name: Download representative E2E evidence
         id: representative-download
-        continue-on-error: true
-        uses: actions/download-artifact@v8
+        uses: ./.github/actions/download-artifact-with-exact-id-retry
         with:
-          artifact-ids: ${{ steps.representative-upload.outputs.artifact-id }}
-          path: artifact-roundtrip/primary-download
-
-      - name: Wait for exact artifact visibility
-        if: steps.representative-download.outcome == 'failure'
-        shell: bash
-        run: sleep 10
-
-      - name: Retry representative E2E evidence by exact identity
-        if: steps.representative-download.outcome == 'failure'
-        uses: actions/download-artifact@v8
-        with:
-          artifact-ids: ${{ steps.representative-upload.outputs.artifact-id }}
-          path: artifact-roundtrip/retry-download
-
-      - name: Select successful exact-ID download
-        shell: bash
-        env:
-          PRIMARY_OUTCOME: ${{ steps.representative-download.outcome }}
-        run: |
-          set -euo pipefail
-          if [ "$PRIMARY_OUTCOME" = success ]; then
-            printf '%s\n' 'VERIFIED_ARTIFACT_DIRECTORY=artifact-roundtrip/primary-download' >> "$GITHUB_ENV"
-          else
-            printf '%s\n' 'VERIFIED_ARTIFACT_DIRECTORY=artifact-roundtrip/retry-download' >> "$GITHUB_ENV"
-          fi
+          primary-artifact-id: ${{ steps.representative-upload.outputs.artifact-id }}
+          retry-artifact-id: ${{ steps.representative-upload.outputs.artifact-id }}
+          destination-root: artifact-roundtrip/representative-download
 
       - name: Verify downloaded E2E evidence
         shell: bash
         run: |
           set -euo pipefail
-          scripts/ci/verify-artifact-roundtrip.sh artifact-roundtrip/source "$VERIFIED_ARTIFACT_DIRECTORY"
+          scripts/ci/verify-artifact-roundtrip.sh artifact-roundtrip/source \
+            "${{ steps.representative-download.outputs.downloaded-directory }}"
 
       - name: Force a first-lookup failure control
-        id: forced-first-miss
-        continue-on-error: true
-        uses: actions/download-artifact@v8
+        id: forced-recovery
+        uses: ./.github/actions/download-artifact-with-exact-id-retry
         with:
-          artifact-ids: '0'
-          path: artifact-roundtrip/forced-first-miss
-
-      - name: Recover the forced miss by exact positive identity
-        if: steps.forced-first-miss.outcome == 'failure'
-        uses: actions/download-artifact@v8
-        with:
-          artifact-ids: ${{ steps.representative-upload.outputs.artifact-id }}
-          path: artifact-roundtrip/forced-recovery
+          primary-artifact-id: '0'
+          retry-artifact-id: ${{ steps.representative-upload.outputs.artifact-id }}
+          destination-root: artifact-roundtrip/forced-recovery
+          retry-delay-seconds: '0'
 
       - name: Verify forced recovery identity and bytes
         shell: bash
@@ -278,32 +249,32 @@ jobs:
           FAILED_ARTIFACT_ID: '0'
         run: |
           set -euo pipefail
-          test "${{ steps.forced-first-miss.outcome }}" = failure
           test "$EXPECTED_ARTIFACT_ID" != "$FAILED_ARTIFACT_ID"
-          scripts/ci/verify-artifact-roundtrip.sh artifact-roundtrip/source artifact-roundtrip/forced-recovery
+          scripts/ci/verify-artifact-roundtrip.sh artifact-roundtrip/source \
+            "${{ steps.forced-recovery.outputs.downloaded-directory }}"
 
       - name: Force a repeated lookup failure control
         id: forced-repeated-miss
         continue-on-error: true
-        uses: actions/download-artifact@v8
+        uses: ./.github/actions/download-artifact-with-exact-id-retry
         with:
-          artifact-ids: '0'
-          path: artifact-roundtrip/forced-repeated-miss
+          primary-artifact-id: '0'
+          retry-artifact-id: '0'
+          destination-root: artifact-roundtrip/forced-repeated-miss
+          retry-delay-seconds: '0'
 
       - name: Confirm repeated lookup failure is non-success
         if: always()
         shell: bash
         env:
-          FIRST_OUTCOME: ${{ steps.forced-first-miss.outcome }}
           REPEATED_OUTCOME: ${{ steps.forced-repeated-miss.outcome }}
         run: |
           set -euo pipefail
-          test "$FIRST_OUTCOME" = failure
           test "$REPEATED_OUTCOME" = failure
-          test ! -e artifact-roundtrip/forced-first-miss/execution.json
-          test ! -e artifact-roundtrip/forced-first-miss/runtime.log
-          test ! -e artifact-roundtrip/forced-repeated-miss/execution.json
-          test ! -e artifact-roundtrip/forced-repeated-miss/runtime.log
+          test ! -e artifact-roundtrip/forced-repeated-miss/primary/execution.json
+          test ! -e artifact-roundtrip/forced-repeated-miss/primary/runtime.log
+          test ! -e artifact-roundtrip/forced-repeated-miss/retry/execution.json
+          test ! -e artifact-roundtrip/forced-repeated-miss/retry/runtime.log
 
       - name: Reject an unavailable artifact
         id: unavailable-download
@@ -337,14 +308,14 @@ jobs:
             exit 1
           fi
 
-          cp -R "$VERIFIED_ARTIFACT_DIRECTORY" artifact-roundtrip/missing-file
+          cp -R "${{ steps.representative-download.outputs.downloaded-directory }}" artifact-roundtrip/missing-file
           rm artifact-roundtrip/missing-file/runtime.log
           if scripts/ci/verify-artifact-roundtrip.sh artifact-roundtrip/source artifact-roundtrip/missing-file; then
             echo 'missing file unexpectedly passed verification' >&2
             exit 1
           fi
 
-          cp -R "$VERIFIED_ARTIFACT_DIRECTORY" artifact-roundtrip/corrupted-file
+          cp -R "${{ steps.representative-download.outputs.downloaded-directory }}" artifact-roundtrip/corrupted-file
           printf '%s\n' 'corrupted evidence' > artifact-roundtrip/corrupted-file/execution.json
           if scripts/ci/verify-artifact-roundtrip.sh artifact-roundtrip/source artifact-roundtrip/corrupted-file; then
             echo 'corrupted file unexpectedly passed verification' >&2

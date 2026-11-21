@@ -13,6 +13,9 @@ import YAML from "yaml";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const workflow = YAML.parse(fs.readFileSync(path.join(root, ".github/workflows/ci-test-e2e.yml"), "utf8"));
+const recoveryAction = YAML.parse(
+    fs.readFileSync(path.join(root, ".github/actions/download-artifact-with-exact-id-retry/action.yml"), "utf8"),
+);
 const job = workflow.jobs["artifact-roundtrip"];
 
 function step(name: string): Record<string, any> {
@@ -30,17 +33,27 @@ test("a transient miss retries only the finalized artifact identity", () => {
     expect(upload.with.archive).toBe(true);
     expect(upload.with["retention-days"]).toBe(1);
 
-    const firstDownload = step("Download representative E2E evidence");
-    const retryDownload = step("Retry representative E2E evidence by exact identity");
+    const download = step("Download representative E2E evidence");
     const exactId = "${{ steps.representative-upload.outputs.artifact-id }}";
-    expect(firstDownload.id).toBe("representative-download");
-    expect(firstDownload["continue-on-error"]).toBe(true);
-    expect(firstDownload.with).toEqual({ "artifact-ids": exactId, path: "artifact-roundtrip/primary-download" });
-    expect(retryDownload.if).toBe("steps.representative-download.outcome == 'failure'");
-    expect(retryDownload.with).toEqual({ "artifact-ids": exactId, path: "artifact-roundtrip/retry-download" });
-    expect(retryDownload.with.name).toBeUndefined();
-    expect(retryDownload.with["run-id"]).toBeUndefined();
-    expect(step("Wait for exact artifact visibility").if).toBe(retryDownload.if);
+    expect(download.id).toBe("representative-download");
+    expect(download.uses).toBe("./.github/actions/download-artifact-with-exact-id-retry");
+    expect(download.with["primary-artifact-id"]).toBe(exactId);
+    expect(download.with["retry-artifact-id"]).toBe(exactId);
+
+    const [primary, wait, retry, select] = recoveryAction.runs.steps;
+    expect(primary["continue-on-error"]).toBe(true);
+    expect(primary.with).toEqual({
+        "artifact-ids": "${{ inputs.primary-artifact-id }}",
+        path: "${{ inputs.destination-root }}/primary",
+    });
+    expect(wait.if).toBe("steps.primary.outcome == 'failure'");
+    expect(retry.if).toBe(wait.if);
+    expect(retry.with).toEqual({
+        "artifact-ids": "${{ inputs.retry-artifact-id }}",
+        path: "${{ inputs.destination-root }}/retry",
+    });
+    expect(select.run).toContain("downloaded-directory=%s/primary");
+    expect(select.run).toContain("downloaded-directory=%s/retry");
 });
 
 test("successful recovery still uses independent identity and byte-content oracles", () => {
@@ -48,24 +61,20 @@ test("successful recovery still uses independent identity and byte-content oracl
     expect(identity.run).toContain('test "$EXPECTED_ARTIFACT_ID" != "$WRONG_ARTIFACT_ID"');
 
     const verification = step("Verify downloaded E2E evidence");
-    expect(verification.run).toContain(
-        'scripts/ci/verify-artifact-roundtrip.sh artifact-roundtrip/source "$VERIFIED_ARTIFACT_DIRECTORY"',
-    );
+    expect(verification.run).toContain("steps.representative-download.outputs.downloaded-directory");
 
     const forcedMiss = step("Force a first-lookup failure control");
-    expect(forcedMiss.with["artifact-ids"]).toBe("0");
-    expect(forcedMiss["continue-on-error"]).toBe(true);
-    const forcedRecovery = step("Recover the forced miss by exact positive identity");
-    expect(forcedRecovery.if).toBe("steps.forced-first-miss.outcome == 'failure'");
-    expect(forcedRecovery.with["artifact-ids"]).toBe("${{ steps.representative-upload.outputs.artifact-id }}");
-    expect(forcedRecovery.with.path).not.toBe(forcedMiss.with.path);
-    expect(step("Verify forced recovery identity and bytes").run).toContain(
-        "artifact-roundtrip/source artifact-roundtrip/forced-recovery",
-    );
+    const exactId = "${{ steps.representative-upload.outputs.artifact-id }}";
+    expect(forcedMiss.uses).toBe(step("Download representative E2E evidence").uses);
+    expect(forcedMiss.with["primary-artifact-id"]).toBe("0");
+    expect(forcedMiss.with["retry-artifact-id"]).toBe(exactId);
+    expect(step("Verify forced recovery identity and bytes").run).toContain("forced-recovery.outputs");
 
     const repeatedMiss = step("Force a repeated lookup failure control");
-    expect(repeatedMiss.with["artifact-ids"]).toBe("0");
-    expect(repeatedMiss.with.path).not.toBe(forcedMiss.with.path);
+    expect(repeatedMiss.uses).toBe(forcedMiss.uses);
+    expect(repeatedMiss.with["primary-artifact-id"]).toBe("0");
+    expect(repeatedMiss.with["retry-artifact-id"]).toBe("0");
+    expect(repeatedMiss["continue-on-error"]).toBe(true);
     expect(step("Confirm repeated lookup failure is non-success").run).toContain(
         'test "$REPEATED_OUTCOME" = failure',
     );

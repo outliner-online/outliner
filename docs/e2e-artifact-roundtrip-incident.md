@@ -19,6 +19,6 @@ The logs do not expose the identities returned by the action's immediate invento
 
 ## Recovery and next evidence
 
-The ordinary job retries `actions/download-artifact` once, after ten seconds, with the unchanged upload output ID. Each attempt has an isolated destination, and only the successful attempt is compared with the source, so partial files from a failed attempt cannot combine with retry output. The retry is bounded by the existing five-minute job timeout. It does not use a name or run/attempt fallback, and a second miss still fails before byte comparison.
+The ordinary job uses the same local recovery action as the native failure controls and retries `actions/download-artifact` once, after ten seconds, with the unchanged upload output ID. Each attempt has an isolated destination, and only the successful attempt is compared with the source, so partial files from a failed attempt cannot combine with retry output. The retry is bounded by the existing five-minute job timeout. It does not use a name or run/attempt fallback, and a second miss still fails before byte comparison.
 
 If the retry also fails, preserve the complete job log and request the artifact service's server-side lookup evidence for both action invocations, including request/correlation IDs, inventory identities, repository, run, attempt, artifact ID, action revisions, and timestamps. Do not infer root cause from a later inventory entry or a passing rerun. Escalate that evidence upstream before changing the lookup mechanism or timeout.

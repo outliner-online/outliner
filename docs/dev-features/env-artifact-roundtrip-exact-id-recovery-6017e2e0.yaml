@@ -5,6 +5,7 @@ description: Preserve strict artifact round-trip validation while retrying the s
 category: environment
 status: implemented
 components:
+- .github/actions/download-artifact-with-exact-id-retry
 - .github/workflows/ci-test-e2e.yml
 - scripts/ci/verify-artifact-roundtrip.sh
 tests:

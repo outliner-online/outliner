@@ -209,14 +209,15 @@ test("artifact and Pages deployment producers retain their consumer-facing contr
             .replace("${{ matrix.project }}", "artifact-roundtrip"),
     );
     expect(roundtripUpload.id).toBe("representative-upload");
-    expect(roundtripDownload.with["artifact-ids"]).toBe(
+    expect(roundtripDownload.with["primary-artifact-id"]).toBe(
         "${{ steps.representative-upload.outputs.artifact-id }}",
     );
+    expect(roundtripDownload.with["retry-artifact-id"]).toBe(roundtripDownload.with["primary-artifact-id"]);
     expect(roundtripDownload.with.name).toBeUndefined();
     expect(wrongUpload.id).toBe("wrong-upload");
     expectMultiFileArtifactArchive(wrongUpload);
     expect(findStep(e2e, "artifact-roundtrip", "Verify downloaded E2E evidence").run).toContain(
-        'scripts/ci/verify-artifact-roundtrip.sh artifact-roundtrip/source "$VERIFIED_ARTIFACT_DIRECTORY"',
+        "steps.representative-download.outputs.downloaded-directory",
     );
     expect(findStep(e2e, "artifact-roundtrip", "Reject an unavailable artifact")["continue-on-error"]).toBe(true);
     expect(findStep(e2e, "artifact-roundtrip", "Confirm unavailable artifact is non-success").run).toContain(
