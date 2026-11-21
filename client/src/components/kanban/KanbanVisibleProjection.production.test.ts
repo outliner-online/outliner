@@ -76,6 +76,20 @@ describe("production Kanban visible projection", { timeout: 30000 }, () => {
         expect(latest?.visible).toEqual(firstContent);
         expect(latest?.lanes.flatMap(lane => lane.cards.map(card => card.occurrenceKey))).not.toEqual(firstOccurrences);
         expect(latest?.visible?.status === "ready" && latest.visible.content.lanes).toEqual(readBoard(view.container));
+
+        const repeatedQueryId = latest!.provenance!.evidence!.queryId;
+        updateKanban(projectDoc, kanbanId, { query: `${query.replace("ORDER BY", "WHERE false ORDER BY")}` });
+        await waitFor(() => expect(latest?.provenance?.evidence?.queryId).not.toBe(repeatedQueryId), {
+            timeout: 15000,
+        });
+        expect(view.getByTestId("kanban-empty")).toHaveTextContent("The query returned no cards.");
+        expect(latest?.lanes.every(lane => lane.cards.length === 0)).toBe(true);
+        expect(readBoard(view.container).map(lane => lane.label)).toEqual([
+            "done",
+            "todo",
+            "Empty string",
+            "Whitespace (1)",
+        ]);
         view.unmount();
     });
 });
