@@ -159,7 +159,7 @@ const ganttScale = $derived(
 const range = $derived(
     isGantt ? computeGanttRange(anchorUtcMs, ganttScale, timeZone) : computeViewRange(anchorUtcMs, viewType, weekStart, timeZone),
 );
-const ganttTicks = $derived(isGantt ? computeGanttTicks(range.start, range.end, ganttScale, timeZone) : []);
+const ganttTicks = $derived(isGantt ? computeGanttTicks(range.start, range.end, ganttScale, timeZone, locale) : []);
 // The same visible window, in the `{ start: Date, end: Date }` shape the
 // query runner injects as `view.range_start`/`view.range_end` (§6.4). The
 // grid keeps working in UTC millis; only the SQL boundary needs Dates.

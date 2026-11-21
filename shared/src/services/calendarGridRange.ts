@@ -239,7 +239,14 @@ export function computeGanttTicks(
     rangeEnd: number,
     scale: GanttScale,
     timeZone: string,
+    locale?: string,
 ): GanttTick[] {
+    const dayFormatter = locale
+        ? new Intl.DateTimeFormat(locale, { timeZone, month: "short", day: "numeric" })
+        : undefined;
+    const monthFormatter = locale
+        ? new Intl.DateTimeFormat(locale, { timeZone, month: "long", year: "numeric" })
+        : undefined;
     const ticks: GanttTick[] = [];
     let cursor = rangeStart;
     let guard = 0;
@@ -247,13 +254,16 @@ export function computeGanttTicks(
         guard++;
         const w = utcMsToWallTime(cursor, timeZone);
         if (scale === "day") {
-            ticks.push({ startUtcMs: cursor, label: `${w.month}/${w.day}` });
+            ticks.push({ startUtcMs: cursor, label: dayFormatter?.format(new Date(cursor)) ?? `${w.month}/${w.day}` });
             cursor = addWallDays(cursor, 1, timeZone);
         } else if (scale === "week") {
-            ticks.push({ startUtcMs: cursor, label: `${w.month}/${w.day}` });
+            ticks.push({ startUtcMs: cursor, label: dayFormatter?.format(new Date(cursor)) ?? `${w.month}/${w.day}` });
             cursor = addWallDays(cursor, 7, timeZone);
         } else if (scale === "month") {
-            ticks.push({ startUtcMs: cursor, label: `${w.year}-${String(w.month).padStart(2, "0")}` });
+            ticks.push({
+                startUtcMs: cursor,
+                label: monthFormatter?.format(new Date(cursor)) ?? `${w.year}-${String(w.month).padStart(2, "0")}`,
+            });
             cursor = wallTimeToUtcMs({ ...w, month: w.month + 1, day: 1, hour: 0, minute: 0, second: 0 }, timeZone);
         } else {
             const quarter = Math.floor((w.month - 1) / 3) + 1;
