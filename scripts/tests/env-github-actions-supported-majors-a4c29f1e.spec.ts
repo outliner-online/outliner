@@ -96,6 +96,9 @@ test("representative PR CI retains its trigger, permissions, guards, and failure
 
 test("direct-runner fixture uses the authenticated action cache and passes its loaded image to the regression", () => {
     const e2e = parseWorkflow("ci-test-e2e.yml");
+    const job = e2e.jobs["direct-runner-os-regression"];
+    const mirror = findStep(e2e, "direct-runner-os-regression", "Verify mirror-only control and owned-child cleanup");
+    const deadline = findStep(e2e, "direct-runner-os-regression", "Start shared fixture provisioning deadline");
     const build = findStep(e2e, "direct-runner-os-regression", "Build cached direct-runner fixture");
     const regression = findStep(e2e, "direct-runner-os-regression", "Exercise real isolated package acquisition");
 
@@ -108,8 +111,45 @@ test("direct-runner fixture uses the authenticated action cache and passes its l
         "cache-from": "type=gha,scope=direct-runner-os-fixture-v1",
         "cache-to": "type=gha,mode=max,scope=direct-runner-os-fixture-v1",
     });
+    expect(job.steps.indexOf(mirror)).toBeLessThan(job.steps.indexOf(deadline));
+    expect(job.steps.indexOf(deadline)).toBeLessThan(job.steps.indexOf(build));
+    expect(deadline.run).toContain("time.monotonic_ns() + 900_000_000_000");
+    expect(deadline.run).toContain("DIRECT_RUNNER_OS_PROVISIONING_DEADLINE_NS");
     expect(regression.env.DIRECT_RUNNER_OS_PREBUILT_IMAGE).toBe(build.with.tags);
     expect(regression["continue-on-error"]).toBeUndefined();
+});
+
+test("a delayed hosted build consumes the same monotonic deadline as container provisioning", () => {
+    const e2e = parseWorkflow("ci-test-e2e.yml");
+    const job = e2e.jobs["direct-runner-os-provisioning-deadline"];
+    const deadline = findStep(
+        e2e,
+        "direct-runner-os-provisioning-deadline",
+        "Start controlled shared provisioning deadline",
+    );
+    const build = findStep(e2e, "direct-runner-os-provisioning-deadline", "Build deliberately delayed fixture");
+    const acquisition = findStep(
+        e2e,
+        "direct-runner-os-provisioning-deadline",
+        "Reject acquisition after the shared deadline",
+    );
+    const verification = findStep(
+        e2e,
+        "direct-runner-os-provisioning-deadline",
+        "Verify deadline failure blocked every scenario",
+    );
+
+    expect(job.steps.indexOf(deadline)).toBeLessThan(job.steps.indexOf(build));
+    expect(job.steps.indexOf(build)).toBeLessThan(job.steps.indexOf(acquisition));
+    expect(deadline.run).toContain("time.monotonic_ns() + 1_000_000_000");
+    expect(build.uses).toBe("docker/build-push-action@v7");
+    expect(build.with.context).toBe("scripts/tests/fixtures/direct-runner-os/deadline-control");
+    expect(acquisition["continue-on-error"]).toBe(true);
+    expect(acquisition.env.DIRECT_RUNNER_OS_PREBUILT_IMAGE).toBe(build.with.tags);
+    expect(verification.env.ACQUISITION_OUTCOME).toBe("${{ steps.acquisition.outcome }}");
+    expect(verification.run).toContain('test "$ACQUISITION_OUTCOME" = failure');
+    expect(verification.run).toContain("Fixture provisioning deadline exceeded");
+    expect(verification.run).toContain(": elapsed=");
 });
 
 test("a hosted fixture failure cannot enter the scenario acquisition caller", () => {

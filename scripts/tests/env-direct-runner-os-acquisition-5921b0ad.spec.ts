@@ -19,6 +19,16 @@ const containerName = (scenario: string) => `outliner-direct-os-${process.pid}-$
 let buildContext: string | undefined;
 const output = (result: ReturnType<typeof spawnSync>) => `${result.stdout ?? ""}${result.stderr ?? ""}`;
 const builder = join(root, "scripts/tests/fixtures/direct-runner-os/build-fixture.sh");
+const suppliedProvisioningDeadline = process.env.DIRECT_RUNNER_OS_PROVISIONING_DEADLINE_NS;
+const provisioningDeadline = suppliedProvisioningDeadline
+    ? BigInt(suppliedProvisioningDeadline)
+    : process.hrtime.bigint() + 900_000_000_000n;
+
+function remainingProvisioning(): number {
+    const remaining = Number((provisioningDeadline - process.hrtime.bigint()) / 1_000_000n);
+    if (remaining <= 0) throw new Error("Fixture provisioning deadline exceeded");
+    return remaining;
+}
 
 function expectNoScenarioContainers(): void {
     const listed = spawnSync("docker", [
@@ -35,6 +45,7 @@ function expectNoScenarioContainers(): void {
 }
 
 beforeAll(() => {
+    remainingProvisioning();
     const docker = spawnSync("docker", ["info"], { encoding: "utf8", timeout: 10000 });
     expect(docker.error, "Docker control is required; this suite must never silently skip").toBeUndefined();
     expect(docker.status, output(docker)).toBe(0);
@@ -56,15 +67,6 @@ beforeAll(() => {
     } finally {
         rmSync(failingContext, { recursive: true, force: true });
     }
-
-    // Image construction and fresh, unstarted containers share the original
-    // provisioning budget. No acquisition runs before the per-case clock.
-    const provisioningDeadline = performance.now() + 900000;
-    const remainingProvisioning = () => {
-        const remaining = Math.floor(provisioningDeadline - performance.now());
-        if (remaining <= 0) throw new Error("Fixture provisioning deadline exceeded");
-        return remaining;
-    };
 
     if (process.env.DIRECT_RUNNER_OS_PREBUILT_IMAGE) {
         const inspect = spawnSync("docker", ["image", "inspect", image], { encoding: "utf8", timeout: 10000 });
