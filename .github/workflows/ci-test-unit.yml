@@ -68,7 +68,7 @@ jobs:
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
-    timeout-minutes: 10
+    timeout-minutes: 20
     permissions:
       packages: read
       contents: read
@@ -77,10 +77,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
-      - name: Reject failed or cancelled shards
-        env:
-          SHARD_RESULT: ${{ needs.unit-shard.result }}
-        run: test "$SHARD_RESULT" = success
       - name: Setup Test Environment
         uses: ./.github/actions/setup-test-env
       - name: Download current-attempt shard evidence
@@ -88,10 +84,14 @@ jobs:
         with:
           pattern: unit-shard-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: unit-artifacts
+      - name: Reject failed or cancelled shards
+        env:
+          SHARD_RESULT: ${{ needs.unit-shard.result }}
+        run: test "$SHARD_RESULT" = success
       - name: Verify complete selection, merge coverage, and run base tests
         run: scripts/ci/finalize-unit-tests.sh
       - name: Summarise failures
         if: failure()
         run: |
           echo "## ❌ Unit Test Failed" >> "$GITHUB_STEP_SUMMARY"
-          find unit-artifacts -name '*.log' -type f -exec grep -E -A1 -B0 'FAIL|FAILED' {} \; >> "$GITHUB_STEP_SUMMARY" || true
+          find unit-artifacts job_logs -name '*.log' -type f -exec grep -E -A1 -B0 'FAIL|FAILED' {} \; >> "$GITHUB_STEP_SUMMARY" || true

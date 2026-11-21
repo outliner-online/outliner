@@ -140,7 +140,7 @@ describe("unit CI native shard orchestration", () => {
         const vitest = fakeVitest(directory);
         const marker = path.join(directory, "base-ran");
         const base = path.join(directory, "base");
-        executable(base, `#!/bin/sh\nprintf ran >> '${marker}'\n`);
+        executable(base, `#!/bin/sh\nprintf ran >> '${marker}'\nprintf 'BASE OK\\n'\n`);
         execFileSync(path.join(root, "scripts/ci/finalize-unit-tests.sh"), [], {
             cwd: root,
             env: env({
@@ -151,6 +151,7 @@ describe("unit CI native shard orchestration", () => {
             }),
         });
         expect(fs.readFileSync(marker, "utf8")).toBe("ran");
+        expect(fs.readFileSync(path.join(root, "job_logs/base-test.log"), "utf8")).toContain("BASE OK");
         expect(
             JSON.parse(
                 fs.readFileSync(path.join(root, "coverage/unit_and_integration/coverage-final.json"), "utf8"),
@@ -183,6 +184,9 @@ exec ${JSON.stringify(realBaseFailure.vitest)} run --config=${JSON.stringify(rea
                 },
             );
         expect(run(directory).status).toBe(1);
+        expect(fs.readFileSync(path.join(root, "job_logs/base-test.log"), "utf8")).toContain(
+            "deliberate native failure",
+        );
         fs.rmSync(path.join(directory, "unit-shard-2-100-2/unit-evidence/shard-2.json"));
         expect(run(directory).stderr.toString()).toContain("missing current-attempt execution report");
         artifactFixture(directory);
@@ -204,6 +208,12 @@ exec ${JSON.stringify(realBaseFailure.vitest)} run --config=${JSON.stringify(rea
         const first = path.join(directory, "unit-shard-1-100-2/unit-evidence/shard-1.json");
         fs.copyFileSync(first, path.join(directory, "unit-shard-2-100-2/unit-evidence/shard-2.json"));
         expect(run(directory).stderr.toString()).toContain("executed test identities differ");
+        artifactFixture(directory);
+        const skipped = path.join(directory, "unit-shard-2-100-2/unit-evidence/shard-2.json");
+        const skippedReport = JSON.parse(fs.readFileSync(skipped, "utf8"));
+        skippedReport.testResults[0].assertionResults[0].status = "skipped";
+        fs.writeFileSync(skipped, JSON.stringify(skippedReport));
+        expect(run(directory).stderr.toString()).toContain("empty execution report for shard 2");
     });
 
     test("workflow retains the stable aggregate and runs base only after both shards", () => {
@@ -213,10 +223,16 @@ exec ${JSON.stringify(realBaseFailure.vitest)} run --config=${JSON.stringify(rea
         );
         expect(workflow.jobs["unit-test"].needs).toBe("unit-shard");
         expect(workflow.jobs["unit-test"].if).toBe("always()");
+        expect(workflow.jobs["unit-test"]["timeout-minutes"]).toBe(20);
         expect(workflow.jobs["unit-test"].steps.some((step: any) => step.uses === "./.github/actions/setup-test-env"))
             .toBe(true);
         expect(workflow.jobs["unit-test"].steps.find((step: any) => step.name.includes("Verify")).run)
             .toBe("scripts/ci/finalize-unit-tests.sh");
+        const downloadIndex = workflow.jobs["unit-test"].steps.findIndex((step: any) => step.name.includes("Download"));
+        const rejectIndex = workflow.jobs["unit-test"].steps.findIndex((step: any) => step.name.includes("Reject"));
+        expect(downloadIndex).toBeLessThan(rejectIndex);
+        expect(workflow.jobs["unit-test"].steps.find((step: any) => step.name.includes("Summarise")).run)
+            .toContain("job_logs");
         expect(JSON.parse(fs.readFileSync(path.join(root, "client/package.json"), "utf8")).scripts["github:test:unit"])
             .toBe("bash ../scripts/ci/run-unit-tests.sh");
     });

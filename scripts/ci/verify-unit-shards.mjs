@@ -28,6 +28,7 @@ function executedIdentities(report) {
     const identities = [];
     for (const file of report.testResults ?? []) {
         for (const assertion of file.assertionResults ?? []) {
+            if (["pending", "skipped", "todo", "disabled"].includes(assertion.status)) continue;
             const names = assertion.ancestorTitles?.length
                 ? [...assertion.ancestorTitles, assertion.title]
                 : [assertion.fullName ?? assertion.title];
