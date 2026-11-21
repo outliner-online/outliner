@@ -49,6 +49,9 @@ import {
 import TableChartPanel from "./TableChartPanel.svelte";
 import TableGrid from "./TableGrid.svelte";
 import TableUiDefEditor from "./TableUiDefEditor.svelte";
+import {
+    type GridObservationContextV1,
+} from "../../../../shared/src/notifications/gridProjection";
 
 interface Props {
     grid: GridHandles;
@@ -60,9 +63,20 @@ interface Props {
     pageTitle?: string;
     isReadOnly?: boolean;
     canWrite?: () => boolean;
+    observationContext?: GridObservationContextV1;
 }
-let { grid, projectDoc, projectId, projectName, placementId, pageId, pageTitle, isReadOnly = false, canWrite }: Props =
-    $props();
+let {
+    grid,
+    projectDoc,
+    projectId,
+    projectName,
+    placementId,
+    pageId,
+    pageTitle,
+    isReadOnly = false,
+    canWrite,
+    observationContext,
+}: Props = $props();
 // The parent keys by Grid/Project identity; suppliers do not remount this view.
 // svelte-ignore state_referenced_locally
 const mountedGrid = grid;
@@ -516,6 +530,14 @@ onDestroy(() => {
                     onColumnWidthPreview={(preview) => {
                         widthPreview = preview;
                     }}
+                    projectionTitle={gridName}
+                    observationContext={observationContext ?? {
+                        version: 1,
+                        surface: "table",
+                        locale: globalThis.navigator?.language ?? "en-US",
+                        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+                    }}
+                    projectionMetadataStatus={displayMetadata?.status}
                 />
                 {#if insertOutcome}
                     <p

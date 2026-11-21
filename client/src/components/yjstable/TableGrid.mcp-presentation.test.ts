@@ -1,13 +1,23 @@
 // Saved presentation stays separate from SELECT eligibility and physical write authorization.
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/svelte";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as Y from "yjs";
 import {
+    createGrid,
     getGridHandles,
     readGridComponents,
     setGridComponentField,
     setGridQuery,
 } from "../../services/yjstable/gridDocs";
+import { getGridProjection } from "../../services/yjstable/gridProjectionRegistry";
 import { resetPgliteForTests } from "../../services/yjstable/pgliteService";
+import {
+    addRecord,
+    createTable,
+    getTableHandles,
+    setRecordValue,
+    setSchemaText,
+} from "../../services/yjstable/tableDocs";
 import { resetTableEngineForTests } from "../../services/yjstable/tableEngine";
 import { fakeMonacoRegistry } from "../../tests/mocks/fakeMonaco";
 import { QUERY, setupSavedPresentation } from "./__fixtures__/mcpPresentation";
@@ -50,6 +60,98 @@ function cell(container: HTMLElement, id: string, column: string) {
 }
 
 describe("MCP-saved Grid presentation in the production runtime (#5436)", () => {
+    it("matches the live projection to occurrence-specific automatic UNION renderers", { timeout: 60000 }, async () => {
+        fixture.projectDoc.destroy();
+        const projectDoc = new Y.Doc({ guid: "grid-projection-union" });
+        const choices = getTableHandles(projectDoc, createTable(projectDoc, "Choices", "choices"))!;
+        const notes = getTableHandles(projectDoc, createTable(projectDoc, "Notes", "notes"))!;
+        setSchemaText(
+            choices,
+            "CREATE TABLE choices (id TEXT PRIMARY KEY, status TEXT NOT NULL CHECK (status IN ('true', 'false')), hidden TEXT)",
+        );
+        setSchemaText(notes, "CREATE TABLE notes (id TEXT PRIMARY KEY, status TEXT NOT NULL, hidden TEXT)");
+        addRecord(choices, { status: "true", hidden: "choice-secret" }, "same");
+        addRecord(notes, { status: "true", hidden: "note-secret" }, "same");
+        const branchA =
+            "SELECT 'choices' AS source_kind, id AS source_id, status AS value, hidden AS hidden FROM choices";
+        const branchB = "SELECT 'notes' AS source_kind, id AS source_id, status AS value, hidden AS hidden FROM notes";
+        const grid = getGridHandles(
+            projectDoc,
+            createGrid(projectDoc, {
+                name: "Heterogeneous",
+                query: `${branchA} UNION ALL ${branchB} ORDER BY source_kind`,
+            }),
+        )!;
+        setGridComponentField(grid, "source_kind", "hidden", true);
+        setGridComponentField(grid, "source_id", "hidden", true);
+        setGridComponentField(grid, "hidden", "hidden", true);
+        const view = render(ProjectGridView, { props: { grid, projectDoc } });
+        try {
+            await waitFor(() => expect(view.container.querySelectorAll("tbody tr")).toHaveLength(2), {
+                timeout: 30000,
+            });
+            // Both UNION branches expose the same alias and PostgreSQL text
+            // OID, but accepted source schemas select a constrained option
+            // versus free text. Assert the rendered controls, not only helper
+            // metadata, before comparing their displayed semantic values.
+            await waitFor(() => expect(view.container.querySelectorAll("td[data-col='value'] select")).toHaveLength(1));
+            expect(view.container.querySelectorAll("td[data-col='value'] button")).toHaveLength(1);
+            expect(view.container.querySelector<HTMLSelectElement>("td[data-col='value'] select")).toHaveValue("true");
+            expect(view.container.querySelector("td[data-col='value'] button")).toHaveTextContent("true");
+            await waitFor(() => expect(getGridProjection(grid.gridId).status).toBe("ready"));
+            const initial = getGridProjection(grid.gridId);
+            expect(initial).toMatchObject({
+                status: "ready",
+                projection: { columns: [{ label: "value" }], rows: [[{ value: "true" }], [{ value: "true" }]] },
+            });
+
+            // Select and text display the same semantic value; changing only
+            // renderer identity or hidden backing data remains neutral.
+            setGridComponentField(grid, "value", "type", "text");
+            await waitFor(() => expect(view.container.querySelectorAll("td[data-col='value'] button")).toHaveLength(2));
+            await waitFor(() =>
+                expect(getGridProjection(grid.gridId)).toMatchObject({
+                    status: "ready",
+                    projection: { rows: [[{ value: "true" }], [{ value: "true" }]] },
+                })
+            );
+            setRecordValue(choices, "same", "hidden", "changed-secret");
+            const textProjection = getGridProjection(grid.gridId);
+            await waitFor(() => expect(getGridProjection(grid.gridId)).toEqual(textProjection));
+
+            setRecordValue(notes, "same", "status", "changed-visible");
+            await waitFor(() => expect(getGridProjection(grid.gridId)).not.toEqual(textProjection));
+            expect([...view.container.querySelectorAll("td[data-col='value'] button")].map(cell => cell.textContent))
+                .toContain("changed-visible");
+            setRecordValue(notes, "same", "status", "true");
+            await waitFor(() => expect(getGridProjection(grid.gridId)).toEqual(textProjection));
+
+            // A duplicate occurrence remains independently represented.
+            setGridQuery(grid, `${branchA} UNION ALL ${branchA} UNION ALL ${branchB} ORDER BY source_kind`);
+            await waitFor(() => expect(view.container.querySelectorAll("tbody tr")).toHaveLength(3));
+            await waitFor(() =>
+                expect(getGridProjection(grid.gridId)).toMatchObject({
+                    status: "ready",
+                    projection: { rows: [[{ value: "true" }], [{ value: "true" }], [{ value: "true" }]] },
+                })
+            );
+
+            // With complete metadata but no row source discriminator, the native OID fallback is authoritative.
+            setGridComponentField(grid, "value", "type", undefined);
+            setGridQuery(
+                grid,
+                "SELECT status AS value FROM choices UNION ALL SELECT status AS value FROM notes ORDER BY value",
+            );
+            await waitFor(() => expect(view.container.querySelectorAll("tbody tr")).toHaveLength(2));
+            await waitFor(() => expect(view.container.querySelectorAll("td[data-col='value'] button")).toHaveLength(2));
+            expect(view.container.querySelector("td[data-col='value'] select")).toBeNull();
+            await waitFor(() => expect(getGridProjection(grid.gridId)).toMatchObject({ status: "ready" }));
+        } finally {
+            view.unmount();
+            projectDoc.destroy();
+        }
+        expect(getGridProjection(grid.gridId)).toMatchObject({ status: "unavailable" });
+    });
     it("round-trips Japanese labels, visibility, exact column identities and SQL row order in two placements", async () => {
         const first = await mount();
         const second = await mount();

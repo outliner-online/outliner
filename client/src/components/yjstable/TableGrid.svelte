@@ -53,6 +53,16 @@ import {
 } from "../../services/yjstable/gridCommandExecution";
 import { buildGridCopyPayload, commitGridPaste, planGridPaste, type GridPastePlan } from "../../services/yjstable/gridClipboard";
 import { cellComponentFor, cellComponentTypeFor } from "./cellComponents";
+import {
+    gridColumnLabel,
+    gridFieldFor,
+    gridVisibleColumns,
+    projectGridTable,
+    type GridObservationContextV1,
+    type GridProjectionResult,
+    type GridProjectionRowTarget,
+} from "../../../../shared/src/notifications/gridProjection";
+import { registerGridProjectionSource } from "../../services/yjstable/gridProjectionRegistry";
 import { draftHasLineBreak, textLineBreakPolicy, type TextLineBreakPolicy } from "./textCellLineBreakPolicy";
 import { unambiguousPhysicalColumn, unambiguousRowSource, type ProjectQueryProvenance } from "../../../../shared/src/services/projectQueryProvenance";
 import ConfirmDialog from "../ConfirmDialog.svelte";
@@ -142,6 +152,10 @@ interface Props {
      * shown. The preview is never saved state (issue #5459).
      */
     onColumnWidthPreview?: (preview: { column: string; width: number; } | undefined) => void;
+    /** Committed Grid identity/context used by the live notification projection source. */
+    projectionTitle?: string;
+    observationContext?: GridObservationContextV1;
+    projectionMetadataStatus?: "resolved" | "relation-free" | "partial" | "unsupported" | "unavailable";
 }
 
 let gridContainer: HTMLElement | undefined = $state();
@@ -178,6 +192,9 @@ let {
     confirmRowDelete = false,
     isReadOnly = false,
     onColumnWidthPreview,
+    projectionTitle,
+    observationContext,
+    projectionMetadataStatus = "unavailable",
 }: Props = $props();
 
 interface PendingRowDeletion {
@@ -484,23 +501,14 @@ const columnByName = $derived(new Map((schema?.columns ?? []).map((c) => [c.name
 /** Metadata is selected per result occurrence, including heterogeneous UNION branches. */
 function fieldFor(columnId: string, rowTarget?: GridCommandRowTarget): TableColumnSchema | undefined {
     if (!grid) return columnByName.get(columnId);
-    const candidates = mutationPhysicalColumns.filter(column => column.outputColumn === columnId
-        && (!rowTarget?.source || column.source.sqlName === rowTarget.source.sourceKind));
-    const first = candidates[0];
-    // Repeated result branches may describe the same one physical field.
-    // Distinct source/field identities remain ambiguous presentation metadata.
-    if (first?.field && candidates.every(candidate => candidate.field
-        && candidate.source.kind === first.source.kind && candidate.source.id === first.source.id
-        && candidate.source.sqlName === first.source.sqlName
-        && candidate.source.schemaRevision === first.source.schemaRevision
-        && candidate.physicalColumn === first.physicalColumn)) return first.field;
-    const typeId = resultColumnMetadata.find(column => column.name === columnId)?.typeId;
-    const kind = typeId === 16 ? "boolean" : [20, 21, 23].includes(typeId ?? 0) ? "integer"
-        : [700, 701, 1700].includes(typeId ?? 0) ? "number" : typeId === 1082 ? "date" : "text";
-    return { name: columnId, dataType: kind, kind, isNullable: true, isPrimaryKey: false } as const;
+    const projectionTarget: GridProjectionRowTarget = {
+        logicalRowId: rowTarget ? selectionRowId(rowTarget.row, rowTarget.rowIndex) : "column",
+        source: rowTarget?.source,
+    };
+    return gridFieldFor(columnId, projectionTarget, mutationPhysicalColumns, resultColumnMetadata) as TableColumnSchema;
 }
 const effectiveColumns = $derived(orderColumns(result.columns, columnOrder));
-const displayColumns = $derived(effectiveColumns.filter(column => hiddenColumns[column] !== true));
+const displayColumns = $derived(gridVisibleColumns(result.columns, columnOrder, hiddenColumns));
 
 function commitBareRecordValue(
     recordId: string,
@@ -670,6 +678,20 @@ const rowTargetEntries = $derived(
     }),
 );
 
+/**
+ * The occurrence-aligned projection targets are adapted from the exact map
+ * consumed by cell rendering and commands.  Keeping this adapter beside the
+ * map producer prevents a second reconstruction from result identity columns
+ * from silently losing an authoritative source (while an entry with no
+ * `source` remains an authoritative relation-free occurrence).
+ */
+const projectionRowTargets = $derived(
+    rowTargetEntries.map(([logicalRowId, target]): GridProjectionRowTarget => ({
+        logicalRowId,
+        source: target.source,
+    })),
+);
+
 const commandContext = $derived<GridCommandContext>({
     handles,
     session,
@@ -685,6 +707,31 @@ const commandContext = $derived<GridCommandContext>({
     canMutateBareId: () => !grid || (editability.editable && editability.rowIdentity === "id"),
     writeBareCell: (recordId, columnId, value) => commitBareRecordValue(recordId, columnId, value),
     guardedSourceWrites: mutationBoundary !== undefined,
+});
+
+function currentGridProjection(): GridProjectionResult {
+    if (!grid || !projectionTitle || !observationContext) {
+        return { status: "unavailable", reason: "Grid observation context is unavailable" };
+    }
+    return projectGridTable({
+        title: projectionTitle,
+        context: observationContext,
+        columns: result.columns,
+        rows: result.rows,
+        rowTargets: projectionRowTargets,
+        columnOrder,
+        hiddenColumns,
+        columnLabels,
+        componentTypes,
+        resultColumns: resultColumnMetadata,
+        physicalColumns: mutationPhysicalColumns,
+        metadataStatus: projectionMetadataStatus,
+    });
+}
+
+let unregisterProjection: (() => void) | undefined;
+onMount(() => {
+    if (grid) unregisterProjection = registerGridProjectionSource(grid.gridId, currentGridProjection);
 });
 
 const selectionSummary = $derived.by(() => {
@@ -707,8 +754,7 @@ function writeVisibleColumnOrder(visibleOrder: string[]) {
 
 /** Presentation label for a column; falls back to the SQL name. */
 function headerLabel(column: string): string {
-    const label = columnLabels[column];
-    return label !== undefined && label !== "" ? label : column;
+    return gridColumnLabel(column, columnLabels);
 }
 
 let dropTargetColumn = $state<{ column: string; position: "left" | "right" } | undefined>(undefined);
@@ -958,6 +1004,7 @@ onMount(() => {
 onDestroy(() => {
     stopHandleDrag();
     unregisterSearch?.();
+    unregisterProjection?.();
 });
 
 function rowIdsOf(rows: TableQueryResult["rows"]): string[] {

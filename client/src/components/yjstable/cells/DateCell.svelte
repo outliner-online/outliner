@@ -1,4 +1,5 @@
 <script lang="ts">
+import { gridDisplayedCell } from "../../../../../shared/src/notifications/gridProjection";
 interface Props {
     value: unknown;
     editable: boolean;
@@ -23,7 +24,7 @@ function endEdit(): void {
     onEditEnd?.();
 }
 
-const current = $derived(value === null || value === undefined ? "" : String(value).slice(0, 10));
+const current = $derived((gridDisplayedCell("date", value) as { value: string }).value);
 </script>
 
 <input

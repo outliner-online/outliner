@@ -1,4 +1,5 @@
 <script lang="ts">
+import { gridDisplayedCell } from "../../../../../shared/src/notifications/gridProjection";
 interface Props {
     value: unknown;
     editable: boolean;
@@ -10,6 +11,7 @@ interface Props {
 }
 
 let { value, editable, ariaLabel, onCommit, onEditStart, onEditEnd, onRequestFocus: _ }: Props = $props();
+const displayed = $derived(gridDisplayedCell("checkbox", value) as { checked: boolean });
 let interactionActive = false;
 function beginEdit(): void {
     if (!editable || interactionActive) return;
@@ -25,7 +27,7 @@ function endEdit(): void {
 <input
     type="checkbox" aria-label={ariaLabel || "Toggle cell value"}
     class="cell-checkbox"
-    checked={value === true || value === "true"}
+    checked={displayed.checked}
     disabled={!editable}
     onfocus={beginEdit}
     onpointerdown={beginEdit}
