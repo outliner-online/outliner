@@ -107,6 +107,7 @@ describe("SvelteKit 3 production build", () => {
         expect(html).toContain("fallback");
         expect(fs.existsSync(path.join(buildDir, "_app/immutable"))).toBe(true);
         expect(fs.existsSync(path.join(buildDir, "favicon.png"))).toBe(true);
+        expect(fs.existsSync(path.join(buildDir, "manifest.webmanifest"))).toBe(true);
     });
 
     test("builds the service worker from $app/manifest without auto-registration", () => {
@@ -122,6 +123,7 @@ describe("SvelteKit 3 production build", () => {
         }
         // Static assets come along too.
         expect(worker).toContain("favicon.png");
+        expect(worker).toContain("manifest.webmanifest");
 
         // Registration stays manual (src/routes/+layout.svelte), so SvelteKit
         // must not inject its own.
@@ -180,6 +182,21 @@ describe("SvelteKit 3 production service worker in a browser", () => {
             const page = await context.newPage();
             const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
             await page.goto(`${base}/`);
+
+            const manifest = await page.evaluate(async () => {
+                const link = document.querySelector<HTMLLinkElement>('link[rel="manifest"]');
+                if (!link) throw new Error("application did not publish a manifest link");
+                const response = await fetch(link.href);
+                return { url: response.url, status: response.status, body: await response.json() };
+            });
+            expect(manifest.url).toBe(`${base}/manifest.webmanifest`);
+            expect(manifest.status).toBe(200);
+            expect(manifest.body).to.include({ name: "Outliner", display: "standalone", start_url: "/" });
+            expect(manifest.body.icons).to.deep.include({
+                src: "/favicon.png",
+                sizes: "512x512",
+                type: "image/png",
+            });
 
             // No test code registers anything: this is the app's own manual
             // registration (src/routes/+layout.svelte) of the built worker.
