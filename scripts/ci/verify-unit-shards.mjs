@@ -56,9 +56,9 @@ function compareIdentities(actual, expected) {
 function mapDefinitions(data) {
     return JSON.stringify({
         path: data.path,
-        statementMap: data.statementMap,
-        fnMap: data.fnMap,
-        branchMap: data.branchMap,
+        statementMap: Object.values(data.statementMap).map(JSON.stringify).sort(),
+        fnMap: Object.values(data.fnMap).map(JSON.stringify).sort(),
+        branchMap: Object.values(data.branchMap).map(JSON.stringify).sort(),
     });
 }
 function repositoryCoverageInventory() {
@@ -92,11 +92,20 @@ function mergeCoverage(target, coverage) {
             target[file] = structuredClone(data);
             continue;
         }
-        for (const key of Object.keys(data.s)) target[file].s[key] = (target[file].s[key] ?? 0) + data.s[key];
-        for (const key of Object.keys(data.f)) target[file].f[key] = (target[file].f[key] ?? 0) + data.f[key];
-        for (const [key, counts] of Object.entries(data.b)) {
-            const previous = target[file].b[key] ?? counts.map(() => 0);
-            target[file].b[key] = counts.map((count, index) => (previous[index] ?? 0) + count);
+        for (const [mapName, counterName] of [["statementMap", "s"], ["fnMap", "f"], ["branchMap", "b"]]) {
+            const targetIds = new Map(
+                Object.entries(target[file][mapName]).map(([id, definition]) => [JSON.stringify(definition), id]),
+            );
+            for (const [id, count] of Object.entries(data[counterName])) {
+                const targetId = targetIds.get(JSON.stringify(data[mapName][id]));
+                if (targetId === undefined) throw new Error(`coverage definition missing while merging ${file}`);
+                if (Array.isArray(count)) {
+                    const previous = target[file][counterName][targetId];
+                    target[file][counterName][targetId] = count.map((value, index) => previous[index] + value);
+                } else {
+                    target[file][counterName][targetId] += count;
+                }
+            }
         }
     }
 }

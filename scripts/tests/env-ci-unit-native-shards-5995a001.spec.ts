@@ -84,10 +84,10 @@ function artifactFixture(directory: string, run = "100", attempt = "2") {
         fs.writeFileSync(path.join(base, "coverage", `unit-shard-${shard}`, "coverage-final.json"), JSON.stringify({
             "/source.ts": {
                 path: "/source.ts",
-                statementMap: { 0: {} },
+                statementMap: { [shard === 1 ? 0 : 5]: {} },
                 fnMap: {},
                 branchMap: {},
-                s: { 0: 1 },
+                s: { [shard === 1 ? 0 : 5]: 1 },
                 f: {},
                 b: {},
             },
