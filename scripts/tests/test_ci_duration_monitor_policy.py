@@ -168,7 +168,7 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(len(result["shared_setup_diagnostics"][0]["observations"]), 4)
         self.assertEqual(self.github.mutations, [])
 
-    def test_current_real_main_and_manual_entrypoints_can_qualify(self):
+    def test_verified_main_and_manual_entrypoints_accept_supported_absolute_reports(self):
         workflows = monitor.read_config(ROOT / ".github/ci-duration-monitor.json")
         sources = {str(path.relative_to(ROOT)): path.read_text() for path in (ROOT / ".github").rglob("*.yml")}
         for workflow in workflows:
@@ -212,6 +212,75 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(self.run_cli(recurring=False), 0)
         self.assertEqual(len(self.github.issues), 1)
         self.assertIn("Tests (1/4)", self.github.issues[0]["body"])
+
+    def test_real_native_reporter_samples_are_measured_without_inventing_times(self):
+        samples = json.loads((ROOT / "scripts/tests/fixtures/ci-duration/native-reporter-samples.json").read_text())
+        # Current Vitest 5 prints percentages rather than absolute phase times.
+        # A wall duration times a rounded percentage is not a native measurement.
+        self.assertIn("tests 64%", samples["unit"]["log"])
+        self.assertIsNone(native_tests(samples["unit"]["log"], "vitest"))
+        seconds, files = native_tests(samples["playwright"]["log"], "playwright")
+        self.assertEqual((round(seconds, 3), files), (351.967, 35))
+        self.assertIsNone(native_tests(samples["new3"]["log"], "playwright"))
+
+    def mixed_native_fixture(self):
+        config = json.loads(self.config.read_text())
+        family = {**config["workflows"][0]["families"][0], "key": "unavailable", "name": "Unavailable", "job_pattern": "Unavailable tests"}
+        config["workflows"][0]["families"].append(family)
+        self.config.write_text(json.dumps(config))
+        self.github.sources[".github/workflows/ci.yml"] += "  unavailable:\n    name: Unavailable tests\n    steps: [{name: Run tests}]\n"
+        self.set_jobs([job(1, 700), job(2, 700, name="Unavailable tests")])
+
+    def test_unavailable_native_logs_do_not_block_independent_eligible_family(self):
+        for failure in [monitor.NativeLogUnavailable("Verified native log storage is unavailable"), Result(404, {}), Result(410, {}), Result(503, {})]:
+            with self.subTest(failure=str(failure)):
+                self.setUp()
+                self.mixed_native_fixture()
+                original = self.github.request
+                reads = []
+                def unavailable(method, path, payload=None):
+                    if path.startswith("actions/jobs/") and path.endswith("/logs") and path.split("/")[2] in {"10002", "11002"}:
+                        reads.append(path)
+                        if isinstance(failure, Exception): raise failure
+                        return failure
+                    return original(method, path, payload)
+                with patch.object(self.github, "request", side_effect=unavailable):
+                    self.assertEqual(self.run_cli(recurring=False), 0)
+                    self.assertEqual(self.run_cli(recurring=False), 0)
+                self.assertEqual(len(self.github.issues), 1)
+                self.assertEqual(len(self.github.mutations), 3)
+                samples = [sample for observation in self.report()["observations"] if observation["family"] == "unavailable" for sample in observation["samples"]]
+                self.assertEqual(len(samples), 2)
+                self.assertTrue(all(sample["diagnostic_reason"] and sample["native_test_seconds"] is None for sample in samples))
+                self.assertEqual(len(reads), 12 if isinstance(failure, Exception) or failure.status == 503 else 4)
+
+    def test_systemic_native_failures_stop_before_any_issue_write(self):
+        for failure in [Result(401, {}), Result(403, {}), Result(429, {}), ConnectionError("API unavailable"), RuntimeError("Refusing an untrusted GitHub redirect")]:
+            with self.subTest(failure=str(failure)):
+                self.setUp()
+                self.mixed_native_fixture()
+                self.github.jobs[(10, 1)] = self.github.jobs[(10, 1)][:1]
+                original = self.github.request
+                def unavailable(method, path, payload=None):
+                    if path.startswith("actions/jobs/") and path.endswith("/logs") and path.split("/")[2] == "11002":
+                        if isinstance(failure, Exception): raise failure
+                        return failure
+                    return original(method, path, payload)
+                with patch.object(self.github, "request", side_effect=unavailable):
+                    self.assertEqual(self.run_cli(recurring=False), 1)
+                self.assertEqual(self.github.mutations, [])
+
+    def test_current_line_only_new3_variants_are_explicitly_diagnostic(self):
+        workflows = monitor.read_config(ROOT / ".github/ci-duration-monitor.json")
+        self.github.sources = {str(path.relative_to(ROOT)): path.read_text() for path in (ROOT / ".github").rglob("*.yml")}
+        for filename, prefix in [("ci.yml", "e2e-test / "), ("ci-test-e2e.yml", "")]:
+            workflow = next(w for w in workflows if w.path.endswith("/" + filename))
+            family = next(f for f in workflow.families if f.key == "e2e-chromium")
+            source = monitor.CurrentSource(self.github, monitor._call, REPOSITORY)
+            for variant in ["new-3a", "new-3b"]:
+                name = prefix + "e2e-test (" + variant + ")"
+                self.assertRegex(name, family.diagnostic_job_pattern)
+                self.assertEqual(source.reason(workflow, family, self.github.runs[0], name), "current variant uses an unsupported native reporter; diagnostic only")
 
     def test_retired_prototype_is_absent_even_on_default_branch_same_workflow(self):
         source = monitor.CurrentSource(self.github, monitor._call, REPOSITORY)

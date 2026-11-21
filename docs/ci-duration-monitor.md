@@ -38,13 +38,13 @@ All of these conditions must hold:
 families, exact entrypoints and the measurement adapter. The actual current
 workflow inventory is an additional gate, not a regex fallback.
 
-| Entrypoint                                                                            | Native measurement policy                                                                                                                                                                         |
-| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Main CI and direct manual unit/integration workflows                                  | `vitest`: successful native test/file counts and the native `tests` duration, excluding transform/setup/collection/environment timings. Single-file summary blocks contribute no qualifying work. |
-| Main CI and direct manual Chromium/Firefox E2E workflows                              | `playwright`: one complete passing list-reporter summary, matching individual native test timings across distinct spec files, without retries. Line-only or unrecognized output stays diagnostic. |
-| On-premises Compose and schedule Hosting page/service contracts                       | The same `playwright` rule applies to their actual declared verification step; startup/build time inside a wrapper alone cannot qualify. A single spec remains diagnostic.                        |
-| Server, canonical project-directory, devcontainer probe and container-tool validation | `diagnostic`: their current Mocha/probe/tool entrypoints do not expose the supported independent-file native timing format. Retain evidence until a verified measurement adapter is available.    |
-| Unconfigured build, lint, guard or historical job variants                            | Diagnostic only; a fallback family preserves its exact job name and timings.                                                                                                                      |
+| Entrypoint                                                                            | Native measurement policy                                                                                                                                                                                                                                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Main CI and direct manual unit/integration workflows                                  | `vitest`: successful native test/file counts and the native `tests` duration, excluding transform/setup/collection/environment timings. Single-file summary blocks contribute no qualifying work. The inspected current Vitest 5 output supplies rounded phase percentages, which stay diagnostic; the adapter never multiplies wall time by those percentages or invents absolute times.                    |
+| Main CI and direct manual Chromium/Firefox E2E workflows                              | `playwright`: one complete passing list-reporter summary, matching individual native test timings across distinct spec files, without retries. Line-only or unrecognized output stays diagnostic. Current `new-3a`/`new-3b` force `line,json,html` without list timings; the config explicitly marks those variants diagnostic through `diagnostic_job_pattern`. Their tests and verification are unchanged. |
+| On-premises Compose and schedule Hosting page/service contracts                       | The same `playwright` rule applies to their actual declared verification step; startup/build time inside a wrapper alone cannot qualify. A single spec remains diagnostic.                                                                                                                                                                                                                                   |
+| Server, canonical project-directory, devcontainer probe and container-tool validation | `diagnostic`: their current Mocha/probe/tool entrypoints do not expose the supported independent-file native timing format. Retain evidence until a verified measurement adapter is available.                                                                                                                                                                                                               |
+| Unconfigured build, lint, guard or historical job variants                            | Diagnostic only; a fallback family preserves its exact job name and timings.                                                                                                                                                                                                                                                                                                                                 |
 
 Manual invocation is therefore eligible when it uses a supported current
 entrypoint on the default branch and supplies recurring native evidence. There
@@ -116,7 +116,24 @@ Reports and logs go to `ci-duration-monitor-output/` and Actions retains them fo
 14 days. `report.json` includes verification provenance, per-sample diagnostic
 reasons, native timings and shared setup evidence. The summary lists actions and
 workflow-only delays. Transient GET failures receive bounded retries; unresolved
-API failures fail the monitor before it claims successful submission.
+API failures in authentication, rate limits, repository/source verification or pagination
+fail the whole scan before issue writes. Untrusted redirects also fail the scan.
+A verified native log storage outage/expired object is different: after bounded
+read retries, only that candidate becomes diagnostic and unrelated qualifying
+families can proceed. The transport recognizes only HTTPS
+`productionresults*.blob.core.windows.net` log redirects, strips credentials, and
+never puts signed URLs in diagnostics. API log 404/410 and bounded 502/503/504
+responses are also candidate-only admission failures; API 401/403/429 and API
+transport failures remain systemic. Unknown redirect hosts remain untrusted.
+
+Native reporter fixture provenance: GitHub run `44868248412`, unit job
+`136737097531`, basic E2E job `136741558553`, and line-only new-3a job
+`136741559827`, at main SHA `30f1495475a2c1a48c2750360bacfd3509372199`.
+The fixtures retain only reporter rows/summaries, with ANSI colors removed.
+The native basic report measures 351.967 summed test seconds across 35 files;
+its wall summary is 1.5 minutes. The unit report prints `tests 64%`, not an
+absolute native duration. Neither observation is represented as a new slow-test
+measurement.
 
 ## Focused verification
 

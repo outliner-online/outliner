@@ -74,7 +74,8 @@
                         "client/e2e/reporters/firefox-selection-reporter.ts"
                     ],
                     "guidance": "Compare native Playwright durations across every Chromium project. Existing new-2, new-3 and tables partitions already have coverage and completion guards; preserve the exact collected selection, browser coverage, artifact identity and failure aggregation. Separate dependency/service startup from test execution before choosing further sharding.",
-                    "measurement": "playwright"
+                    "measurement": "playwright",
+                    "diagnostic_job_pattern": "^(?:e2e-test / )?e2e-test \\(new-3[ab]\\)$"
                 },
                 {
                     "key": "e2e-firefox",
@@ -187,7 +188,8 @@
                         "client/e2e/reporters/firefox-selection-reporter.ts"
                     ],
                     "guidance": "Compare native Playwright durations across every Chromium project. Existing new-2, new-3 and tables partitions already have coverage and completion guards; preserve the exact collected selection, browser coverage, artifact identity and failure aggregation. Separate dependency/service startup from test execution before choosing further sharding.",
-                    "measurement": "playwright"
+                    "measurement": "playwright",
+                    "diagnostic_job_pattern": "^(?:e2e-test / )?e2e-test \\(new-3[ab]\\)$"
                 },
                 {
                     "key": "e2e-firefox",

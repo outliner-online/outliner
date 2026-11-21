@@ -24,8 +24,10 @@ from loguru import logger
 
 try:
     from .ci_duration_policy import CurrentSource, native_tests
+    from .ci_duration_github import NativeLogUnavailable
 except ImportError:
     from ci_duration_policy import CurrentSource, native_tests
+    from ci_duration_github import NativeLogUnavailable
 
 MANAGED_LABEL = "ci-duration-monitor"
 READY_LABEL = "review-ready"
@@ -54,6 +56,7 @@ class Family:
     source_paths: tuple[str, ...]
     guidance: str
     measurement: str = "diagnostic"
+    diagnostic_job_pattern: str = ""
 
 
 @dataclass(frozen=True)
@@ -215,6 +218,9 @@ def read_config(path: Path) -> tuple[Workflow, ...]:
             sources = entry.get("source_paths")
             if not isinstance(sources, list) or not sources:
                 raise ValueError("Each family needs verified implementation source paths")
+            diagnostic_pattern = entry.get("diagnostic_job_pattern", "")
+            if not isinstance(diagnostic_pattern, str):
+                raise ValueError("Diagnostic job pattern must be text")
             family = Family(
                 _text(entry.get("key")),
                 _text(entry.get("name")),
@@ -223,11 +229,13 @@ def read_config(path: Path) -> tuple[Workflow, ...]:
                 tuple(_text(source) for source in sources),
                 _text(entry.get("guidance")),
                 _text(entry.get("measurement", "diagnostic")),
+                diagnostic_pattern,
             )
             if family.measurement not in {"vitest", "playwright", "diagnostic"}:
                 raise ValueError("Unsupported native test measurement policy")
             re.compile(family.job_pattern)
             re.compile(family.test_step_pattern)
+            re.compile(family.diagnostic_job_pattern)
             families.append(family)
         if len({family.key for family in families}) != len(families):
             raise ValueError("Duplicate family key in workflow")
@@ -315,15 +323,19 @@ def collect(client: Client, workflows: tuple[Workflow, ...], cutoff: datetime, s
                             elif any(step.get("conclusion") != "success" for step in _objects(job.get("steps", [])) if re.search(family.test_step_pattern, _text(step.get("name")))):
                                 reason = "test command did not succeed"
                             else:
-                                response = _request(client, "GET", f"actions/jobs/{_number(job.get('id'))}/logs")
-                                if response.status in {404, 410}:
-                                    reason = "native test logs are unavailable"
-                                elif response.status != 200:
-                                    raise RuntimeError(f"Cannot read native test logs: HTTP {response.status}")
+                                try:
+                                    response = _request(client, "GET", f"actions/jobs/{_number(job.get('id'))}/logs")
+                                except NativeLogUnavailable:
+                                    reason = "verified native log storage unavailable after bounded retries"
                                 else:
-                                    native = native_tests(response.data, family.measurement) if isinstance(response.data, str) else None
-                                    if native is None or native[0] < THRESHOLD_SECONDS:
-                                        reason = "no usable independent native test slowdown"
+                                    if response.status in {404, 410, 502, 503, 504}:
+                                        reason = f"native job log endpoint unavailable (HTTP {response.status})"
+                                    elif response.status != 200:
+                                        raise RuntimeError(f"Cannot read native test logs: HTTP {response.status}")
+                                    else:
+                                        native = native_tests(response.data, family.measurement) if isinstance(response.data, str) else None
+                                        if native is None or native[0] < THRESHOLD_SECONDS:
+                                            reason = "no usable independent native test slowdown"
                         observation.samples.append(
                             Sample(
                                 run_id,

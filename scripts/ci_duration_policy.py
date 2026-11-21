@@ -119,6 +119,8 @@ class CurrentSource:
         inventory = self.inventories[workflow.path]
         if job_name not in inventory:
             return "job/variant is absent from the current active workflow"
+        if family.diagnostic_job_pattern and re.fullmatch(family.diagnostic_job_pattern, job_name):
+            return "current variant uses an unsupported native reporter; diagnostic only"
         if family.measurement not in {"vitest", "playwright"}:
             return "no supported native test measurement for this entrypoint"
         paths, steps = inventory[job_name]
