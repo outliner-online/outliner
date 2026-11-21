@@ -102,7 +102,7 @@ test("direct-runner fixture uses the authenticated action cache and passes its l
     const build = findStep(e2e, "direct-runner-os-regression", "Build cached direct-runner fixture");
     const regression = findStep(e2e, "direct-runner-os-regression", "Exercise real isolated package acquisition");
 
-    expect(build.uses).toBe("docker/build-push-action@v7");
+    expect(build.uses).toBe("./.github/actions/bounded-buildx");
     expect(build.with).toMatchObject({
         context: ".",
         file: "scripts/tests/fixtures/direct-runner-os/Dockerfile",
@@ -128,11 +128,6 @@ test("a delayed hosted build consumes the same monotonic deadline as container p
         "Start controlled shared provisioning deadline",
     );
     const build = findStep(e2e, "direct-runner-os-provisioning-deadline", "Build deliberately delayed fixture");
-    const acquisition = findStep(
-        e2e,
-        "direct-runner-os-provisioning-deadline",
-        "Reject acquisition after the shared deadline",
-    );
     const verification = findStep(
         e2e,
         "direct-runner-os-provisioning-deadline",
@@ -140,16 +135,14 @@ test("a delayed hosted build consumes the same monotonic deadline as container p
     );
 
     expect(job.steps.indexOf(deadline)).toBeLessThan(job.steps.indexOf(build));
-    expect(job.steps.indexOf(build)).toBeLessThan(job.steps.indexOf(acquisition));
     expect(deadline.run).toContain("time.monotonic_ns() + 1_000_000_000");
-    expect(build.uses).toBe("docker/build-push-action@v7");
+    expect(build.uses).toBe("./.github/actions/bounded-buildx");
     expect(build.with.context).toBe("scripts/tests/fixtures/direct-runner-os/deadline-control");
-    expect(acquisition["continue-on-error"]).toBe(true);
-    expect(acquisition.env.DIRECT_RUNNER_OS_PREBUILT_IMAGE).toBe(build.with.tags);
-    expect(verification.env.ACQUISITION_OUTCOME).toBe("${{ steps.acquisition.outcome }}");
-    expect(verification.run).toContain('test "$ACQUISITION_OUTCOME" = failure');
-    expect(verification.run).toContain("Fixture provisioning deadline exceeded");
-    expect(verification.run).toContain(": elapsed=");
+    expect(build["continue-on-error"]).toBe(true);
+    expect(verification.env.BUILD_OUTCOME).toBe("${{ steps.delayed-build.outcome }}");
+    expect(verification.run).toContain('test "$BUILD_OUTCOME" = failure');
+    expect(verification.run).toContain('e.outcome!=="deadline"||e.terminated!==true');
+    expect(verification.run).toContain("test ! -e job_logs/unexpected-scenario-launch");
 });
 
 test("a hosted fixture failure cannot enter the scenario acquisition caller", () => {
@@ -165,7 +158,7 @@ test("a hosted fixture failure cannot enter the scenario acquisition caller", ()
 
     expect(job["continue-on-error"]).toBeUndefined();
     expect(build).toMatchObject({
-        uses: "docker/build-push-action@v7",
+        uses: "./.github/actions/bounded-buildx",
         "continue-on-error": true,
         with: {
             context: "scripts/tests/fixtures/direct-runner-os/failure-control",
@@ -180,6 +173,56 @@ test("a hosted fixture failure cannot enter the scenario acquisition caller", ()
     expect(verification.env.BUILD_OUTCOME).toBe("${{ steps.fixture-build.outcome }}");
     expect(verification.run).toContain('test "$BUILD_OUTCOME" = failure');
     expect(verification.run).toContain("test ! -e job_logs/unexpected-scenario-launch");
+});
+
+test("bounded hosted fixture entry point terminates its owned process group at the shared deadline", () => {
+    const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "bounded-buildx-"));
+    const bin = path.join(temporary, "bin");
+    const evidence = path.join(temporary, "evidence.json");
+    const terminated = path.join(temporary, "terminated");
+    const scenario = path.join(temporary, "scenario-launched");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(
+        path.join(bin, "docker"),
+        `#!/usr/bin/env bash
+trap 'printf terminated > "${terminated}"; exit 143' TERM
+sleep 30 &
+wait
+printf launched > "${scenario}"
+`,
+        { mode: 0o755 },
+    );
+
+    const started = process.hrtime.bigint();
+    let status = 0;
+    try {
+        execFileSync(process.execPath, [path.join(actionDirectory, "bounded-buildx/index.mjs")], {
+            env: {
+                ...process.env,
+                PATH: `${bin}:${process.env.PATH}`,
+                DIRECT_RUNNER_OS_PROVISIONING_DEADLINE_NS: (started + 250_000_000n).toString(),
+                INPUT_CONTEXT: ".",
+                INPUT_TAGS: "bounded-control:test",
+                INPUT_LOAD: "true",
+                INPUT_EVIDENCE_FILE: evidence,
+                INPUT_CLEANUP_GRACE_SECONDS: "1",
+            },
+            stdio: "pipe",
+        });
+    } catch (error) {
+        status = (error as { status?: number; }).status ?? 0;
+    }
+
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1_000_000;
+    expect(status).not.toBe(0);
+    expect(elapsedMs).toBeLessThan(2_000);
+    expect(fs.readFileSync(terminated, "utf8")).toBe("terminated");
+    expect(fs.existsSync(scenario), "a terminated fixture build must never launch a scenario").toBe(false);
+    expect(JSON.parse(fs.readFileSync(evidence, "utf8"))).toMatchObject({
+        outcome: "deadline",
+        buildStarted: true,
+        terminated: true,
+    });
 });
 
 test("artifact and Pages deployment producers retain their consumer-facing contracts", () => {

@@ -1,0 +1,25 @@
+name: Bounded Buildx fixture build
+description: Run an owned Buildx build within the shared monotonic provisioning deadline
+inputs:
+  context:
+    required: true
+  file:
+    required: false
+  tags:
+    required: true
+  load:
+    required: false
+    default: 'true'
+  cache-from:
+    required: false
+  cache-to:
+    required: false
+  evidence-file:
+    required: false
+    default: job_logs/direct-runner-fixture-build.json
+  cleanup-grace-seconds:
+    required: false
+    default: '10'
+runs:
+  using: node24
+  main: index.mjs
