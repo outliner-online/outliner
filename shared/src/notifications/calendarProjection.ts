@@ -34,7 +34,11 @@ export function validateCalendarObservationContext(value: unknown): CalendarCont
     try {
         locale = Intl.getCanonicalLocales(input.locale)[0];
         if (!locale || locale !== input.locale) return invalid("Locale must be canonical.");
-        new Intl.DateTimeFormat(locale);
+        const resolvedLocale = new Intl.DateTimeFormat(locale).resolvedOptions().locale;
+        // Intl accepts structurally valid but unavailable locales by silently
+        // falling back to the host default. That fallback is not authoritative
+        // enough for a saved observation context.
+        if (Intl.getCanonicalLocales(resolvedLocale)[0] !== locale) return invalid("Locale is unsupported.");
     } catch {
         return invalid("Locale is unsupported.");
     }
@@ -53,8 +57,12 @@ export function validateCalendarObservationContext(value: unknown): CalendarCont
         return invalid("Calendar view type is unsupported.");
     }
     for (const field of ["anchorUtcMs", "rangeStartUtcMs", "rangeEndUtcMs"] as const) {
-        if (typeof input[field] !== "number" || !Number.isFinite(input[field])) {
-            return invalid(`${field} must be finite.`);
+        if (
+            typeof input[field] !== "number"
+            || !Number.isFinite(input[field])
+            || !Number.isFinite(new Date(input[field]).getTime())
+        ) {
+            return invalid(`${field} must be a representable finite epoch.`);
         }
     }
     const viewType = input.viewType as CalendarObservationViewType;
@@ -76,9 +84,18 @@ export function validateCalendarObservationContext(value: unknown): CalendarCont
     if (viewType !== "gantt" && input.collapsedEntryKeys.length !== 0) {
         return invalid("collapsedEntryKeys must be empty outside Gantt mode.");
     }
-    const expected = viewType === "gantt"
-        ? computeGanttRange(input.anchorUtcMs as number, ganttScale as GanttScale, timeZone)
-        : computeViewRange(input.anchorUtcMs as number, viewType, input.weekStart as number, timeZone);
+    let expected: { start: number; end: number; };
+    try {
+        expected = viewType === "gantt"
+            ? computeGanttRange(input.anchorUtcMs as number, ganttScale as GanttScale, timeZone)
+            : computeViewRange(input.anchorUtcMs as number, viewType, input.weekStart as number, timeZone);
+    } catch {
+        return invalid("Calendar range cannot be derived from the supplied context.");
+    }
+    if (
+        !Number.isFinite(new Date(expected.start).getTime())
+        || !Number.isFinite(new Date(expected.end).getTime())
+    ) return invalid("Calendar range is outside the representable date range.");
     if (expected.start !== input.rangeStartUtcMs || expected.end !== input.rangeEndUtcMs) {
         return invalid("Calendar range is not coherent with its anchor and view settings.");
     }

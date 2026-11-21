@@ -2,7 +2,10 @@ import { store } from "../stores/store.svelte";
 import { yjsStore } from "../stores/yjsStore.svelte";
 import { initializeDemoProject, releaseDemoProject } from "./demoInit";
 import { isPublicProject } from "./publicProject";
-import { getAuthorizedClientByProjectTitle as getAuthorizedYjsClientByProjectTitle } from "./yjsService.svelte";
+import {
+    acquireClientByProjectId,
+    getAuthorizedClientByProjectTitle as getAuthorizedYjsClientByProjectTitle,
+} from "./yjsService.svelte";
 
 export interface RouteProjectHandle {
     /** Stable project id used by project-owned subdoc rooms. */
@@ -42,4 +45,26 @@ export async function openRouteProject(
         store.project = projectDoc as unknown as NonNullable<typeof store.project>;
     }
     return { projectId: client.containerId, release: () => {} };
+}
+
+/** Open a saved observation target by its stable project id, never by a reused title. */
+export async function openRouteProjectById(
+    projectId: string,
+    isDestroyed: () => boolean,
+): Promise<RouteProjectHandle | undefined> {
+    // Public demo ids are stable slugs, but still require the seeded,
+    // anonymous demo initialization performed by the ordinary route opener.
+    if (isPublicProject(projectId)) return openRouteProject(projectId, isDestroyed);
+    const acquired = await acquireClientByProjectId(projectId);
+    if (!acquired) return undefined;
+    if (isDestroyed()) {
+        acquired.release();
+        return undefined;
+    }
+
+    const client = acquired.client;
+    yjsStore.yjsClient = client as unknown as NonNullable<typeof yjsStore.yjsClient>;
+    const projectDoc = client.getProject?.();
+    if (projectDoc) store.project = projectDoc as unknown as NonNullable<typeof store.project>;
+    return { projectId: client.containerId, release: acquired.release };
 }

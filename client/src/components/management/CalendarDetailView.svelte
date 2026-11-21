@@ -14,7 +14,7 @@
     import { isPublicProject, projectRoute } from "../../lib/publicProject";
     import { projectCalendarsRoute, projectObjectsSelectedRoute } from "../../lib/managementPaths";
     import { DemoInitAborted } from "../../lib/demoInit";
-    import { openRouteProject, type RouteProjectHandle } from "../../lib/routeProject";
+    import { openRouteProject, openRouteProjectById, type RouteProjectHandle } from "../../lib/routeProject";
     import { Project } from "$shared/app-schema";
     import type { CalendarObservationContextV1 } from "$shared/notifications/calendarProjection";
 
@@ -87,7 +87,9 @@
             // parameter change cannot leak a demo client reference.
             projectHandle?.release();
             projectHandle = undefined;
-            projectHandle = await openRouteProject(projectName, () => isDestroyed);
+            projectHandle = observationContext
+                ? await openRouteProjectById(projectName, () => isDestroyed)
+                : await openRouteProject(projectName, () => isDestroyed);
             if (!projectHandle) {
                 notFound = true;
                 return;

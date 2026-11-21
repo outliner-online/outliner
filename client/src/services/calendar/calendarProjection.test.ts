@@ -51,6 +51,34 @@ describe("Calendar observation context", () => {
         });
     });
 
+    it("rejects canonical locale tags that the runtime would silently replace", () => {
+        expect(Intl.getCanonicalLocales("zz-ZZ")).toEqual(["zz-ZZ"]);
+        expect(validateCalendarObservationContext({ ...context(), locale: "zz-ZZ" })).toEqual({
+            valid: false,
+            error: "Locale is unsupported.",
+        });
+        expect(decodeCalendarObservationContext(JSON.stringify({ ...context(), locale: "zz-ZZ" }))).toEqual({
+            valid: false,
+            error: "Locale is unsupported.",
+        });
+    });
+
+    it("returns invalid and non-ready for finite epochs outside the Date range", () => {
+        const outsideDateRange = { ...context(), anchorUtcMs: 1e20 };
+        expect(() => validateCalendarObservationContext(outsideDateRange)).not.toThrow();
+        expect(validateCalendarObservationContext(outsideDateRange)).toEqual({
+            valid: false,
+            error: "anchorUtcMs must be a representable finite epoch.",
+        });
+        expect(projectCalendarVisibleState(outsideDateRange, {
+            title: "Calendar",
+            rangeLabel: "range",
+            modeLabel: "Week",
+            labels: [],
+            content: [],
+        })).toEqual({ ready: false, reason: "anchorUtcMs must be a representable finite epoch." });
+    });
+
     it("returns non-ready instead of an authoritative empty projection", () => {
         expect(projectCalendarVisibleState(context(), undefined)).toEqual({
             ready: false,

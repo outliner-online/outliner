@@ -259,11 +259,11 @@ export function projectCalendarRoute(projectName: string, calendarName: string):
 
 /** Stable-ID Calendar route carrying only a validated, versioned observation context. */
 export function projectCalendarObservationRoute(
-    projectName: string,
+    projectId: string,
     calendarId: string,
     context: CalendarObservationContextV1,
 ): ResolvedPathname {
-    return `${projectCalendarRoute(projectName, calendarId)}?context=${
+    return `${projectCalendarRoute(projectId, calendarId)}?context=${
         encodeURIComponent(encodeCalendarObservationContext(context))
     }`;
 }
