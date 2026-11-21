@@ -21,22 +21,18 @@ test("uncontrolled cleanup waits for the real browser terminal callback", async 
         // exact real client callback so upstream-first cleanup cannot race it.
         const held = stack.holdTunnelTerminalCallback(tunnel.id, "ws-client-close");
         const upstream = stack.waitForTransportEvent("ws-upstream-close", tunnel.url, { id: tunnel.id });
-        // ECONNRESET can reach the held callback before the socket's close
-        // event. Observe both actual closes within the same terminal deadline;
-        // one event-loop turn is not proof that either close has arrived.
-        const rawCloses = expect.poll(() => {
-            const observed = stack.tunnelSocketSnapshot(tunnel.id) ?? [];
-            return ["client", "upstream"].every(side =>
-                observed.some(event => event.side === side && event.event === "close")
-            );
-        }, { timeout: 15_000, message: "Both exact tunnel sockets must emit close before cleanup" }).toBe(true);
+        // held.observed also accepts a real error callback; it does not prove
+        // either native close callback has reached the independent recorder.
+        const rawClientClose = stack.waitForTransportEvent("ws-client-socket-close", tunnel.url, { id: tunnel.id });
+        const rawUpstreamClose = stack.waitForTransportEvent("ws-upstream-socket-close", tunnel.url, { id: tunnel.id });
         await target.close();
-        await Promise.all([held.observed, upstream, rawCloses]).finally(async () => {
+        await Promise.all([held.observed, upstream, rawClientClose, rawUpstreamClose]).finally(async () => {
             await testInfo.attach("uncontrolled-terminal-provenance", {
                 contentType: "application/json",
                 body: JSON.stringify({ id: tunnel.id, observations: stack.tunnelSocketSnapshot(tunnel.id) }),
             });
         });
+        await new Promise<void>(resolve => setImmediate(resolve));
         expect(stack.isTunnelOpen(tunnel.id)).toBe(true);
         expect(stack.transportSnapshot().some(event => event.id === tunnel.id && event.kind === "ws-cleanup-complete"))
             .toBe(false);

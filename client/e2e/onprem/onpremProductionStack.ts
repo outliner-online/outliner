@@ -27,9 +27,11 @@ export interface TransportEvent {
         | "ws-open"
         | "ws-upstream-data"
         | "ws-client-close"
+        | "ws-client-socket-close"
         | "ws-client-reset-request"
         | "ws-upstream-reset-request"
         | "ws-upstream-close"
+        | "ws-upstream-socket-close"
         | "ws-client-close-held"
         | "ws-upstream-close-held"
         | "ws-client-cleanup-destroy"
@@ -474,6 +476,16 @@ export class OnPremProductionStack {
                 clientDestroyedByCleanup: tunnel.clientDestroyedByCleanup,
                 upstreamDestroyedByCleanup: tunnel.upstreamDestroyedByCleanup,
             });
+            // A terminal error can reach a callback hold before the native
+            // close callback. Expose that separate physical observation only
+            // after recording it, never from an error or a scheduled turn.
+            if (event === "close") {
+                this.recordTransport({
+                    id: tunnel.id,
+                    kind: side === "client" ? "ws-client-socket-close" : "ws-upstream-socket-close",
+                    url: tunnel.url,
+                });
+            }
         };
         socket.once("end", () => observeSocket("client", "end"));
         upstream.once("end", () => observeSocket("upstream", "end"));
