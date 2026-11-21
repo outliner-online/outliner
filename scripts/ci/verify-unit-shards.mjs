@@ -114,6 +114,7 @@ if (!expected.length) throw new Error("native unit selection is empty");
 const executed = [];
 const mergedCoverage = {};
 const expectedCoverageFiles = repositoryCoverageInventory();
+let nativeCoverageFiles;
 let expectedCoverageDefinitions;
 for (let shard = 1; shard <= shardCount; shard++) {
     const shardDir = path.join(artifactDir, `unit-shard-${shard}-${runId}-${runAttempt}`);
@@ -128,14 +129,18 @@ for (let shard = 1; shard <= shardCount; shard++) {
     const coverage = JSON.parse(fs.readFileSync(coveragePath, "utf8"));
     const coverageFiles = Object.keys(coverage).map((file) => path.resolve(file)).sort();
     if (!coverageFiles.length) throw new Error(`empty coverage for shard ${shard}`);
-    if (JSON.stringify(coverageFiles) !== JSON.stringify(expectedCoverageFiles)) {
-        const missing = expectedCoverageFiles.filter((file) => !coverageFiles.includes(file));
-        const extra = coverageFiles.filter((file) => !expectedCoverageFiles.includes(file));
+    const missing = expectedCoverageFiles.filter((file) => !coverageFiles.includes(file));
+    if (missing.length) {
         throw new Error(
-            `coverage differs from repository inventory for shard ${shard}; missing=${
-                missing.slice(0, 20).join(",")
-            } extra=${extra.slice(0, 20).join(",")}`,
+            `coverage differs from repository inventory for shard ${shard}; missing=${missing.slice(0, 20).join(",")}`,
         );
+    }
+    // V8 can additionally report virtual/generated sources from source maps
+    // that have no on-disk repository path. Accept those native entries, but
+    // require every shard to report the exact same set and map definitions.
+    nativeCoverageFiles ??= coverageFiles;
+    if (JSON.stringify(coverageFiles) !== JSON.stringify(nativeCoverageFiles)) {
+        throw new Error(`native coverage file set differs for shard ${shard}`);
     }
     const definitions = Object.fromEntries(
         Object.entries(coverage).map(([file, data]) => [path.resolve(file), mapDefinitions(data)]),
@@ -149,7 +154,7 @@ for (let shard = 1; shard <= shardCount; shard++) {
     mergeCoverage(mergedCoverage, coverage);
 }
 compareIdentities(executed, expected);
-if (Object.keys(mergedCoverage).length !== expectedCoverageFiles.length) {
+if (Object.keys(mergedCoverage).length !== nativeCoverageFiles.length) {
     throw new Error("merged coverage is incomplete");
 }
 const output = path.resolve("coverage/unit_and_integration/coverage-final.json");
