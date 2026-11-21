@@ -8,7 +8,7 @@ import { parse, stringify } from "yaml";
 const CLI_VERSION = "v1.97.0";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "../..");
-const fixture = path.join(here, "fixtures", "dependabot-docker-selection");
+const fixtureSource = path.join(here, "fixtures", "dependabot-docker-selection");
 const cli = process.env.DEPENDABOT_CLI ?? "dependabot";
 
 const version = execFileSync(cli, ["--version"], { encoding: "utf8" }).trim();
@@ -20,6 +20,24 @@ const config = parse(fs.readFileSync(path.join(repoRoot, ".github", "dependabot.
 const docker = config.updates.filter(update => update["package-ecosystem"] === "docker");
 if (docker.length !== 1) throw new Error(`Expected one Docker update entry; received ${docker.length}`);
 const configuredIgnore = docker[0].ignore ?? [];
+
+// The CLI preserves an existing local Git repository. Commit the fixture once
+// with fixed identity and timestamps so record and replay observe the same
+// base SHA instead of creating a fresh, time-dependent commit in each updater.
+const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "dependabot-docker-fixture-"));
+fs.cpSync(fixtureSource, fixture, { recursive: true });
+execFileSync("git", ["init", "--quiet", "--initial-branch=main"], { cwd: fixture });
+execFileSync("git", ["config", "user.name", "Dependabot smoke fixture"], { cwd: fixture });
+execFileSync("git", ["config", "user.email", "dependabot-smoke@example.invalid"], { cwd: fixture });
+execFileSync("git", ["add", "."], { cwd: fixture });
+execFileSync("git", ["commit", "--quiet", "-m", "Pinned Docker selection fixture"], {
+    cwd: fixture,
+    env: {
+        ...process.env,
+        GIT_AUTHOR_DATE: "2026-11-21T00:00:00Z",
+        GIT_COMMITTER_DATE: "2026-11-21T00:00:00Z",
+    },
+});
 
 const variants = [
     { name: "exact", ignore: configuredIgnore, wanted: ["node"], satisfiesWantedOutcome: true },
