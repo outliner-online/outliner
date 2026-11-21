@@ -14,6 +14,7 @@ import { OutlinerReadService } from "../src/mcp/outliner-read-service.js";
 import { UpdateGridPresentationTool } from "../src/mcp/update-grid-presentation-tool.js";
 import { signAccessToken } from "../src/oauth/tokens.js";
 import { createDocumentStore, type DocumentStore } from "../src/persistence.js";
+import { refreshMcpLogStream } from "../src/utils/log-manager.js";
 import { AclStore, startTestServer, stopTestServer, tempDir, type TestServer } from "./server-create-table-fixture.js";
 import { PROJECT, seedGridProject } from "./server-grid-presentation-fixture.js";
 
@@ -58,6 +59,10 @@ export async function startGridMcpFixture() {
     acl.grant("projectUsers", PROJECT, UID);
     const dir = tempDir();
     const server: TestServer = await startTestServer(dir, acl);
+    // This fixture owns the destination returned here.  Keeping the exact
+    // stream lets audit assertions queue a completion barrier on the same
+    // destination that pino writes, rather than relying on logger.flush().
+    const auditDestination = refreshMcpLogStream();
     await seedGridProject(server.hocuspocus);
     const context = new AsyncLocalStorage<string>();
     const checks = new Map<string, number>();
@@ -106,6 +111,10 @@ export async function startGridMcpFixture() {
         mcp,
         /** The unmodified production endpoint of the same server. */
         production: rpcClient(server.server),
+        auditDestination,
+        waitForAuditDestination: () => new Promise<void>((resolve, reject) => {
+            auditDestination.write("", error => error ? reject(error) : resolve());
+        }),
         get domainCalls() {
             return domainCalls;
         },

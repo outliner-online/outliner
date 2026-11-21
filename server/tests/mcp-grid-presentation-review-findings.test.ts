@@ -69,6 +69,26 @@ describe("MCP grid presentation review findings (#5436)", function() {
 
     it("audits presentation success with prior/resulting revisions and no private payload", async () => {
         const operationId = `audit-pres-${Date.now()}`;
+        const destination = t.auditDestination as fs.WriteStream & {
+            _write: (
+                chunk: string | Buffer,
+                encoding: BufferEncoding,
+                callback: (error?: Error | null) => void,
+            ) => void;
+        };
+        const originalWrite = destination._write.bind(destination);
+        let releaseWrite!: () => void;
+        let auditWriteHeld!: () => void;
+        const held = new Promise<void>(resolve => auditWriteHeld = resolve);
+        const release = new Promise<void>(resolve => releaseWrite = resolve);
+        destination._write = (chunk, encoding, callback) => {
+            if (chunk.toString().includes(operationId)) {
+                auditWriteHeld();
+                void release.then(() => originalWrite(chunk, encoding, callback));
+                return;
+            }
+            originalWrite(chunk, encoding, callback);
+        };
         const grid = (await t.production.call("get_grid", { projectId: PROJECT, gridId: "grid-tasks" })).payload;
         const applied = await t.production.call(
             "update_grid_presentation",
@@ -79,8 +99,40 @@ describe("MCP grid presentation review findings (#5436)", function() {
             }),
         );
         expect(applied.payload).to.include({ applied: true, replayed: false });
-        await new Promise<void>((resolve, reject) => mcpLogger.flush(error => error ? reject(error) : resolve()));
-        const records = fs.readFileSync(mcpLogPath, "utf8").split("\n").filter(Boolean).map(line => {
+        await held;
+
+        // The incident's flush-only boundary completes even though the real
+        // file write is still held.  The same pending-state oracle rejects a
+        // no-op barrier as well, while the destination barrier stays queued.
+        const isPendingAtCheckpoint = async (wait: Promise<void>) => {
+            let settled = false;
+            void wait.then(() => settled = true);
+            await new Promise<void>(resolve => setImmediate(resolve));
+            return !settled;
+        };
+        const flushOnly = new Promise<void>((resolve, reject) => {
+            mcpLogger.flush(error => error ? reject(error) : resolve());
+        });
+        expect(await isPendingAtCheckpoint(flushOnly), "flush-only must not masquerade as destination completion")
+            .to.equal(false);
+        expect(await isPendingAtCheckpoint(Promise.resolve()), "a no-op must fail the completion oracle").to.equal(
+            false,
+        );
+
+        let readReached = false;
+        const waitAndRead = (async () => {
+            readReached = true;
+            await t.waitForAuditDestination();
+            return fs.readFileSync(mcpLogPath, "utf8");
+        })();
+        expect(readReached, "the real wait/read path must be reached").to.equal(true);
+        expect(await isPendingAtCheckpoint(waitAndRead.then(() => undefined)),
+            "file read must wait for its destination")
+            .to.equal(true);
+        releaseWrite();
+        const auditFile = await waitAndRead;
+        destination._write = originalWrite;
+        const records = auditFile.split("\n").filter(Boolean).map(line => {
             try {
                 return JSON.parse(line);
             } catch {
