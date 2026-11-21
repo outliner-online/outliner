@@ -94,6 +94,24 @@ test("representative PR CI retains its trigger, permissions, guards, and failure
     expect(workflow.jobs["unit-test"]["continue-on-error"]).toBeUndefined();
 });
 
+test("direct-runner fixture uses the authenticated action cache and passes its loaded image to the regression", () => {
+    const e2e = parseWorkflow("ci-test-e2e.yml");
+    const build = findStep(e2e, "direct-runner-os-regression", "Build cached direct-runner fixture");
+    const regression = findStep(e2e, "direct-runner-os-regression", "Exercise real isolated package acquisition");
+
+    expect(build.uses).toBe("docker/build-push-action@v7");
+    expect(build.with).toMatchObject({
+        context: ".",
+        file: "scripts/tests/fixtures/direct-runner-os/Dockerfile",
+        load: true,
+        tags: "outliner-direct-os-regression:ci",
+        "cache-from": "type=gha,scope=direct-runner-os-fixture-v1",
+        "cache-to": "type=gha,mode=max,scope=direct-runner-os-fixture-v1",
+    });
+    expect(regression.env.DIRECT_RUNNER_OS_PREBUILT_IMAGE).toBe(build.with.tags);
+    expect(regression["continue-on-error"]).toBeUndefined();
+});
+
 test("artifact and Pages deployment producers retain their consumer-facing contracts", () => {
     const e2e = parseWorkflow("ci-test-e2e.yml");
     const artifact = findStep(e2e, "e2e-test", "Upload Logs & Artifacts");

@@ -35,14 +35,24 @@ jobs:
         run: npm ci --prefix scripts/tests --include=dev --no-audit --no-fund
       - name: Enable fixture layer cache
         uses: docker/setup-buildx-action@v4
+      - name: Build cached direct-runner fixture
+        id: direct-runner-fixture
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: scripts/tests/fixtures/direct-runner-os/Dockerfile
+          load: true
+          tags: outliner-direct-os-regression:ci
+          cache-from: type=gha,scope=direct-runner-os-fixture-v1
+          cache-to: type=gha,mode=max,scope=direct-runner-os-fixture-v1
       - name: Verify mirror-only control and owned-child cleanup
         run: python3 -m unittest discover -s scripts/tests -p 'test_ubuntu_mirror*.py' -v
       - name: Exercise real isolated package acquisition
         shell: bash
         env:
-          # Cache only image provisioning. Every acquisition scenario still
-          # starts from its own fresh container below this boundary.
-          DIRECT_RUNNER_OS_CACHE_SCOPE: direct-runner-os-fixture-v1
+          # The supported Docker action above authenticates cache import/export.
+          # The ENV suite still creates one fresh container per scenario.
+          DIRECT_RUNNER_OS_PREBUILT_IMAGE: outliner-direct-os-regression:ci
         run: |
           set -euo pipefail
           mkdir -p job_logs

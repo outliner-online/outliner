@@ -4,32 +4,59 @@
  */
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, expect, test } from "vitest";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
-const image = `outliner-direct-os-regression:${process.pid}`;
+const image = process.env.DIRECT_RUNNER_OS_PREBUILT_IMAGE ?? `outliner-direct-os-regression:${process.pid}`;
 const owner = randomUUID().slice(0, 8);
 const scenarios = ["success", "unavailable", "slow", "missing", "nonroot-success", "nonroot-playwright-slow"];
 const preparedContainers = new Set<string>();
 const containerName = (scenario: string) => `outliner-direct-os-${process.pid}-${owner}-${scenario}`;
 let buildContext: string | undefined;
 const output = (result: ReturnType<typeof spawnSync>) => `${result.stdout ?? ""}${result.stderr ?? ""}`;
+const builder = join(root, "scripts/tests/fixtures/direct-runner-os/build-fixture.sh");
+
+function expectNoScenarioContainers(): void {
+    const listed = spawnSync("docker", [
+        "ps",
+        "--all",
+        "--filter",
+        `name=outliner-direct-os-${process.pid}-${owner}-`,
+        "--format",
+        "{{.Names}}",
+    ], { encoding: "utf8", timeout: 10000 });
+    expect(listed.error, output(listed)).toBeUndefined();
+    expect(listed.status, output(listed)).toBe(0);
+    expect(listed.stdout.trim(), "A failed fixture build must not start a scenario container").toBe("");
+}
 
 beforeAll(() => {
     const docker = spawnSync("docker", ["info"], { encoding: "utf8", timeout: 10000 });
     expect(docker.error, "Docker control is required; this suite must never silently skip").toBeUndefined();
     expect(docker.status, output(docker)).toBe(0);
-    buildContext = mkdtempSync(join(tmpdir(), "direct-runner-os-"));
-    mkdirSync(join(buildContext, "client"));
-    copyFileSync(join(root, "client/package-lock.json"), join(buildContext, "client/package-lock.json"));
-    copyFileSync(join(root, "scripts/tests/fixtures/direct-runner-os/Dockerfile"), join(buildContext, "Dockerfile"));
-    // Honor a managed environment's trusted CA without disabling TLS checks.
-    const ca = process.env.NODE_EXTRA_CA_CERTS;
-    const trust = ca ? ["--secret", `id=environment-ca,src=${ca}`] : [];
+
+    // Negative control at the real provisioning boundary: the actual builder
+    // must propagate a native failure before any scenario container can start.
+    const failingContext = mkdtempSync(join(tmpdir(), "direct-runner-os-failing-"));
+    writeFileSync(join(failingContext, "Dockerfile"), "FROM scratch\nCOPY absent-file /must-not-exist\n");
+    try {
+        const failedBuild = spawnSync("bash", [builder, `${image}-failure-control`, failingContext], {
+            cwd: root,
+            encoding: "utf8",
+            timeout: 30000,
+            maxBuffer: 5 * 1024 * 1024,
+        });
+        expect(failedBuild.error, output(failedBuild)).toBeUndefined();
+        expect(failedBuild.status, output(failedBuild)).not.toBe(0);
+        expectNoScenarioContainers();
+    } finally {
+        rmSync(failingContext, { recursive: true, force: true });
+    }
+
     // Image construction and fresh, unstarted containers share the original
     // provisioning budget. No acquisition runs before the per-case clock.
     const provisioningDeadline = performance.now() + 900000;
@@ -38,23 +65,36 @@ beforeAll(() => {
         if (remaining <= 0) throw new Error("Fixture provisioning deadline exceeded");
         return remaining;
     };
-    const build = spawnSync("bash", [
-        join(root, "scripts/tests/fixtures/direct-runner-os/build-fixture.sh"),
-        image,
-        buildContext,
-        ...trust,
-    ], {
-        cwd: root,
-        encoding: "utf8",
-        timeout: remainingProvisioning(),
-        maxBuffer: 20 * 1024 * 1024,
-    });
-    console.log(output(build));
-    expect(build.error).toBeUndefined();
-    expect(build.status).toBe(0);
-    expect(output(build)).toContain(
-        process.env.DIRECT_RUNNER_OS_CACHE_SCOPE ? "fixture-build cache=gha" : "fixture-build cache=local-default",
-    );
+
+    if (process.env.DIRECT_RUNNER_OS_PREBUILT_IMAGE) {
+        const inspect = spawnSync("docker", ["image", "inspect", image], { encoding: "utf8", timeout: 10000 });
+        expect(inspect.error, output(inspect)).toBeUndefined();
+        expect(inspect.status, output(inspect)).toBe(0);
+    } else {
+        buildContext = mkdtempSync(join(tmpdir(), "direct-runner-os-"));
+        mkdirSync(join(buildContext, "client"));
+        copyFileSync(join(root, "client/package-lock.json"), join(buildContext, "client/package-lock.json"));
+        copyFileSync(join(root, "scripts/tests/fixtures/direct-runner-os/Dockerfile"),
+            join(buildContext, "Dockerfile"));
+        // Honor a managed environment's trusted CA without disabling TLS checks.
+        const ca = process.env.NODE_EXTRA_CA_CERTS;
+        const trust = ca ? ["--secret", `id=environment-ca,src=${ca}`] : [];
+        const build = spawnSync("bash", [
+            builder,
+            image,
+            buildContext,
+            ...trust,
+        ], {
+            cwd: root,
+            encoding: "utf8",
+            timeout: remainingProvisioning(),
+            maxBuffer: 20 * 1024 * 1024,
+        });
+        console.log(output(build));
+        expect(build.error).toBeUndefined();
+        expect(build.status).toBe(0);
+        expect(output(build)).toContain("fixture-build cache=local-default");
+    }
     for (const scenario of scenarios) {
         const name = containerName(scenario);
         preparedContainers.add(name); // Reclaim our uniquely named partial create on failure, too.
