@@ -7,6 +7,7 @@ run_base="${UNIT_RUN_BASE:-true}"
 coverage_dir="../coverage/unit_and_integration"
 evidence_file=""
 shard_args=()
+reporter_args=()
 if [[ -n "$shard" ]]; then
   [[ "$shard" =~ ^([1-9][0-9]*)/([1-9][0-9]*)$ ]] || { echo "Invalid UNIT_SHARD: $shard" >&2; exit 64; }
   shard_index="${BASH_REMATCH[1]}"
@@ -15,13 +16,16 @@ if [[ -n "$shard" ]]; then
   coverage_dir="../coverage/unit-shard-${shard_index}"
   evidence_file="../unit-evidence/shard-${shard_index}.txt"
   mkdir -p "$(dirname "$evidence_file")"
-  npx vitest list --project unit --filesOnly --shard="$shard" | sed -n '/\.\(test\|spec\)\.\(js\|ts\|svelte\)$/p' | sort -u > "$evidence_file"
-  test -s "$evidence_file"
   shard_args+=("--shard=$shard")
+  reporter_args+=("--reporter=json" "--outputFile.json=$evidence_file.json")
 fi
 npx vitest run --project unit --coverage --reporter=github-actions --reporter=dot \
-  "${shard_args[@]}" --coverage.reportsDirectory="$coverage_dir"
+  "${shard_args[@]}" --coverage.reportsDirectory="$coverage_dir" \
+  "${reporter_args[@]}"
 test -s "$coverage_dir/coverage-final.json"
+if [[ -n "$evidence_file" ]]; then
+  node -e 'const fs=require("fs"); const input=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); const files=[...new Set(input.testResults.map(result=>result.name))].sort(); if(!files.length) process.exit(1); fs.writeFileSync(process.argv[2],files.join("\n")+"\n")' "$evidence_file.json" "$evidence_file"
+fi
 if [[ "$run_base" == true ]]; then
   npm run test:base
 elif [[ "$run_base" != false ]]; then

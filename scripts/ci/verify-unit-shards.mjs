@@ -9,9 +9,9 @@ const fullOutput = execFileSync(path.resolve("client/node_modules/.bin/vitest"),
     "--filesOnly"], { cwd: path.resolve("client"), encoding: "utf8", env: { ...process.env, NODE_ENV: "test" } });
 const normalize = (text) =>
     [...new Set(
-        text.split(/\r?\n/).map((line) => line.trim()).filter((line) =>
-            /\.(?:test|spec)\.(?:js|ts|svelte)$/.test(line)
-        ),
+        text.split(/\r?\n/).map((line) =>
+            line.trim().replace(/^\[unit\]\s+/, "").replace(`${path.resolve("client")}${path.sep}`, "")
+        ).filter((line) => /\.(?:test|spec)\.(?:js|ts|svelte)$/.test(line)),
     )].sort();
 const full = normalize(fullOutput);
 const selected = [];

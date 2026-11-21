@@ -20,7 +20,7 @@ describe("unit CI native shard orchestration", () => {
         expect(workflow.jobs["unit-test"].steps.find((step: any) => step.name.includes("Reject")).run)
             .toContain('test "$SHARD_RESULT" = success');
         expect(packageJson.scripts["github:test:unit"]).toBe("bash ../scripts/ci/run-unit-tests.sh");
-        expect(runner).toContain("vitest list --project unit --filesOnly --shard");
+        expect(runner).toContain("--reporter=json --outputFile.json");
         expect(runner).toContain("vitest run --project unit --coverage");
     });
 
