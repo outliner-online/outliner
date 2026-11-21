@@ -128,6 +128,11 @@ test("a delayed hosted build consumes the same monotonic deadline as container p
         "Start controlled shared provisioning deadline",
     );
     const build = findStep(e2e, "direct-runner-os-provisioning-deadline", "Build deliberately delayed fixture");
+    const acquisition = findStep(
+        e2e,
+        "direct-runner-os-provisioning-deadline",
+        "Acquisition must stay blocked after deadline expiry",
+    );
     const verification = findStep(
         e2e,
         "direct-runner-os-provisioning-deadline",
@@ -135,13 +140,21 @@ test("a delayed hosted build consumes the same monotonic deadline as container p
     );
 
     expect(job.steps.indexOf(deadline)).toBeLessThan(job.steps.indexOf(build));
-    expect(deadline.run).toContain("time.monotonic_ns() + 1_000_000_000");
+    expect(deadline.run).toContain("time.monotonic_ns() + 5_000_000_000");
+    expect(deadline.run).toContain("observe-build.py");
     expect(build.uses).toBe("./.github/actions/bounded-buildx");
     expect(build.with.context).toBe("scripts/tests/fixtures/direct-runner-os/deadline-control");
+    expect(build.with.network).toBe("host");
+    expect(build.with["no-cache"]).toBe(true);
     expect(build["continue-on-error"]).toBe(true);
+    expect(acquisition.if).toBe("steps.delayed-build.outcome == 'success'");
+    expect(acquisition.run).toContain("unexpected-scenario-launch");
+    expect(acquisition.run).toContain("env-direct-runner-os-acquisition-5921b0ad.spec.ts");
     expect(verification.env.BUILD_OUTCOME).toBe("${{ steps.delayed-build.outcome }}");
     expect(verification.run).toContain('test "$BUILD_OUTCOME" = failure');
-    expect(verification.run).toContain('e.outcome!=="deadline"||e.terminated!==true');
+    expect(verification.run).toContain('evidence.outcome !== "deadline"');
+    expect(verification.run).toContain('"event": "client-closed"');
+    expect(verification.run).toContain('"event": "natural-completion"');
     expect(verification.run).toContain("test ! -e job_logs/unexpected-scenario-launch");
 });
 
@@ -181,10 +194,12 @@ test("bounded hosted fixture entry point terminates its owned process group at t
     const evidence = path.join(temporary, "evidence.json");
     const terminated = path.join(temporary, "terminated");
     const scenario = path.join(temporary, "scenario-launched");
+    const argumentsFile = path.join(temporary, "arguments");
     fs.mkdirSync(bin);
     fs.writeFileSync(
         path.join(bin, "docker"),
         `#!/usr/bin/env bash
+printf '%s\n' "$@" > "${argumentsFile}"
 trap 'printf terminated > "${terminated}"; exit 143' TERM
 sleep 30 &
 wait
@@ -204,8 +219,10 @@ printf launched > "${scenario}"
                 INPUT_CONTEXT: ".",
                 INPUT_TAGS: "bounded-control:test",
                 INPUT_LOAD: "true",
-                INPUT_EVIDENCE_FILE: evidence,
-                INPUT_CLEANUP_GRACE_SECONDS: "1",
+                "INPUT_CACHE-FROM": "type=gha,scope=bounded-control",
+                "INPUT_CACHE-TO": "type=gha,mode=max,scope=bounded-control",
+                "INPUT_EVIDENCE-FILE": evidence,
+                "INPUT_CLEANUP-GRACE-SECONDS": "1",
             },
             stdio: "pipe",
         });
@@ -217,6 +234,8 @@ printf launched > "${scenario}"
     expect(status).not.toBe(0);
     expect(elapsedMs).toBeLessThan(2_000);
     expect(fs.readFileSync(terminated, "utf8")).toBe("terminated");
+    expect(fs.readFileSync(argumentsFile, "utf8")).toContain("type=gha,scope=bounded-control");
+    expect(fs.readFileSync(argumentsFile, "utf8")).toContain("type=gha,mode=max,scope=bounded-control");
     expect(fs.existsSync(scenario), "a terminated fixture build must never launch a scenario").toBe(false);
     expect(JSON.parse(fs.readFileSync(evidence, "utf8"))).toMatchObject({
         outcome: "deadline",

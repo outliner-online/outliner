@@ -133,13 +133,25 @@ jobs:
       - name: Enable fixture builder
         uses: docker/setup-buildx-action@v4
       - name: Start controlled shared provisioning deadline
-        shell: python
+        shell: bash
         run: |
+          set -euo pipefail
+          mkdir -p job_logs
+          RUNNER_TRACKING_ID= nohup python3 scripts/tests/fixtures/direct-runner-os/deadline-control/observe-build.py \
+            job_logs/delayed-build-observer.json > job_logs/delayed-build-observer.log 2>&1 &
+          echo "$!" > job_logs/delayed-build-observer.pid
+          for attempt in {1..100}; do
+            grep -q '"event": "observer-ready"' job_logs/delayed-build-observer.json && break
+            sleep .1
+          done
+          grep -q '"event": "observer-ready"' job_logs/delayed-build-observer.json
+          python3 - <<'PY'
           import os
           import time
-          deadline = time.monotonic_ns() + 1_000_000_000
+          deadline = time.monotonic_ns() + 5_000_000_000
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
               env.write(f"DIRECT_RUNNER_OS_PROVISIONING_DEADLINE_NS={deadline}\n")
+          PY
       - name: Build deliberately delayed fixture
         id: delayed-build
         continue-on-error: true
@@ -148,14 +160,35 @@ jobs:
           context: scripts/tests/fixtures/direct-runner-os/deadline-control
           load: true
           tags: outliner-direct-os-regression:deadline-control
+          network: host
+          no-cache: true
+      - name: Acquisition must stay blocked after deadline expiry
+        if: steps.delayed-build.outcome == 'success'
+        run: |
+          touch job_logs/unexpected-scenario-launch
+          DIRECT_RUNNER_OS_PREBUILT_IMAGE=outliner-direct-os-regression:deadline-control \
+            bash scripts/run-env-tests.sh --isolated env-direct-runner-os-acquisition-5921b0ad.spec.ts
       - name: Verify deadline failure blocked every scenario
         if: always()
         env:
           BUILD_OUTCOME: ${{ steps.delayed-build.outcome }}
         run: |
           set -euo pipefail
+          trap 'kill "$(cat job_logs/delayed-build-observer.pid)" 2>/dev/null || true' EXIT
           test "$BUILD_OUTCOME" = failure
-          node -e 'const e=require("./job_logs/direct-runner-fixture-build.json"); if(e.outcome!=="deadline"||e.terminated!==true) process.exit(1)'
+          for attempt in {1..100}; do
+            grep -q '"event": "client-closed"' job_logs/delayed-build-observer.json && break
+            sleep .1
+          done
+          node - <<'NODE'
+          const fs = require("node:fs");
+          const evidence = require("./job_logs/direct-runner-fixture-build.json");
+          const events = fs.readFileSync("job_logs/delayed-build-observer.json", "utf8");
+          const elapsedNs = BigInt(evidence.endedNs) - BigInt(evidence.startedNs);
+          if (evidence.outcome !== "deadline" || evidence.terminated !== true || elapsedNs > 15_000_000_000n) process.exit(1);
+          if (!events.includes('"event": "build-started"') || !events.includes('"event": "client-closed"')) process.exit(1);
+          if (events.includes('"event": "natural-completion"')) process.exit(1);
+          NODE
           test ! -e job_logs/unexpected-scenario-launch
 
   artifact-roundtrip:

@@ -7,7 +7,8 @@ if (!/^\d+$/.test(deadlineText ?? "")) {
     throw new Error("DIRECT_RUNNER_OS_PROVISIONING_DEADLINE_NS must be a monotonic nanosecond deadline");
 }
 
-const input = (name) => process.env[`INPUT_${name.toUpperCase().replaceAll("-", "_")}`] ?? "";
+// The runner preserves hyphens in INPUT_* names; only spaces become underscores.
+const input = (name) => process.env[`INPUT_${name.toUpperCase().replaceAll(" ", "_")}`] ?? "";
 const deadline = BigInt(deadlineText);
 const graceMs = Number.parseInt(input("cleanup-grace-seconds"), 10) * 1_000;
 if (!Number.isSafeInteger(graceMs) || graceMs < 0) throw new Error("cleanup-grace-seconds must be non-negative");
@@ -17,6 +18,8 @@ if (input("file")) args.push("--file", input("file"));
 if (input("load") === "true") args.push("--load");
 if (input("cache-from")) args.push("--cache-from", input("cache-from"));
 if (input("cache-to")) args.push("--cache-to", input("cache-to"));
+if (input("network")) args.push("--network", input("network"));
+if (input("no-cache") === "true") args.push("--no-cache");
 args.push(input("context"));
 
 const evidencePath = input("evidence-file");
