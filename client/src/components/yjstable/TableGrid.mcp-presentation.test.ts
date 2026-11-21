@@ -225,6 +225,69 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
         }
         expect(getGridProjection(grid.gridId)).toMatchObject({ status: "unavailable" });
     });
+
+    it("keeps physical UNION fields occurrence-aligned across accepted results", { timeout: 60000 }, async () => {
+        fixture.projectDoc.destroy();
+        const projectDoc = new Y.Doc({ guid: "grid-projection-physical-union" });
+        const choices = getTableHandles(projectDoc, createTable(projectDoc, "Choices", "choices"))!;
+        const notes = getTableHandles(projectDoc, createTable(projectDoc, "Notes", "notes"))!;
+        setSchemaText(choices, "CREATE TABLE choices (id TEXT PRIMARY KEY, observed_on DATE NOT NULL)");
+        setSchemaText(notes, "CREATE TABLE notes (id TEXT PRIMARY KEY, observed_at TIMESTAMP NOT NULL)");
+        addRecord(choices, { observed_on: "2026-11-21" }, "same");
+        addRecord(notes, { observed_at: "2026-11-22 12:34:56" }, "same");
+        const grid = getGridHandles(
+            projectDoc,
+            createGrid(projectDoc, {
+                name: "Physical fields",
+                query: "SELECT 'choices' AS source_kind, id AS source_id, observed_on AS value FROM choices "
+                    + "UNION ALL SELECT 'notes' AS source_kind, id AS source_id, observed_at AS value FROM notes "
+                    + "ORDER BY source_kind",
+            }),
+        )!;
+        setGridComponentField(grid, "source_kind", "hidden", true);
+        setGridComponentField(grid, "source_id", "hidden", true);
+        const view = render(ProjectGridView, { props: { grid, projectDoc } });
+        try {
+            await waitFor(() => expect(view.container.querySelectorAll("tbody tr")).toHaveLength(2), {
+                timeout: 30000,
+            });
+            const choiceValue = view.container.querySelector(
+                "tr[data-record-id='choices:same'] td[data-col='value']",
+            )!;
+            const noteValue = view.container.querySelector(
+                "tr[data-record-id='notes:same'] td[data-col='value']",
+            )!;
+            await waitFor(() => expect(choiceValue.querySelector("input[type='date']")).toHaveValue("2026-11-21"));
+            expect(noteValue.querySelector("button")).toHaveTextContent("2026-11-22T12:34:56.000Z");
+            await waitFor(() =>
+                expect(getGridProjection(grid.gridId)).toMatchObject({
+                    status: "ready",
+                    projection: {
+                        rows: [[{ value: "2026-11-21" }], [{ value: "2026-11-22T12:34:56.000Z" }]],
+                    },
+                })
+            );
+
+            setRecordValue(choices, "same", "observed_on", "2026-11-25");
+            setRecordValue(notes, "same", "observed_at", "2026-11-26 04:05:06");
+            await waitFor(() => expect(choiceValue.querySelector("input[type='date']")).toHaveValue("2026-11-25"));
+            await waitFor(() =>
+                expect(noteValue.querySelector("button")).toHaveTextContent("2026-11-26T04:05:06.000Z")
+            );
+            await waitFor(() =>
+                expect(getGridProjection(grid.gridId)).toMatchObject({
+                    status: "ready",
+                    projection: {
+                        rows: [[{ value: "2026-11-25" }], [{ value: "2026-11-26T04:05:06.000Z" }]],
+                    },
+                })
+            );
+        } finally {
+            view.unmount();
+            projectDoc.destroy();
+        }
+    });
+
     it("round-trips Japanese labels, visibility, exact column identities and SQL row order in two placements", async () => {
         const first = await mount();
         const second = await mount();
