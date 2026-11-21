@@ -38,7 +38,12 @@ beforeAll(() => {
         if (remaining <= 0) throw new Error("Fixture provisioning deadline exceeded");
         return remaining;
     };
-    const build = spawnSync("docker", ["build", ...trust, "-t", image, buildContext], {
+    const build = spawnSync("bash", [
+        join(root, "scripts/tests/fixtures/direct-runner-os/build-fixture.sh"),
+        image,
+        buildContext,
+        ...trust,
+    ], {
         cwd: root,
         encoding: "utf8",
         timeout: remainingProvisioning(),
@@ -47,6 +52,9 @@ beforeAll(() => {
     console.log(output(build));
     expect(build.error).toBeUndefined();
     expect(build.status).toBe(0);
+    expect(output(build)).toContain(
+        process.env.DIRECT_RUNNER_OS_CACHE_SCOPE ? "fixture-build cache=gha" : "fixture-build cache=local-default",
+    );
     for (const scenario of scenarios) {
         const name = containerName(scenario);
         preparedContainers.add(name); // Reclaim our uniquely named partial create on failure, too.

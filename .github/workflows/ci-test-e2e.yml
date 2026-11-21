@@ -33,10 +33,16 @@ jobs:
           node-version: '22'
       - name: Install ENV test dependencies
         run: npm ci --prefix scripts/tests --include=dev --no-audit --no-fund
+      - name: Enable fixture layer cache
+        uses: docker/setup-buildx-action@v4
       - name: Verify mirror-only control and owned-child cleanup
         run: python3 -m unittest discover -s scripts/tests -p 'test_ubuntu_mirror*.py' -v
       - name: Exercise real isolated package acquisition
         shell: bash
+        env:
+          # Cache only image provisioning. Every acquisition scenario still
+          # starts from its own fresh container below this boundary.
+          DIRECT_RUNNER_OS_CACHE_SCOPE: direct-runner-os-fixture-v1
         run: |
           set -euo pipefail
           mkdir -p job_logs
