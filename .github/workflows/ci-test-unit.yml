@@ -1,15 +1,17 @@
 name: Test Unit
-
 on:
   workflow_call:
   workflow_dispatch:
-
 concurrency:
   group: unit-${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
   cancel-in-progress: true
-
 jobs:
-  unit-test:
+  unit-shard:
+    name: unit shard ${{ matrix.shard }} of 2
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/${{ github.repository }}:latest
@@ -20,24 +22,20 @@ jobs:
     permissions:
       packages: read
       contents: read
-      pull-requests: write
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
         with:
           clean: true
-
       - name: Setup Test Environment
         uses: ./.github/actions/setup-test-env
-
-      - name: Run unit tests
+      - name: Run unit test shard
         shell: bash
         run: |
           set -o pipefail
-          mkdir -p job_logs
+          mkdir -p job_logs unit-evidence
           cd client
-          npm run github:test:unit 2>&1 | tee -a ../job_logs/unit-test.log
+          npm run github:test:unit 2>&1 | tee -a ../job_logs/unit-test-shard-${UNIT_SHARD_INDEX}.log
         env:
           CI: true
           NODE_ENV: test
@@ -45,19 +43,54 @@ jobs:
           DISPLAY: :99
           DISABLE_POSTHOG: true
           VITE_DISABLE_FLUID_TELEMETRY: true
-
+          UNIT_SHARD: ${{ matrix.shard }}/2
+          UNIT_SHARD_INDEX: ${{ matrix.shard }}
+          UNIT_RUN_BASE: ${{ matrix.shard == 1 && 'true' || 'false' }}
+      - name: Upload shard evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-shard-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            job_logs/unit-test-shard-${{ matrix.shard }}.log
+            unit-evidence/shard-${{ matrix.shard }}.txt
+            coverage/unit-shard-${{ matrix.shard }}/coverage-final.json
+          archive: true
+          if-no-files-found: error
+          retention-days: 2
+  # Callers expose this stable job id/name as `unit-test / unit-test`.
+  unit-test:
+    name: unit-test
+    if: always()
+    needs: unit-shard
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    timeout-minutes: 10
+    permissions:
+      packages: read
+      contents: read
+      actions: read
+      pull-requests: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+      - name: Reject failed or cancelled shards
+        env:
+          SHARD_RESULT: ${{ needs.unit-shard.result }}
+        run: test "$SHARD_RESULT" = success
+      - name: Download current-attempt shard evidence
+        uses: actions/download-artifact@v8
+        with:
+          pattern: unit-shard-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: unit-artifacts
+      - name: Verify complete selection and merge coverage
+        run: node scripts/ci/verify-unit-shards.mjs unit-artifacts 2
       - name: Summarise failures
         if: failure()
         run: |
-          echo "## ❌ Unit Test Failed" >> $GITHUB_STEP_SUMMARY
-          if [ -f "job_logs/unit-test.log" ]; then
-             grep -E -A1 -B0 "FAIL|FAILED" "job_logs/unit-test.log" >> $GITHUB_STEP_SUMMARY || true
-          fi
-
-      - name: Upload logs
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: unit-test-logs
-          path: job_logs/
-          retention-days: 2
+          echo "## ❌ Unit Test Failed" >> "$GITHUB_STEP_SUMMARY"
+          find unit-artifacts -name '*.log' -type f -exec grep -E -A1 -B0 'FAIL|FAILED' {} \; >> "$GITHUB_STEP_SUMMARY" || true
