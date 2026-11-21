@@ -192,7 +192,7 @@ class ServerBoundaryTest(unittest.TestCase):
         self.assertNotIn('pretest',package['scripts'])
         self.assertNotIn('posttest',package['scripts'])
         self.assertIn('npm run test:prepared',execution['run'])
-        old=subprocess.check_output(['git','show','30f1495475a2c1a48c2750360bacfd3509372199:scripts/run-server-tests.sh'],cwd=ROOT,text=True)
+        old=(ROOT/'scripts/tests/fixtures/ci-duration/server-command-baseline.sh').read_text()
         actual=(ROOT/'scripts/run-server-test-command.sh').read_text()
         self.assertEqual(old[old.index('cd "$ROOT_DIR/server"'):],actual[actual.index('cd "$ROOT_DIR/server"'):])
         self.assertNotIn('bash scripts/setup.sh',actual)
