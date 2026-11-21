@@ -230,6 +230,19 @@ export function projectKanbanRoute(projectName: string, kanbanId: string): Resol
     return resolve("/[project]/-/kanbans/[kanbanId]", { project: encodeURIComponent(projectName), kanbanId: id });
 }
 
+/** A stable Kanban identity with an explicit version-1 board observation context. */
+export function projectKanbanObservationRoute(
+    projectName: string,
+    kanbanId: string,
+    locale: string,
+    timeZone: string,
+): ResolvedPathname {
+    const query = `?surface=board&version=1&locale=${encodeURIComponent(locale)}&timeZone=${
+        encodeURIComponent(timeZone)
+    }`;
+    return `${projectKanbanRoute(projectName, kanbanId)}${query}`;
+}
+
 /** The Calendar list as a typed SvelteKit resolution. */
 export function projectCalendarsRoute(projectName: string): ResolvedPathname {
     if (isPublicProject(projectName)) {

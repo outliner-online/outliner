@@ -14,12 +14,17 @@ import { type KanbanCard, type KanbanProjection, KanbanQueryRunner } from "../..
 import { KanbanCardOperationController, type KanbanCardOperationState } from "../../services/yjstable/kanbanCardOperations";
 import { globalUndoRouter } from "../../services/undo/undoRouter.svelte";
 import type { TableRecordValue } from "../../services/yjstable/tableDocs";
+import {
+    kanbanDisplayedValue,
+    nonReadyKanbanProjection,
+    type KanbanObservationContextV1,
+} from "../../../../shared/src/notifications/kanbanProjection";
 import SqlEditor from "../yjstable/SqlEditor.svelte";
 
 interface SqlEditorHandle { getValue(): string; }
 
-interface Props { projectDoc: Y.Doc; projectId?: string; kanban: KanbanHandles; isReadOnly?: boolean; }
-let { projectDoc, projectId, kanban, isReadOnly = false }: Props = $props();
+interface Props { projectDoc: Y.Doc; projectId?: string; kanban: KanbanHandles; isReadOnly?: boolean; context?: KanbanObservationContextV1; }
+let { projectDoc, projectId, kanban, isReadOnly = false, context }: Props = $props();
 // Props are immutable for this mounted lifetime: the parent keys by identity.
 // svelte-ignore state_referenced_locally
 let committed = $state<KanbanSettings>(getKanban(projectDoc, kanban.kanbanId)!);
@@ -29,7 +34,13 @@ let draft = $state<KanbanSettings>({ ...committed, detailFields: [...committed.d
 let baseline = $state<KanbanSettings>({ ...draft, detailFields: [...draft.detailFields], laneOrder: [...draft.laneOrder] });
 // svelte-ignore state_referenced_locally
 let queryDraft = $state(committed.query);
-let projection = $state<KanbanProjection>({ status: "loading", lanes: [], columns: [], current: false });
+let projection = $state<KanbanProjection>({
+    status: "loading",
+    lanes: [],
+    columns: [],
+    current: false,
+    visible: nonReadyKanbanProjection("Kanban query is loading"),
+});
 let editing = $state(false);
 let conflict = $state<string | undefined>();
 let runner: KanbanQueryRunner | undefined;
@@ -73,19 +84,6 @@ function apply() {
     updateKanban(projectDoc, kanban.kanbanId, updates);
     refresh(); editing = false; conflict = undefined;
 }
-function laneLabel(value: string | null): string {
-    if (value === null) return "SQL NULL";
-    if (value === "") return "Empty string";
-    if (/^\s+$/.test(value)) return `Whitespace (${value.length})`;
-    return value;
-}
-function laneKindLabel(value: string | null): string {
-    if (value === null) return "SQL NULL value";
-    if (value === "") return "Empty string value";
-    return "Text value";
-}
-function display(value: unknown): string { return value === null ? "NULL" : value === undefined ? "" : String(value); }
-
 function fieldValue(text: string, card: KanbanCard, field: string): TableRecordValue | undefined {
     const column = runner?.columnSchema(card, field);
     if (!column) return undefined;
@@ -103,7 +101,7 @@ function beginFieldEdit(card: KanbanCard, field: string) {
         sourceKind: card.sourceIdentity.kind,
         sourceId: card.sourceIdentity.id,
         field,
-        value: display(card.row[field]),
+        value: kanbanDisplayedValue(card.row[field]),
     };
 }
 function isEditing(card: KanbanCard, field: string): boolean {
@@ -152,7 +150,7 @@ onMount(() => {
     retainKanbanUndoManager(kanban.entry);
     kanban.entry.observeDeep(observer);
     void Promise.resolve().then(() => {
-        runner = new KanbanQueryRunner({ projectDoc, projectId, kanbanId: kanban.kanbanId, kanban });
+        runner = new KanbanQueryRunner({ projectDoc, projectId, kanbanId: kanban.kanbanId, kanban, context });
         operations = new KanbanCardOperationController({
             resolver: session,
             schema: sourceKind => runner?.schemaForSource(sourceKind),
@@ -208,18 +206,20 @@ onDestroy(() => { operations?.cancel(); kanban.entry.unobserveDeep(observer); ru
         <p class="diagnostic" role="alert" data-testid={`kanban-${projection.status}`}>{projection.message ?? "Board unavailable"}</p>
     {:else if !projection.current}
         <p class="diagnostic" role="status">Showing a non-current result while the board refreshes.</p>
-    {:else if projection.lanes.every(lane => lane.cards.length === 0)}
+    {:else if projection.lanes.length === 0}
         <p data-testid="kanban-empty">The query returned no cards.</p>
     {:else}
         {#if operationState === "pending"}<p role="status">Card change pending…</p>{/if}
         {#if operationMessage}<p class="error" role="alert" data-testid="kanban-operation-message">{operationMessage}</p>{/if}
         <div class="lanes" data-testid="kanban-lanes">
             {#each projection.lanes as lane, laneIndex (`${lane.key === null ? "null" : `string:${lane.key}`}:${laneIndex}`)}
+                {@const visibleLane = projection.visible?.status === "ready" ? projection.visible.content.lanes[laneIndex] : undefined}
                 <section class="lane" role="list" data-lane-kind={lane.key === null ? "null" : lane.key === "" ? "empty" : "string"}
                     ondragover={event => { if (dragged) { event.preventDefault(); event.stopPropagation(); } }}
                     ondrop={event => dropCard(event, lane.key)}>
-                    <h2><span>{laneLabel(lane.key)}</span><span class="lane-kind">{laneKindLabel(lane.key)}</span></h2>
-                    {#each lane.cards as card (card.occurrenceKey)}
+                    <h2><span>{visibleLane?.label}</span><span class="lane-kind">{visibleLane?.kindLabel}</span></h2>
+                    {#each lane.cards as card, cardIndex (card.occurrenceKey)}
+                        {@const visibleCard = visibleLane?.cards[cardIndex]}
                         <article class="card" data-card-occurrence={card.occurrenceKey}>
                             <button class="drag-handle" type="button" draggable={!isReadOnly} aria-label="Move card"
                                 ondragstart={event => beginDrag(event, card, lane.key)} ondragend={endDrag}>↕</button>
@@ -229,17 +229,17 @@ onDestroy(() => { operations?.cancel(); kanban.entry.unobserveDeep(observer); ru
                                         <input aria-label={`Edit ${committed.titleField}`} bind:value={editingCard.value} onkeydown={event => { if (event.key === "Enter") void commitFieldEdit(); if (event.key === "Escape") { operations?.cancel(); editingCard = undefined; } }} onpointerdown={ownInput} onclick={ownInput} />
                                         <button type="button" onclick={() => void commitFieldEdit()}>Save</button>
                                     {:else}
-                                        <button class="field-value" type="button" aria-label={`Edit ${committed.titleField}`} disabled={isReadOnly} onclick={() => beginFieldEdit(card, committed.titleField!)}>{display(card.row[committed.titleField]) || "Untitled"}</button>
+                                        <button class="field-value" type="button" aria-label={`Edit ${committed.titleField}`} disabled={isReadOnly} onclick={() => beginFieldEdit(card, committed.titleField!)}>{visibleCard?.title}</button>
                                     {/if}
                                 </h3>
                             {:else}<h3>Untitled</h3>{/if}
-                            {#each committed.detailFields as field (field)}
-                                <div class="detail"><strong>{field}</strong>:
+                            {#each committed.detailFields as field, detailIndex (field)}
+                                <div class="detail"><strong>{visibleCard?.details[detailIndex]?.label}</strong>:
                                     {#if isEditing(card, field) && editingCard}
                                         <input bind:value={editingCard.value} onkeydown={event => { if (event.key === "Enter") void commitFieldEdit(); if (event.key === "Escape") { operations?.cancel(); editingCard = undefined; } }} onpointerdown={ownInput} onclick={ownInput} />
                                         <button type="button" onclick={() => void commitFieldEdit()}>Save</button>
                                     {:else}
-                                        <button class="field-value" type="button" disabled={isReadOnly} onclick={() => beginFieldEdit(card, field)}>{display(card.row[field])}</button>
+                                        <button class="field-value" type="button" disabled={isReadOnly} onclick={() => beginFieldEdit(card, field)}>{visibleCard?.details[detailIndex]?.value}</button>
                                     {/if}
                                 </div>
                             {/each}
