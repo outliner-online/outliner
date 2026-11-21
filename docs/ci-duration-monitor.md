@@ -1,142 +1,122 @@
 # CI duration review issues
 
-The **CI Duration Monitor** workflow runs daily at **21:43 UTC (06:43 JST)**.
-It reads completed GitHub Actions attempts and submits an English improvement
-issue when a job's runner execution reaches **600 seconds or more**. GitHub may
-start a scheduled workflow later than its cron time.
+The **CI Duration Monitor** runs daily at **21:43 UTC (06:43 JST)**. It retains
+job, queue, command and longest-step timings, but creates an improvement issue
+only for a recurring, verified test-work slowdown. Scheduled runs can start late.
 
-## What the monitor measures
+## Automatic issue eligibility
 
-The threshold is `completed_at - started_at` for an actual job, including its
-setup, test commands and cleanup. Runner queue time is reported separately and
-does not contribute to the threshold. Successful, failed and timed-out completed
-jobs can supply evidence; cancelled, skipped and unfinished jobs do not.
+All of these conditions must hold:
 
-The default scan discovers runs **created during the preceding 48 hours**, which
-overlaps consecutive daily scans. Each run attempt is inspected separately, and
-paginated jobs are read from that attempt. GitHub can retain an earlier successful
-job's execution timestamps in a later attempt view while giving that row a newer
-creation timestamp; its queue duration is unknown rather than negative or zero.
-Such an attempt row is not evidence of a fresh execution, and the original job
-completion timestamp remains the authority for whether an observation is newer
-than an issue's closure. Detection considers every eligible observation in the scan window. Issue evidence
-shows the latest five observations per logical family, plus an older qualifying
-observation when needed to explain the trigger. A qualifying observation opens an
-issue without requiring multiple slow days.
+1. GitHub verifies the repository identity and current default branch SHA. The
+   observed execution is a `push`, `schedule` or `workflow_dispatch` on that
+   branch in that repository. Feature-branch and PR runs remain diagnostic.
+2. The configured workflow is active at its exact path. Its current YAML declares
+   the exact observed job/variant, including local reusable workflows and static
+   matrix expansion. Workflow display names alone confer no authority. Dynamic
+   matrices and unsupported matrix include/exclude rules remain diagnostic.
+3. The configured native measurement adapter applies to the actual job's declared
+   test step. The workflow chain and declared implementation source files at the
+   observed SHA are byte-identical to the verified default-branch sources.
+4. The job and matched test steps succeed with complete timings. Command elapsed
+   time reaches **600 seconds** and at least half of runner execution. Setup,
+   dependency acquisition, builds, failed startup, skipped tests, incomplete
+   commands, queue time and workflow totals cannot qualify on their own.
+5. A supported native report demonstrates at least **600 seconds of test work**
+   in multiple test files. Native timings are separate from command elapsed time.
+   Unknown formats, unavailable logs, retries, failures and skipped tests remain
+   diagnostic. Summed native test durations can overlap under parallel execution;
+   they describe work, not a predicted end-to-end saving or proof of a safe split.
+6. At least **two distinct runs of the same job variant** meet these conditions.
+   Different shards, retries and retained rows in later attempts do not establish
+   recurrence. Every observed family member is evaluated, including a slow test
+   job whose total is shorter than a sibling delayed by setup.
 
-A workflow's total time can exceed ten minutes because of dependency ordering,
-queueing or aggregation even when its individual jobs remain shorter. Those
-workflow totals remain diagnostic evidence; they do not create job-splitting
-issues by themselves. Missing timestamps remain unknown.
+## Profiles and measurements
 
-The test-command step duration is an indicator for investigation. It can include
-fixture setup, retries and harness work inside the command. It is not a native
-pytest, Mocha, Vitest or Playwright phase measurement. The issue asks reviewers to
-inspect native durations and distinguish test work from dependency acquisition
-before choosing a split or setup optimization.
+[`.github/ci-duration-monitor.json`](../.github/ci-duration-monitor.json) declares
+families, exact entrypoints and the measurement adapter. The actual current
+workflow inventory is an additional gate, not a regex fallback.
 
-## Monitored workflows and job families
+| Entrypoint                                                                            | Native measurement policy                                                                                                                                                                         |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Main CI and direct manual unit/integration workflows                                  | `vitest`: successful native test/file counts and the native `tests` duration, excluding transform/setup/collection/environment timings. Single-file summary blocks contribute no qualifying work. |
+| Main CI and direct manual Chromium/Firefox E2E workflows                              | `playwright`: one complete passing list-reporter summary, matching individual native test timings across distinct spec files, without retries. Line-only or unrecognized output stays diagnostic. |
+| On-premises Compose and schedule Hosting page/service contracts                       | The same `playwright` rule applies to their actual declared verification step; startup/build time inside a wrapper alone cannot qualify. A single spec remains diagnostic.                        |
+| Server, canonical project-directory, devcontainer probe and container-tool validation | `diagnostic`: their current Mocha/probe/tool entrypoints do not expose the supported independent-file native timing format. Retain evidence until a verified measurement adapter is available.    |
+| Unconfigured build, lint, guard or historical job variants                            | Diagnostic only; a fallback family preserves its exact job name and timings.                                                                                                                      |
 
-[`.github/ci-duration-monitor.json`](../.github/ci-duration-monitor.json) is the
-explicit monitoring configuration. It includes the main `CI` workflow, manually
-invoked unit/integration/server/E2E workflows, on-premises Compose tests,
-devcontainer Firebase smoke, test-container validation, and both schedule Hosting
-contract workflows. Deployment, image publication and the monitor itself are
-outside this configuration.
+Manual invocation is therefore eligible when it uses a supported current
+entrypoint on the default branch and supplies recurring native evidence. There
+is no blanket manual/support-workflow exclusion. Adding a future adapter must
+include real reporter fixtures and actual entrypoint verification.
 
-The main workflow invokes reusable test workflows, so GitHub names jobs such as
-`unit-test / unit-test` and `e2e-test / e2e-test (new-2-1)`. The configuration
-recognizes these names as well as direct manual runs. Chromium E2E shards share
-one family, while Firefox E2E shards have a separate family. The existing
-`new-2`, `new-3` and `tables` partitions therefore do not each create duplicate
-issues for the same browser suite. Unit, integration, server and canonical
-project-directory tests remain separate.
+The original owner-closed examples remain diagnostic: Firefox dependency setup
+failed after 700s without executing tests (#5998); Compose spent 376s installing
+Playwright versus 268s in verification (#5999); the Hosting contracts spent 553s
+and 595s acquiring dependencies versus 41s and 34s verifying (#6000/#6001). The
+649s image build in #6003 belonged to an unsuccessful, retired PR prototype named
+`Prepared runtime smoke (not E2E migration)`, absent from the current workflow.
+These are not five independent recurring test-work optimizations. Cross-family
+steps taking at least 300s are grouped as `shared_setup_diagnostics` when seen in
+multiple families and runs. That grouping is retained evidence, never an issue.
 
-Other job names in a monitored workflow use their exact name as a fallback
-family. Independent build, lint and guard jobs consequently retain independent
-issues. Add explicit family expressions only for jobs that really share one
-bounded test or work selection. Review both the job expression and the
-`test_step_pattern`: a build step named "Build test image" is still a build.
+## Discovery, closure and submission recovery
 
-## Issue handoff and recovery
+The default scan discovers completed runs **created in the preceding 48 hours**,
+inspects every attempt and paginates jobs separately. The report retains unknown
+queue times when GitHub supplies an out-of-order creation/start interval. The
+original job completion remains authoritative; a retained attempt row is not a
+new execution. Run search truncation fails explicitly.
 
-The monitor uses the `ci-duration-monitor` label plus durable hidden identity and
-evidence markers. The identity includes the repository, workflow and logical
-family. Overlapping scans reuse an open issue instead of creating another issue
-for each shard or rerun. New evidence is added in comments, preserving the
-reviewers' issue body, Objective and Requirements.
+The existing repository/workflow/family identity marker and
+`ci-duration-monitor` label deduplicate open issues across overlapping scans.
+Reviewer-edited bodies and consumed `review-ready` labels remain preserved.
+New evidence is appended in comments. Creation, durable identity comment and
+final `review-ready` submission remain separate operations; mutation failures
+are never blindly retried.
 
-A new issue is created with its complete body, then receives a durable identity
-comment, and **`review-ready` is added in a separate final submission operation**.
-The repository must already provide that readiness label. The monitor can create
-its own `ci-duration-monitor` label when needed. Readiness is not attached to a
-partially created specification.
+Closed issues stay closed. A later issue requires **two new qualifying runs
+completed after the latest closure**; identical later setup failures or retired
+variants cannot recreate or reopen the closed issue. Genuinely new actionable
+regressions remain eligible without permanent family suppression.
 
-If publication is interrupted, the next scan reconciles the existing issue and
-comments before continuing. An unfinished submission can recover from its retained
-complete specification and evidence even after the original run ages out of the
-48-hour discovery window. If reviewers have changed an unfinished issue into an
-incomplete specification, the monitor withholds `review-ready` until that
-specification is complete. A lost response does not authorize blindly repeating
-an issue creation. A previously applied `review-ready` label is recognized from
-the issue events even if reviewers have since removed it; the monitor does not
-put a consumed label back. A closed issue is retained, and only new qualifying
-observations completed after its closure can start another issue for that family.
+Only submissions carrying the new policy receipt for the currently verified
+source SHA may recover readiness from retained evidence after runs age out.
+Legacy total-duration submissions cannot bypass the eligibility gate. A source
+change requires fresh qualification. Incomplete reviewer-edited specifications
+still withhold readiness. The repository must already provide `review-ready`.
+The monitor may create its own managed label after qualification.
 
-Each generated issue contains a short Objective, observed run/attempt/job links,
-job and queue timings, slow-step evidence, numbered Requirements, acceptance
-scenarios and a repository-grounded initial implementation prompt. The requested
-follow-up preserves the full test selection, browser coverage, native failures
-and existing validation gates. The monitor does not modify shard counts or CI
-timeouts itself.
+## Running and inspecting
 
-`review-ready` is the requested handoff signal. Issues created with the workflow's
-`GITHUB_TOKEN` do not normally trigger another Actions workflow through an
-`issues` event. A consumer must observe the submitted issues through its existing
-polling or other supported intake; this workflow does not provision an external
-reviewer or claim that it has completed a review.
+In Actions, choose **CI Duration Monitor → Run workflow** on the default branch.
+`dry_run` defaults to `true`; only explicitly publishing invocations and scheduled
+runs can mutate issues. Pull-request/push executions run regression verification.
+Scheduled/manual reconciliation is serialized by the existing concurrency group.
 
-## Running and inspecting the monitor
-
-In Actions, select **CI Duration Monitor → Run workflow** on the default branch.
-The `dry_run` input defaults to `true`: it collects the same evidence and planned
-issue actions without mutations. Select `false` to publish. Pull-request and
-push executions only run the monitor's focused regression tests; they do not
-publish issues. Scheduled and manual runs share a non-cancelling concurrency
-group so their issue reconciliation is serialized.
-
-For a local read-only inspection, supply `GITHUB_TOKEN` through your existing
-authenticated environment and run:
+For a read-only local scan:
 
 ```bash
-python -m pip install loguru==0.7.3
+python -m pip install loguru==0.7.3 PyYAML==6.0.3
 python scripts/ci_duration_monitor.py \
     --repository outliner-online/outliner \
-    --config .github/ci-duration-monitor.json \
-    --source-ref "$(git rev-parse HEAD)"
+    --config .github/ci-duration-monitor.json
 ```
 
-Add `--publish` only when issue publication is intended. The GitHub Actions token
-has `contents: read`, `actions: read` and `issues: write` for the monitor job;
-regression checks use read-only repository permissions. The transport uses the
-Actions `GITHUB_API_URL` when provided, otherwise GitHub's public REST API.
+`--source-ref` is retained for CLI compatibility; source links always use the
+GitHub-verified default SHA. `--lookback-hours N` extends discovery for recovery.
+`--output-dir PATH` chooses the report/log destination. Add `--publish` only when
+issue publication is intended. The existing token permissions remain
+`contents: read`, `actions: read`, `issues: write`; regression jobs are read-only.
+`GITHUB_API_URL` selects the REST endpoint. Native logs are read through the same
+transport and never copied into issue bodies.
 
-The CLI also accepts `--lookback-hours N` for a longer recovery scan and
-`--output-dir PATH` for diagnostic output. The workflow uses the 48-hour default;
-there is no lookback input in the manual Actions form. Runs originally created
-before the lookback are not discovered even when an old run is retried recently.
-Use a longer CLI lookback when recovering such attempts. If a run search reaches
-GitHub's result limit, the monitor fails explicitly rather than reporting a
-partial scan as complete.
-
-Reports, summaries and Loguru logs are written under
-`ci-duration-monitor-output/`, and logs also go to standard output. Actions
-retains this directory as an artifact for 14 days, including failure diagnostics.
-The summary shows planned or performed issue actions and workflow-only delays.
-Transient read-only API failures receive bounded retries. Mutations are never
-blindly retried: a failed issue mutation or readiness-label operation, or an API
-read that still fails after its retry allowance, fails the job rather than being
-reported as successful submission.
+Reports and logs go to `ci-duration-monitor-output/` and Actions retains them for
+14 days. `report.json` includes verification provenance, per-sample diagnostic
+reasons, native timings and shared setup evidence. The summary lists actions and
+workflow-only delays. Transient GET failures receive bounded retries; unresolved
+API failures fail the monitor before it claims successful submission.
 
 ## Focused verification
 
@@ -144,8 +124,8 @@ reported as successful submission.
 python -m unittest discover -s scripts/tests -p 'test_ci_duration_monitor*.py' -v
 ```
 
-The shared regression suite covers threshold boundaries, attempts and pagination,
-duplicate suppression, publication interruption and reviewer handoff. Repository
-regressions verify the actual configured job families and real HTTP request
-serialization against an isolated local fixture server. They do not contact or
-mutate GitHub issues.
+The tests use an isolated GitHub stub and a real local HTTP fixture server. They
+cover the five native owner-closed step shapes, repeat scans, closure and fresh
+regressions, branch/repository/source/variant negatives, manual supported tests,
+recurrence, native timing formats, pagination, interrupted submission and retained
+recovery. Verification does not create or change live GitHub issues.

@@ -80,6 +80,16 @@ class GitHubTransportTest(unittest.TestCase):
             def respond(self):
                 body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
                 requests.append((self.command, self.path, json.loads(body) if body else None, dict(self.headers)))
+                if self.path.endswith("/actions/jobs/123/logs"):
+                    self.send_response(302)
+                    self.send_header("Location", f"http://localhost:{self.server.server_port}/native-logs")
+                    self.end_headers()
+                    return
+                if self.path == "/native-logs":
+                    self.send_response(200)
+                    self.end_headers()
+                    self.wfile.write(b"native test logs")
+                    return
                 if self.path.endswith(("/unavailable", "/malformed")):
                     self.send_response(503 if self.path.endswith("/unavailable") else 200)
                     self.end_headers()
@@ -111,6 +121,12 @@ class GitHubTransportTest(unittest.TestCase):
         self.assertEqual(self.requests[0][:3], ("GET", "/repos/example/repo/actions/runs?per_page=100&page=2", None))
         self.assertEqual(self.requests[1][:3], ("POST", "/repos/example/repo/issues/42/labels", {"labels": ["review-ready"]}))
         self.assertEqual(self.requests[1][3]["Authorization"], "Bearer fixture-token")
+
+    def test_native_log_redirect_strips_cross_origin_credentials(self):
+        result = self.client.request("GET", "actions/jobs/123/logs")
+        self.assertEqual((result.status, result.data), (200, "native test logs"))
+        self.assertEqual(self.requests[0][3]["Authorization"], "Bearer fixture-token")
+        self.assertNotIn("Authorization", self.requests[1][3])
 
     def test_http_error_preserves_status_but_success_requires_json(self):
         response = self.client.request("GET", "unavailable")

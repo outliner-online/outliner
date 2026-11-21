@@ -1,0 +1,453 @@
+[
+    {
+        "issue": 5998,
+        "run_id": 44723107068,
+        "job_id": 136244631753,
+        "conclusion": "failure",
+        "name": "e2e-test / e2e-test (firefox-selection-new)",
+        "steps": [
+            {
+                "name": "Set up job",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T10:56:24Z",
+                "completed_at": "2026-11-20T10:56:25Z"
+            },
+            {
+                "name": "Checkout code",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T10:56:25Z",
+                "completed_at": "2026-11-20T10:56:27Z"
+            },
+            {
+                "name": "Initialize execution evidence",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T10:56:27Z",
+                "completed_at": "2026-11-20T10:56:27Z"
+            },
+            {
+                "name": "Setup E2E dependencies",
+                "status": "completed",
+                "conclusion": "failure",
+                "started_at": "2026-11-20T10:56:27Z",
+                "completed_at": "2026-11-20T11:08:07Z"
+            },
+            {
+                "name": "Verify Firefox execution results and failure evidence",
+                "status": "completed",
+                "conclusion": "skipped",
+                "started_at": "2026-11-20T11:08:07Z",
+                "completed_at": "2026-11-20T11:08:07Z"
+            },
+            {
+                "name": "Build server",
+                "status": "completed",
+                "conclusion": "skipped",
+                "started_at": "2026-11-20T11:08:07Z",
+                "completed_at": "2026-11-20T11:08:07Z"
+            },
+            {
+                "name": "Run E2E-specific startup (services + readiness)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "started_at": "2026-11-20T11:08:07Z",
+                "completed_at": "2026-11-20T11:08:07Z"
+            },
+            {
+                "name": "Run E2E tests (firefox-selection-new)",
+                "status": "completed",
+                "conclusion": "skipped",
+                "started_at": "2026-11-20T11:08:07Z",
+                "completed_at": "2026-11-20T11:08:07Z"
+            },
+            {
+                "name": "Verify retry-free Yjs offline synchronization without Tinylicious",
+                "status": "completed",
+                "conclusion": "skipped",
+                "started_at": "2026-11-20T11:08:07Z",
+                "completed_at": "2026-11-20T11:08:07Z"
+            },
+            {
+                "name": "Record retry-free Grid clipboard verification",
+                "status": "completed",
+                "conclusion": "skipped",
+                "started_at": "2026-11-20T11:08:07Z",
+                "completed_at": "2026-11-20T11:08:07Z"
+            },
+            {
+                "name": "Record retry-free Grid resize wheel verification",
+                "status": "completed",
+                "conclusion": "skipped",
+                "started_at": "2026-11-20T11:08:07Z",
+                "completed_at": "2026-11-20T11:08:07Z"
+            },
+            {
+                "name": "Summarise failures",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T11:08:07Z",
+                "completed_at": "2026-11-20T11:08:07Z"
+            },
+            {
+                "name": "Verify startup evidence",
+                "status": "completed",
+                "conclusion": "failure",
+                "started_at": "2026-11-20T11:08:07Z",
+                "completed_at": "2026-11-20T11:08:07Z"
+            },
+            {
+                "name": "Record setup and execution status",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T11:08:07Z",
+                "completed_at": "2026-11-20T11:08:07Z"
+            },
+            {
+                "name": "Upload Logs & Artifacts",
+                "status": "completed",
+                "conclusion": "skipped",
+                "started_at": "2026-11-20T11:08:07Z",
+                "completed_at": "2026-11-20T11:08:07Z"
+            },
+            {
+                "name": "Upload safe startup diagnostics",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T11:08:07Z",
+                "completed_at": "2026-11-20T11:08:09Z"
+            },
+            {
+                "name": "Post Setup E2E dependencies",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T11:08:09Z",
+                "completed_at": "2026-11-20T11:08:09Z"
+            },
+            {
+                "name": "Post Checkout code",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T11:08:09Z",
+                "completed_at": "2026-11-20T11:08:09Z"
+            },
+            {
+                "name": "Complete job",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T11:08:09Z",
+                "completed_at": "2026-11-20T11:08:09Z"
+            }
+        ]
+    },
+    {
+        "issue": 5999,
+        "run_id": 44730730213,
+        "job_id": 136269504599,
+        "conclusion": "success",
+        "name": "production-compose",
+        "steps": [
+            {
+                "name": "Set up job",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T11:49:40Z",
+                "completed_at": "2026-11-20T11:49:41Z"
+            },
+            {
+                "name": "Run actions/checkout@v7",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T11:49:41Z",
+                "completed_at": "2026-11-20T11:49:43Z"
+            },
+            {
+                "name": "Run actions/setup-node@v7",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T11:49:43Z",
+                "completed_at": "2026-11-20T11:49:46Z"
+            },
+            {
+                "name": "Run npm ci",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T11:49:46Z",
+                "completed_at": "2026-11-20T11:49:50Z"
+            },
+            {
+                "name": "Run npm ci",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T11:49:50Z",
+                "completed_at": "2026-11-20T11:50:29Z"
+            },
+            {
+                "name": "Run npx playwright install --with-deps chromium",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T11:50:29Z",
+                "completed_at": "2026-11-20T11:56:45Z"
+            },
+            {
+                "name": "Run isolated production Compose browser and recovery test",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T11:56:45Z",
+                "completed_at": "2026-11-20T12:01:13Z"
+            },
+            {
+                "name": "Post Run actions/setup-node@v7",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T12:01:13Z",
+                "completed_at": "2026-11-20T12:01:13Z"
+            },
+            {
+                "name": "Post Run actions/checkout@v7",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T12:01:13Z",
+                "completed_at": "2026-11-20T12:01:13Z"
+            },
+            {
+                "name": "Complete job",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T12:01:13Z",
+                "completed_at": "2026-11-20T12:01:14Z"
+            }
+        ]
+    },
+    {
+        "issue": 6000,
+        "run_id": 44643324631,
+        "job_id": 135979591047,
+        "conclusion": "success",
+        "name": "schedule-hosting-page",
+        "steps": [
+            {
+                "name": "Set up job",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T00:07:53Z",
+                "completed_at": "2026-11-20T00:07:54Z"
+            },
+            {
+                "name": "Run actions/checkout@v7",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T00:07:54Z",
+                "completed_at": "2026-11-20T00:07:56Z"
+            },
+            {
+                "name": "Run actions/setup-node@v7",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T00:07:56Z",
+                "completed_at": "2026-11-20T00:07:59Z"
+            },
+            {
+                "name": "Run actions/setup-java@v5",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T00:07:59Z",
+                "completed_at": "2026-11-20T00:07:59Z"
+            },
+            {
+                "name": "Install locked dependencies and emulator tools",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T00:07:59Z",
+                "completed_at": "2026-11-20T00:17:12Z"
+            },
+            {
+                "name": "Verify real private Hosting and Functions boundary",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T00:17:12Z",
+                "completed_at": "2026-11-20T00:17:53Z"
+            },
+            {
+                "name": "Post Run actions/setup-java@v5",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T00:17:53Z",
+                "completed_at": "2026-11-20T00:17:53Z"
+            },
+            {
+                "name": "Post Run actions/setup-node@v7",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T00:17:53Z",
+                "completed_at": "2026-11-20T00:17:53Z"
+            },
+            {
+                "name": "Post Run actions/checkout@v7",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T00:17:53Z",
+                "completed_at": "2026-11-20T00:17:54Z"
+            },
+            {
+                "name": "Complete job",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T00:17:54Z",
+                "completed_at": "2026-11-20T00:17:54Z"
+            }
+        ]
+    },
+    {
+        "issue": 6001,
+        "run_id": 44729770488,
+        "job_id": 136266237181,
+        "conclusion": "success",
+        "name": "schedule-hosting-service",
+        "steps": [
+            {
+                "name": "Set up job",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T11:42:28Z",
+                "completed_at": "2026-11-20T11:42:29Z"
+            },
+            {
+                "name": "Run actions/checkout@v7",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T11:42:29Z",
+                "completed_at": "2026-11-20T11:42:31Z"
+            },
+            {
+                "name": "Run actions/setup-node@v7",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T11:42:31Z",
+                "completed_at": "2026-11-20T11:42:31Z"
+            },
+            {
+                "name": "Run actions/setup-java@v6",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T11:42:31Z",
+                "completed_at": "2026-11-20T11:42:31Z"
+            },
+            {
+                "name": "Install locked dependencies and emulator tools",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T11:42:31Z",
+                "completed_at": "2026-11-20T11:52:26Z"
+            },
+            {
+                "name": "Verify real private Hosting and Functions boundary",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T11:52:26Z",
+                "completed_at": "2026-11-20T11:53:00Z"
+            },
+            {
+                "name": "Post Run actions/setup-java@v6",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T11:53:00Z",
+                "completed_at": "2026-11-20T11:53:00Z"
+            },
+            {
+                "name": "Post Run actions/setup-node@v7",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T11:53:00Z",
+                "completed_at": "2026-11-20T11:53:00Z"
+            },
+            {
+                "name": "Post Run actions/checkout@v7",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T11:53:00Z",
+                "completed_at": "2026-11-20T11:53:01Z"
+            },
+            {
+                "name": "Complete job",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-20T11:53:01Z",
+                "completed_at": "2026-11-20T11:53:01Z"
+            }
+        ]
+    },
+    {
+        "issue": 6003,
+        "run_id": 44472478031,
+        "job_id": 135385121568,
+        "conclusion": "failure",
+        "name": "Prepared runtime smoke (not E2E migration)",
+        "steps": [
+            {
+                "name": "Set up job",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-19T06:29:14Z",
+                "completed_at": "2026-11-19T06:29:15Z"
+            },
+            {
+                "name": "Run actions/checkout@v7",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-19T06:29:15Z",
+                "completed_at": "2026-11-19T06:29:17Z"
+            },
+            {
+                "name": "Local prototype contracts",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-19T06:29:17Z",
+                "completed_at": "2026-11-19T06:29:20Z"
+            },
+            {
+                "name": "Build one immutable local candidate without publishing",
+                "status": "completed",
+                "conclusion": "failure",
+                "started_at": "2026-11-19T06:29:20Z",
+                "completed_at": "2026-11-19T06:40:09Z"
+            },
+            {
+                "name": "Offline nonroot real runtime smoke",
+                "status": "completed",
+                "conclusion": "skipped",
+                "started_at": "2026-11-19T06:40:09Z",
+                "completed_at": "2026-11-19T06:40:09Z"
+            },
+            {
+                "name": "Require explicit failure for stale source and missing baked prerequisites",
+                "status": "completed",
+                "conclusion": "skipped",
+                "started_at": "2026-11-19T06:40:09Z",
+                "completed_at": "2026-11-19T06:40:09Z"
+            },
+            {
+                "name": "Retain prototype evidence",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-19T06:40:09Z",
+                "completed_at": "2026-11-19T06:40:10Z"
+            },
+            {
+                "name": "Post Run actions/checkout@v7",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-19T06:40:10Z",
+                "completed_at": "2026-11-19T06:40:10Z"
+            },
+            {
+                "name": "Complete job",
+                "status": "completed",
+                "conclusion": "success",
+                "started_at": "2026-11-19T06:40:10Z",
+                "completed_at": "2026-11-19T06:40:10Z"
+            }
+        ]
+    }
+]

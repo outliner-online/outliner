@@ -23,9 +23,11 @@ class MonitorHTTPTest(unittest.TestCase):
         observation = job()
         for field, seconds in [("created_at", -610), ("started_at", -600), ("completed_at", 0)]:
             observation[field] = (now + timedelta(seconds=seconds)).isoformat()
-        observation["steps"][0]["started_at"] = (now - timedelta(seconds=580)).isoformat()
+        observation["steps"][0]["started_at"] = (now - timedelta(seconds=600)).isoformat()
         observation["steps"][0]["completed_at"] = now.isoformat()
         github.jobs[(10, 1)] = [observation]
+        github.runs.append({**github.runs[0], "id": 9})
+        github.jobs[(9, 1)] = [{**observation, "id": 2}]
         github.runs[0]["run_started_at"] = (now - timedelta(seconds=700)).isoformat()
 
         class Handler(BaseHTTPRequestHandler):
@@ -38,14 +40,14 @@ class MonitorHTTPTest(unittest.TestCase):
             def respond(self):
                 body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
                 prefix = "/repos/example/project/"
-                if not self.path.startswith(prefix):
+                if self.path != prefix.rstrip("/") and not self.path.startswith(prefix):
                     self.send_error(404)
                     return
-                result = github.request(self.command, self.path[len(prefix):], json.loads(body) if body else None)
+                result = github.request(self.command, self.path[len(prefix):] if self.path.startswith(prefix) else "", json.loads(body) if body else None)
                 self.send_response(result.status)
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
-                self.wfile.write(json.dumps(result.data).encode())
+                self.wfile.write(result.data.encode() if self.path.endswith("/logs") else json.dumps(result.data).encode())
 
             def log_message(self, *_):
                 pass
@@ -61,7 +63,7 @@ class MonitorHTTPTest(unittest.TestCase):
                     "families": [{
                         "key": "tests", "name": "Tests", "job_pattern": r"Tests \(\d+/\d+\)",
                         "test_step_pattern": "^Run tests$", "source_paths": [".github/workflows/ci.yml"],
-                        "guidance": "Inspect actual durations and preserve complete test selection.",
+                        "guidance": "Inspect actual durations and preserve complete test selection.", "measurement": "vitest",
                     }],
                 }]}))
                 command = [sys.executable, str(ROOT / "scripts/ci_duration_monitor.py"),

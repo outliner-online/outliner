@@ -6,7 +6,7 @@ Reduce the execution time of the ${family_name} CI job family while preserving i
 
 ## Context
 
-The daily monitor observed a completed job taking at least ${threshold} seconds in `${workflow_path}`. ${recommendation}. This is a measured improvement candidate for specification review, not proof that adding shards will help.
+The daily monitor verified at least two distinct successful default-branch runs of the same current job variant with at least ${threshold} seconds of native test work and test-command elapsed time in `${workflow_path}`. ${recommendation}. Each qualifying native report covers multiple test files. Review dependencies between those files before selecting a safe optimization.
 
 ${evidence}
 

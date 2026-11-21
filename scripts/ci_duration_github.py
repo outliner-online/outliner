@@ -4,13 +4,27 @@ from dataclasses import dataclass
 import json
 import os
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
 @dataclass(frozen=True)
 class Response:
     status: int
     data: object
+
+
+class SafeRedirect(HTTPRedirectHandler):
+    """Job logs redirect to signed storage; never forward repository credentials."""
+
+    def redirect_request(self, request, fp, code, message, headers, new_url):
+        origin, target = urlsplit(request.full_url), urlsplit(new_url)
+        if origin.scheme == "https" and target.scheme != "https":
+            raise RuntimeError("Refusing an insecure GitHub redirect")
+        redirected = super().redirect_request(request, fp, code, message, headers, new_url)
+        if redirected is not None and (origin.scheme, origin.netloc) != (target.scheme, target.netloc):
+            redirected.remove_header("Authorization")
+        return redirected
 
 
 class GitHubClient:
@@ -32,10 +46,11 @@ class GitHubClient:
         if payload is not None:
             headers["Content-Type"] = "application/json"
             data = json.dumps(payload).encode("utf-8")
-        request = Request(self._base + path.lstrip("/"), data=data, headers=headers, method=method)
+        url = self._base + path.lstrip("/") if path else self._base.rstrip("/")
+        request = Request(url, data=data, headers=headers, method=method)
         try:
-            with urlopen(request, timeout=30) as response:
-                return Response(response.status, self._decode(response.read()))
+            with build_opener(SafeRedirect()).open(request, timeout=30) as response:
+                return Response(response.status, response.read().decode("utf-8") if path.startswith("actions/jobs/") and path.endswith("/logs") else self._decode(response.read()))
         except HTTPError as error:
             try:
                 body = self._decode(error.read())
