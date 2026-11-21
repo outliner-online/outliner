@@ -46,6 +46,11 @@ describe("ENV-5997c1a0: complete native new-4 sharding", () => {
         expect(gate.permissions).toEqual({ actions: "read", contents: "read" });
         expect(gate.steps.some((step: { run?: string; }) => step.run?.includes("collect-new4-shard-outcomes.mjs")))
             .toBe(true);
+        const outcomeCollector = fs.readFileSync(
+            path.join(root, "scripts/ci/collect-new4-shard-outcomes.mjs"),
+            "utf8",
+        );
+        expect(outcomeCollector).toContain("new Date(job.started_at).getTime() >= attemptStartedAt");
         const upload = job.steps.find((step: { name?: string; }) => step.name === "Upload Logs & Artifacts");
         expect(upload.if).toContain("steps.tests.outputs.startup_verified == 'true'");
         expect(upload.if).toContain("startsWith(matrix.project, 'new-4-')");
