@@ -12,6 +12,7 @@ import { expect, test } from "vitest";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const verifier = path.join(repoRoot, "scripts", "tests", "verify-container-negative-case.sh");
+const boundedBuild = path.join(repoRoot, "scripts", "tests", "run-bounded-docker-build.sh");
 
 const unavailableEvidence = `
 APT fetch attempt: primary host 127.0.0.1:18081
@@ -84,20 +85,46 @@ test("rejects an unexpectedly successful image build", () => {
     expect(result.output).toContain("unexpectedly built successfully");
 });
 
-test("a separately delayed fixture cannot consume the inner watchdog allowance", () => {
-    const output = execFileSync("bash", [
-        "-ceu",
-        `
-timeout 1 sleep 0.2
-timeout 1.2 bash -ceu '
-  set +e
-  timeout --signal=TERM --kill-after=0.2 0.3 bash -c "trap \"\" TERM; sleep 5"
-  status=$?
-  set -e
-  echo INSTALLER_EXIT_STATUS=$status
-'
-`,
-    ], { encoding: "utf8" });
+test("the build watcher ignores a Dockerfile heading until execution emits the marker", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "apt-build-watch-"));
+    const logPath = path.join(directory, "build.log");
+    try {
+        let status: number | undefined;
+        try {
+            execFileSync(boundedBuild, ["0.3", "0.1", logPath, "bash", "-ceu", `
+echo "RUN printf 'NEGATIVE_CASE_PHASE_%s\\n' STARTED"
+sleep 5
+`], { stdio: "ignore" });
+        } catch (error) {
+            status = (error as { status?: number; }).status;
+        }
+        expect(status).toBe(124);
+        expect(fs.existsSync(`${logPath}.setup-expired`)).toBe(true);
+        expect(fs.existsSync(`${logPath}.case-expired`)).toBe(false);
+    } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
+});
 
-    expect(output).toContain("INSTALLER_EXIT_STATUS=124");
+test("the actual build watcher bounds a TERM-ignoring full case phase and reaps it", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "apt-build-watch-"));
+    const logPath = path.join(directory, "build.log");
+    try {
+        let status: number | undefined;
+        try {
+            execFileSync(boundedBuild, ["1", "0.2", logPath, "bash", "-ceu", `
+sleep 0.2
+echo NEGATIVE_CASE_PHASE_STARTED
+trap '' TERM
+sleep 5
+`], { stdio: "ignore", timeout: 3000 });
+        } catch (error) {
+            status = (error as { status?: number; }).status;
+        }
+        expect(status).toBe(124);
+        expect(fs.existsSync(`${logPath}.setup-expired`)).toBe(false);
+        expect(fs.existsSync(`${logPath}.case-expired`)).toBe(true);
+    } finally {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
 });

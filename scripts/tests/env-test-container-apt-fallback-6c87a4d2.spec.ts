@@ -16,6 +16,7 @@ test("the image uses the bounded installer and CI runs its Docker regression", (
     const workflow = read(".github", "workflows", "build-container.yml");
     const installer = read("scripts", "install-test-container-os-packages.sh");
     const integration = read("scripts", "tests", "test-container-os-packages.integration.sh");
+    const boundedBuild = read("scripts", "tests", "run-bounded-docker-build.sh");
     const verifier = read("scripts", "verify-test-container-os-tools.sh");
 
     expect(dockerfile).toContain("/usr/local/bin/install-test-container-os-packages");
@@ -37,8 +38,11 @@ test("the image uses the bounded installer and CI runs its Docker regression", (
     expect(integration).toContain("Dockerfile.fixture");
     expect(integration).toContain("outliner-apt-regression:fixture");
     expect(integration).toContain("negative_case_setup_timeout_seconds=30");
-    expect(integration).toContain("NEGATIVE_CASE_PHASE_STARTED");
-    expect(integration).toContain("setup_expired");
+    expect(integration).toContain("NEGATIVE_CASE_PHASE_%s");
+    expect(integration).toContain("run-bounded-docker-build.sh");
+    expect(boundedBuild).toContain("NEGATIVE_CASE_PHASE_STARTED");
+    expect(boundedBuild).toContain("setup_expired");
+    expect(boundedBuild).toContain('kill -KILL "$pid"');
     expect(integration).toContain("APT::Update::Error-Mode");
     expect(integration).toContain('verify-container-negative-case.sh" "$negative_case"');
     expect(integration).toContain('docker build --no-cache -f "$fixture/Dockerfile.success"');

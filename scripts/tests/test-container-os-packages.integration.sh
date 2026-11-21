@@ -28,7 +28,7 @@ EOF_DOCKER
 cat > "$fixture/Dockerfile" <<'EOF_DOCKER'
 FROM outliner-apt-regression:fixture
 ARG CASE
-RUN echo 'NEGATIVE_CASE_PHASE_STARTED'; \
+RUN printf 'NEGATIVE_CASE_PHASE_%s\n' STARTED; \
     case "$CASE" in \
       unavailable) printf 'APT::Update::Error-Mode "any";\n' >/tmp/apt-fixture.conf; \
         find /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
@@ -107,51 +107,11 @@ for negative_case in unavailable slow missing; do
         continue
     fi
 
-    setup_expired="$fixture/${negative_case}.setup-expired"
-    case_expired="$fixture/${negative_case}.case-expired"
     set +e
-    docker build --progress=plain --build-arg "CASE=${negative_case}" "$fixture" >"$log" 2>&1 &
-    build_pid=$!
-    (
-        sleep "$negative_case_setup_timeout_seconds"
-        if kill -0 "$build_pid" 2>/dev/null; then
-            : >"$setup_expired"
-            kill -TERM "$build_pid" 2>/dev/null || true
-        fi
-    ) &
-    setup_watchdog_pid=$!
-
-    while kill -0 "$build_pid" 2>/dev/null && \
-        ! grep -Fq 'NEGATIVE_CASE_PHASE_STARTED' "$log" && \
-        [[ ! -e $setup_expired ]]
-    do
-        sleep 0.1
-    done
-    kill "$setup_watchdog_pid" 2>/dev/null || true
-    wait "$setup_watchdog_pid" 2>/dev/null || true
-
-    if grep -Fq 'NEGATIVE_CASE_PHASE_STARTED' "$log"; then
-        (
-            sleep "$unavailable_outer_watchdog_seconds"
-            if kill -0 "$build_pid" 2>/dev/null; then
-                : >"$case_expired"
-                kill -TERM "$build_pid" 2>/dev/null || true
-            fi
-        ) &
-        case_watchdog_pid=$!
-    else
-        case_watchdog_pid=
-    fi
-
-    wait "$build_pid"
+    "$repo_root/scripts/tests/run-bounded-docker-build.sh" \
+        "$negative_case_setup_timeout_seconds" "$unavailable_outer_watchdog_seconds" "$log" \
+        docker build --progress=plain --build-arg "CASE=${negative_case}" "$fixture"
     status=$?
-    if [[ -n $case_watchdog_pid ]]; then
-        kill "$case_watchdog_pid" 2>/dev/null || true
-        wait "$case_watchdog_pid" 2>/dev/null || true
-    fi
-    if [[ -e $setup_expired || -e $case_expired ]]; then
-        status=124
-    fi
     set -e
     if ! "$repo_root/scripts/tests/verify-container-negative-case.sh" "$negative_case" "$status" "$log"; then
         cat "$log" >&2
