@@ -202,3 +202,28 @@ export function buildCalendarEntries(
 
     return entries;
 }
+
+export interface CalendarEntryWritability {
+    /** True when this entry may be dragged (its start column has a writable origin). */
+    startWritable: boolean;
+    /** True when this entry may be resized (its duration column has a writable origin). */
+    durationWritable: boolean;
+}
+
+/**
+ * Whether `entry`'s start/duration may be written, given the query's
+ * resolved writable columns (`analyzeCalendarColumnWritability`) and the
+ * calendar's role assignment. An entry with no `source_kind`/`source_id` can
+ * never be addressed for a write regardless of column writability.
+ */
+export function resolveCalendarEntryWritability(
+    entry: Pick<CalendarEntry, "sourceKind" | "sourceId">,
+    roles: { roleStart?: string; roleDuration?: string; },
+    writableColumns: Map<string, string>,
+): CalendarEntryWritability {
+    const addressable = Boolean(entry.sourceKind && entry.sourceId);
+    return {
+        startWritable: addressable && Boolean(roles.roleStart) && writableColumns.has(roles.roleStart!),
+        durationWritable: addressable && Boolean(roles.roleDuration) && writableColumns.has(roles.roleDuration!),
+    };
+}

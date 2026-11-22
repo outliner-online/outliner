@@ -2,7 +2,7 @@ import type { Project } from "../app-schema.js";
 import { type CalendarQueryRows, deriveAcceptedCalendarEntries } from "../services/calendarAcceptedEntries.js";
 import { computeDayHeaders, type DayHeader, formatCalendarRangeLabel } from "../services/calendarDayHeaders.js";
 import type { CalendarEntryRoles } from "../services/calendarEntries.js";
-import { groupCalendarEntries } from "../services/calendarGrouping.js";
+import { groupCalendarEntries, hasCalendarGroupingEvidence } from "../services/calendarGrouping.js";
 import {
     DEFAULT_WORKING_HOURS_END_MINUTES,
     DEFAULT_WORKING_HOURS_START_MINUTES,
@@ -62,14 +62,7 @@ export function deriveCalendarDaysVisibleModel(input: {
     }
     // The production flat lane renderer uses the first configured axis only.
     const groupAxis = input.settings.groupAxes[0];
-    if (
-        groupAxis !== undefined && (
-            input.result.columns.filter(column => column === groupAxis).length !== 1
-            || input.result.rows.some(
-                row => !Object.prototype.hasOwnProperty.call(row, groupAxis) || row[groupAxis] === undefined,
-            )
-        )
-    ) {
+    if (groupAxis !== undefined && !hasCalendarGroupingEvidence(input.result, groupAxis)) {
         return { ready: false, reason: "Calendar grouping evidence is unavailable or ambiguous." };
     }
     const accepted = deriveAcceptedCalendarEntries({

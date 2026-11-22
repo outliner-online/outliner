@@ -33,6 +33,15 @@ export interface CalendarLane {
     children?: CalendarLane[];
 }
 
+/** Unknown result cells are not evidence of NULL membership. */
+export function hasCalendarGroupingEvidence(
+    result: { columns: readonly string[]; rows: readonly Record<string, unknown>[]; },
+    axis: string,
+): boolean {
+    return result.columns.filter(column => column === axis).length === 1
+        && result.rows.every(row => Object.prototype.hasOwnProperty.call(row, axis) && row[axis] !== undefined);
+}
+
 export interface GroupingOptions {
     /**
      * Preferred order for lane values, most-preferred first. Applied to the

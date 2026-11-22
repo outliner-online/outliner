@@ -18,6 +18,7 @@ import { analyzeCalendarColumnWritability } from "../../services/calendar/calend
 import { buildCalendarEntries, type CalendarEntry } from "../../services/calendar/calendarEntries";
 import { deriveCalendarDayVisibleModel, type CalendarDayVisibleModel } from "../../services/calendar/calendarDayVisibleModel";
 import { CALENDAR_DAYS_MODE_LABELS, deriveCalendarDaysVisibleModel, type CalendarDaysVisibleModel } from "$shared/notifications/calendarDaysVisibleModel";
+import { deriveCalendarMonthVisibleModel, type CalendarMonthVisibleModel } from "$shared/notifications/calendarMonthVisibleModel";
 import {
     resolveCalendarEntryWritability,
     writeCalendarEntryDuration,
@@ -46,7 +47,7 @@ import {
 } from "../../services/calendar/calendarGrouping";
 import { isLaneDropWritable, writeCalendarLaneDrop } from "../../services/calendar/calendarLaneWrite";
 import { resolveDefaultWeekStart } from "../../services/calendar/calendarLocale";
-import { layoutMonthGrid } from "../../services/calendar/calendarMonthGridLayout";
+import { layoutMonthGrid, MONTH_MODE_LABEL } from "../../services/calendar/calendarMonthGridLayout";
 import { isOutlineItemAddressable, navigateToOutlineItem } from "../../services/navigation/outlineItemNavigation";
 import {
     applyOptimisticOverrides,
@@ -108,14 +109,14 @@ const VIEW_TYPE_OPTIONS: { value: string; label: string; }[] = [
     { value: "hours", label: HOUR_MAP_MODE_LABEL },
     { value: "days", label: CALENDAR_DAYS_MODE_LABELS.days },
     { value: "week", label: CALENDAR_DAYS_MODE_LABELS.week },
-    { value: "month", label: "Month" },
+    { value: "month", label: MONTH_MODE_LABEL },
     { value: "gantt", label: "Gantt" },
 ];
 
 const GANTT_SCALES = new Set<GanttScale>(["day", "week", "month", "quarter"]);
 
-function hasAcceptedProjection(type: string): type is "day" | "hours" | "days" | "week" {
-    return type === "day" || type === "hours" || type === "days" || type === "week";
+function hasAcceptedProjection(type: string): type is "day" | "hours" | "days" | "week" | "month" {
+    return type === "day" || type === "hours" || type === "days" || type === "week" || type === "month";
 }
 
 let settings = $state<CalendarSettings>(EMPTY_SETTINGS);
@@ -127,6 +128,7 @@ let catalogResultCurrent = $state(false);
 let acceptedDayModel = $state<CalendarDayVisibleModel | undefined>(undefined);
 let acceptedHoursModel = $state<CalendarHoursVisibleModel | undefined>(undefined);
 let acceptedDaysModel = $state<CalendarDaysVisibleModel | undefined>(undefined);
+let acceptedMonthModel = $state<CalendarMonthVisibleModel | undefined>(undefined);
 let acceptedEvidence: {
     result: TableQueryResult;
     context: CalendarObservationContextV1;
@@ -213,7 +215,7 @@ function laneLabelForEntry(entry: CalendarEntry): string {
     return collapseLanePath([entryAxisValues(entry, groupAxis)[0]]);
 }
 
-const monthLaneFilterOptions = $derived(lanes?.map((lane) => collapseLanePath(lane.path)) ?? []);
+const monthLaneFilterOptions = $derived(acceptedMonthModel?.laneOptions ?? lanes?.map((lane) => collapseLanePath(lane.path)) ?? []);
 let monthLaneFilter = $state<string | undefined>(untrack(() => observationContext?.monthLaneFilter) ?? undefined);
 const monthFilteredEntries = $derived(
     groupingActive && monthLaneFilter !== undefined
@@ -247,7 +249,10 @@ const hourMinuteLayout = $derived(
         : undefined,
 );
 const monthCells = $derived(
-    !isGantt && viewType === "month" ? layoutMonthGrid(monthFilteredEntries, range.start, range.end) : undefined,
+    !isGantt && viewType === "month"
+        ? optimisticOverrides.size === 0 && acceptedMonthModel ? acceptedMonthModel.cells
+        : layoutMonthGrid(monthFilteredEntries, range.start, range.end)
+        : undefined,
 );
 
 function isStartWritable(entry: CalendarEntry): boolean {
@@ -350,6 +355,13 @@ function publishAcceptedModel(currentSettings: CalendarSettings): void {
         onVisibleProjection?.(derived.ready ? { ready: true, projection: derived.model.projection } : derived);
         return;
     }
+    if (input.context.viewType === "month") {
+        const derived = deriveCalendarMonthVisibleModel({ ...input,
+            context: { ...input.context, monthLaneFilter: monthLaneFilter ?? null } });
+        acceptedMonthModel = derived.ready ? derived.model : undefined;
+        onVisibleProjection?.(derived.ready ? { ready: true, projection: derived.model.projection } : derived);
+        return;
+    }
     const derived = deriveCalendarDayVisibleModel(input);
     if (derived.ready) {
         acceptedDayModel = derived.model;
@@ -365,6 +377,7 @@ function invalidateObservation(publishNonReady = hasAcceptedProjection(effective
     acceptedDayModel = undefined;
     acceptedHoursModel = undefined;
     acceptedDaysModel = undefined;
+    acceptedMonthModel = undefined;
     if (publishNonReady) {
         onVisibleProjection?.({ ready: false, reason: "Accepted Calendar SQL evidence is stale or unavailable." });
     }
@@ -392,7 +405,7 @@ async function runQuery() {
             anchorUtcMs,
             rangeStartUtcMs: currentRangeBounds.startUtcMs,
             rangeEndUtcMs: currentRangeBounds.endUtcMs,
-            monthLaneFilter: null,
+            monthLaneFilter: currentViewType === "month" ? monthLaneFilter ?? null : null,
             collapsedEntryKeys: [],
         }
         : undefined;
@@ -460,7 +473,7 @@ function refreshMirror() {
     const viewTypeChanged = next.viewType !== settings.viewType;
     const timezoneChanged = next.timezone !== settings.timezone;
     const ganttScaleChanged = next.ganttScale !== settings.ganttScale;
-    const weekStartChanged = effectiveViewType === "week" && !observationContext && next.weekStart !== settings.weekStart;
+    const weekStartChanged = (effectiveViewType === "week" || effectiveViewType === "month") && !observationContext && next.weekStart !== settings.weekStart;
     settings = next;
     queryInput = next.query;
     if (queryChanged || timezoneChanged) {
@@ -738,7 +751,7 @@ onDestroy(() => {
             <button type="button" data-testid="calendar-nav-next" onclick={goNext} aria-label="Next period">›</button>
             <span class="range-label" data-testid="calendar-range-label">{rangeLabel}</span>
         </div>
-        <select data-testid="calendar-view-type" aria-label={`${settings.name || "Calendar"} view`} value={settings.viewType} onchange={setViewType}>
+        <select data-testid="calendar-view-type" aria-label={`${settings.name || "Calendar"} view`} value={effectiveViewType} onchange={setViewType}>
             {#each VIEW_TYPE_OPTIONS as opt (opt.value)}
                 <option value={opt.value}>{opt.label}</option>
             {/each}
@@ -877,6 +890,7 @@ onDestroy(() => {
                     onchange={(e) => {
                         const value = (e.target as HTMLSelectElement).value;
                         monthLaneFilter = value === "" ? undefined : value;
+                        if (catalogResultCurrent && acceptedEvidence) publishAcceptedModel(settings);
                     }}
                 >
                     <option value="">All lanes</option>
@@ -888,6 +902,7 @@ onDestroy(() => {
         {/if}
         <CalendarMonthGrid
             cells={monthCells}
+            acceptedPresentation={optimisticOverrides.size === 0 ? acceptedMonthModel?.presentation : undefined}
             {weekStart}
             {timeZone}
             {locale}

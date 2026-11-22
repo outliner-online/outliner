@@ -8,14 +8,14 @@
 
 import { formatDragMoveLabel } from "../../services/calendar/calendarDragLabel";
 import type { CalendarEntry } from "../../services/calendar/calendarEntries";
-import { laneColor } from "../../services/calendar/calendarLaneColor";
-import type { MonthCell } from "../../services/calendar/calendarMonthGridLayout";
+import { type CalendarMonthPresentation, type MonthCell, monthCellDateLabel, monthChipPresentation, monthMilestoneLabel, monthWeekdayHeaders } from "../../services/calendar/calendarMonthGridLayout";
 import CalendarDragTooltip from "./CalendarDragTooltip.svelte";
 
 const DAY_MS = 86_400_000;
 
 interface Props {
     cells: MonthCell[];
+    acceptedPresentation?: CalendarMonthPresentation;
     weekStart: number;
     todayUtcMs?: number;
     /** The calendar's own timezone (§6.5) — the drag tooltip formats in it, never viewer-local. */
@@ -41,6 +41,7 @@ interface Props {
 
 let {
     cells,
+    acceptedPresentation,
     weekStart,
     todayUtcMs,
     timeZone,
@@ -57,11 +58,12 @@ let {
 }: Props = $props();
 
 const weekdayHeaders = $derived(
-    Array.from({ length: 7 }, (_, i) => {
-        const sundayUtcMs = Date.UTC(2026, 0, 4 + ((weekStart + i) % 7));
-        return new Intl.DateTimeFormat(locale, { timeZone: "UTC", weekday: "short" }).format(new Date(sundayUtcMs));
-    }),
+    acceptedPresentation?.weekdayHeaders ?? monthWeekdayHeaders(weekStart, locale),
 );
+
+function chipPresentation(entry: CalendarEntry) {
+    return acceptedPresentation?.chips.get(entry.key) ?? monthChipPresentation(laneLabel?.(entry), isStartWritable(entry));
+}
 
 function timeOfDayMs(startMs: number): number {
     return ((startMs % DAY_MS) + DAY_MS) % DAY_MS;
@@ -206,7 +208,7 @@ function onDrop(cell: MonthCell, e: DragEvent) {
                 ondragleave={onCellDragLeave}
                 ondrop={(e) => onDrop(cell, e)}
             >
-                <div class="cell-date">{new Date(cell.dateUtcMs).getUTCDate()}</div>
+                <div class="cell-date">{acceptedPresentation?.cellLabels[cell.dayIndex] ?? monthCellDateLabel(cell.dateUtcMs)}</div>
                 {#each cell.milestones as m (m.key)}
                     <div
                         role="button"
@@ -218,7 +220,7 @@ function onDrop(cell: MonthCell, e: DragEvent) {
                         ondblclick={(e) => onEntryDoubleClick(m, e)}
                         oncontextmenu={(e) => onEntryContextMenu?.(m, e)}
                     >
-                        <span class="chip-title" data-testid="calendar-entry-title">◆ {m.title}</span>
+                        <span class="chip-title" data-testid="calendar-entry-title">{monthMilestoneLabel(m.title)}</span>
                         {#if isDeletable(m)}
                             <button
                                 type="button"
@@ -241,8 +243,8 @@ function onDrop(cell: MonthCell, e: DragEvent) {
                         class:not-writable={!isStartWritable(entry)}
                         draggable={isStartWritable(entry)}
                         data-testid={`calendar-entry-${entry.key}`}
-                        data-lane={laneLabel?.(entry)}
-                        style={laneLabel && isStartWritable(entry) ? `background: ${laneColor(laneLabel(entry))}` : undefined}
+                        data-lane={chipPresentation(entry).laneLabel}
+                        style={`background: ${chipPresentation(entry).background}`}
                         data-navigable={isSourceNavigable(entry) ? "true" : undefined}
                         ondragstart={(e) => onDragStart(entry, e)}
                         ondragend={clearDragLabel}
