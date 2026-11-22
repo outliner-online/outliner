@@ -24,13 +24,27 @@ test("a dedicated workflow runs the server suite", () => {
     expect(workflow).toMatch(/matrix:\s+shard: \[1, 2\]/);
     expect(workflow).toMatch(/- name: Run server tests\n/);
     expect(workflow).toMatch(/SERVER_TEST_SHARD="\$\{\{ matrix\.shard \}\}\/2"/);
-    expect(workflow).toMatch(/verify-server-test-shards\.mjs downloaded-server-tests\/server-test-results 2/);
+    expect(workflow).toMatch(/verify-server-test-job\.sh/);
+    expect(workflow).toMatch(/needs\.server-test-shard\.result/);
     expect(workflow).toMatch(/name: server-test\n/);
     expect(workflow).toMatch(/Summarise failures/);
     expect(workflow).toMatch(/upload-artifact/);
 });
 
-test("server shards retain exact selection and native failure propagation", { timeout: 30_000 }, () => {
+test("the separate project-directory check retains its explicit selection and emulators", () => {
+    const workflow = read(".github", "workflows", "ci-test-server.yml");
+    const projectJob = workflow.split("  project-directory-test:")[1];
+
+    expect(projectJob).toContain(
+        "npx mocha tests/project-directory.test.ts tests/project-directory-provider.test.ts "
+            + "tests/project-directory-websocket.test.ts tests/cloud-production-entrypoint.test.ts --timeout 10000",
+    );
+    expect(projectJob).toContain("uses: ./.github/actions/setup-test-env");
+    expect(projectJob).toContain("FIRESTORE_EMULATOR_HOST: 127.0.0.1:58080");
+    expect(projectJob).toContain("FIREBASE_AUTH_EMULATOR_HOST: 127.0.0.1:59099");
+});
+
+test("server shards retain exact selection and native failure propagation", { timeout: 120_000 }, () => {
     const result = spawnSync("python3", [
         "-m",
         "unittest",

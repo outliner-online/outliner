@@ -11,6 +11,24 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class ServerExecutionBoundaryTest(unittest.TestCase):
+    def test_workflow_preserves_project_directory_and_aggregate_boundaries(self):
+        workflow = (ROOT / '.github/workflows/ci-test-server.yml').read_text()
+        project_job = workflow.split('  project-directory-test:', 1)[1]
+
+        selection = (
+            'npx mocha tests/project-directory.test.ts '
+            'tests/project-directory-provider.test.ts '
+            'tests/project-directory-websocket.test.ts '
+            'tests/cloud-production-entrypoint.test.ts --timeout 10000'
+        )
+        self.assertIn(selection, project_job)
+        self.assertIn('uses: ./.github/actions/setup-test-env', project_job)
+        self.assertIn('FIRESTORE_EMULATOR_HOST: 127.0.0.1:58080', project_job)
+        self.assertIn('FIREBASE_AUTH_EMULATOR_HOST: 127.0.0.1:59099', project_job)
+        self.assertIn('bash scripts/ci/run-server-test-shard.sh', workflow)
+        self.assertIn('bash scripts/ci/verify-server-test-job.sh', workflow)
+        self.assertIn('"${{ needs.server-test-shard.result }}"', workflow)
+
     def test_server_wrapper_preserves_exact_baseline_exclusions(self):
         exclude_pattern = re.compile(r'--exclude\s+"([^"]+)"')
         wrapper = (ROOT / 'scripts/run-server-test-command.sh').read_text()
@@ -56,7 +74,8 @@ class ServerExecutionBoundaryTest(unittest.TestCase):
             (root / 'server/tests/loaders').mkdir(parents=True)
             for name in ['run-server-test-command.sh']:
                 (root / 'scripts' / name).write_text((ROOT / 'scripts' / name).read_text())
-            for name in ['run-server-test-shard.sh', 'server-test-reporter.mjs', 'verify-server-test-shards.mjs']:
+            for name in ['run-server-test-shard.sh', 'server-test-reporter.mjs',
+                         'verify-server-test-job.sh', 'verify-server-test-shards.mjs']:
                 (root / 'scripts/ci' / name).write_text((ROOT / 'scripts/ci' / name).read_text())
             (root / 'server/node_modules').symlink_to(ROOT / 'server/node_modules', target_is_directory=True)
             (root / 'server/package.json').write_text('{"type":"module"}')
@@ -71,15 +90,22 @@ class ServerExecutionBoundaryTest(unittest.TestCase):
                                                    'SERVER_TEST_RESULT_DIR': f'server-test-results/shard-{index}'}, text=True,
                                         capture_output=True, timeout=60)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            verify = subprocess.run(['node', 'scripts/ci/verify-server-test-shards.mjs',
+            verify = subprocess.run(['bash', 'scripts/ci/verify-server-test-job.sh', 'success',
                                      'server-test-results', '2'], cwd=root, env=env,
                                     text=True, capture_output=True, timeout=30)
             self.assertEqual(verify.returncode, 0, verify.stdout + verify.stderr)
             self.assertIn('Verified 2 native tests', verify.stdout)
 
+            for job_result in ['failure', 'cancelled']:
+                verify = subprocess.run(['bash', 'scripts/ci/verify-server-test-job.sh', job_result,
+                                         'server-test-results', '2'], cwd=root, env=env,
+                                        text=True, capture_output=True, timeout=30)
+                self.assertNotEqual(verify.returncode, 0)
+                self.assertIn(f'Server test shard job did not succeed: {job_result}', verify.stderr)
+
             outcome_path = root / 'server-test-results/shard-1/outcome.json'
             outcome_path.write_text('null')
-            verify = subprocess.run(['node', 'scripts/ci/verify-server-test-shards.mjs',
+            verify = subprocess.run(['bash', 'scripts/ci/verify-server-test-job.sh', 'success',
                                      'server-test-results', '2'], cwd=root, env=env,
                                     text=True, capture_output=True, timeout=30)
             self.assertNotEqual(verify.returncode, 0)
@@ -163,7 +189,7 @@ class ServerExecutionBoundaryTest(unittest.TestCase):
             subprocess.run(['bash', 'scripts/ci/run-server-test-shard.sh'], cwd=root,
                            env=env | {'SERVER_TEST_SHARD': '2/2'}, check=True,
                            text=True, capture_output=True, timeout=60)
-            verify = subprocess.run(['node', 'scripts/ci/verify-server-test-shards.mjs',
+            verify = subprocess.run(['bash', 'scripts/ci/verify-server-test-job.sh', 'success',
                                      'server-test-results', '2'], cwd=root, env=env,
                                     text=True, capture_output=True, timeout=30)
             self.assertNotEqual(verify.returncode, 0)

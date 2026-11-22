@@ -103,7 +103,10 @@ jobs:
           merge-multiple: true
 
       - name: Verify complete server test result
-        run: node scripts/ci/verify-server-test-shards.mjs downloaded-server-tests/server-test-results 2
+        run: |
+          bash scripts/ci/verify-server-test-job.sh \
+            "${{ needs.server-test-shard.result }}" \
+            downloaded-server-tests/server-test-results 2
 
       - name: Summarise failures
         if: failure()
