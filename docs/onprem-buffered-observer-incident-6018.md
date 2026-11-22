@@ -27,3 +27,21 @@ peer tunnel. It additionally identifies a distinct fresh-observer tunnel, waits 
 exact tunnel, and only then accepts the observer's rendering of the unique marker. Missing authentication,
 missing observer data, missing marker visibility, or replacement/loss of the original peer tunnel remains a
 failure; no timeout, retry, skip, or fixed sleep is used as the oracle.
+
+## Validation record
+
+At correction head `2c95533d47a792d6de6db4d1d5d6cbc12061607d`, ordinary CI run `44967247160`,
+attempt 1, on-prem job `137039367375` ran the production-built on-prem shard with retries disabled. The
+job passed all 26 tests, including the buffered-cancellation scenario, in 3 minutes 22 seconds.
+
+The separate focused command
+`npx playwright test --config playwright.onprem.config.ts e2e/onprem/onp-websocket-buffered-cancellation-5586c10d.spec.ts --retries=0 --trace=off`
+was also run from that head. Playwright collected and started exactly one test, but this constrained worker
+took longer than the committed 120-second test deadline and timed out; the run is not recorded as success.
+Earlier attempts on the same worker were blocked first by an absent Chromium binary, then absent Chromium
+system libraries, and then a stale physical `shared/node_modules` directory that loaded Yjs twice. Installing
+the pinned browser and its system dependencies and restoring the intended `shared/node_modules` symlink
+removed those startup blockers, but did not make the focused scenario complete within its unchanged bound.
+The ordinary shard result therefore supplies successful native-path evidence, while successful separate
+focused validation remains unavailable in this environment. No timeout, retry, or test assertion was changed
+to convert the incomplete focused run into a pass.
