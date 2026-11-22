@@ -2,7 +2,16 @@ import type { Project } from "../app-schema.js";
 import { type CalendarQueryRows, deriveAcceptedCalendarEntries } from "../services/calendarAcceptedEntries.js";
 import { computeDayHeaders, formatCalendarRangeLabel } from "../services/calendarDayHeaders.js";
 import type { CalendarEntryRoles } from "../services/calendarEntries.js";
-import { layoutTimeGrid, type TimeGridLayout } from "../services/calendarTimeGridLayout.js";
+import {
+    DEFAULT_WORKING_HOURS_END_MINUTES,
+    DEFAULT_WORKING_HOURS_START_MINUTES,
+} from "../services/calendarHourMinuteLayout.js";
+import {
+    layoutTimeGrid,
+    TIME_GRID_HOUR_LABELS,
+    type TimeGridLayout,
+    timeGridMilestoneLabel,
+} from "../services/calendarTimeGridLayout.js";
 import {
     type CalendarObservationContextV1,
     type CalendarProjectionResult,
@@ -13,11 +22,15 @@ import {
 export interface CalendarDaySettings extends CalendarEntryRoles {
     readonly name: string;
     readonly groupAxes: readonly string[];
+    readonly workingHoursStartMinutes?: number;
+    readonly workingHoursEndMinutes?: number;
 }
 
 export interface CalendarDayVisibleModel {
     readonly layout: TimeGridLayout;
     readonly dayHeaders: ReturnType<typeof computeDayHeaders>;
+    readonly workingHoursStartMinutes: number;
+    readonly workingHoursEndMinutes: number;
     readonly projection: Extract<CalendarProjectionResult, { ready: true; }>["projection"];
 }
 
@@ -60,6 +73,8 @@ export function deriveCalendarDayVisibleModel(input: CalendarDayVisibleModelInpu
         context.timeZone,
         context.locale,
     );
+    const workingHoursStartMinutes = input.settings.workingHoursStartMinutes ?? DEFAULT_WORKING_HOURS_START_MINUTES;
+    const workingHoursEndMinutes = input.settings.workingHoursEndMinutes ?? DEFAULT_WORKING_HOURS_END_MINUTES;
     const content = [
         ...layout.timed.map(value => ({
             kind: "timed",
@@ -68,6 +83,7 @@ export function deriveCalendarDayVisibleModel(input: CalendarDayVisibleModelInpu
             start: value.startFraction,
             end: value.endFraction,
             column: value.columnIndex,
+            columns: value.columnCount,
         })),
         ...layout.allDay.map(value => ({
             kind: "all-day",
@@ -75,16 +91,35 @@ export function deriveCalendarDayVisibleModel(input: CalendarDayVisibleModelInpu
             day: value.dayIndex,
             span: value.spanDays,
         })),
-        ...layout.milestones.map(value => ({ kind: "due", title: value.entry.title, day: value.dayIndex })),
+        ...layout.milestones.map(value => ({
+            kind: "due",
+            title: timeGridMilestoneLabel(value.entry.title),
+            day: value.dayIndex,
+        })),
+        ...Array.from({ length: layout.dayCount }, (_, day) => ({
+            kind: "working-hours",
+            day,
+            start: workingHoursStartMinutes,
+            end: workingHoursEndMinutes,
+        })),
     ];
     const projected = projectCalendarVisibleState(context, {
         title: input.settings.name,
         rangeLabel: formatCalendarRangeLabel(context.rangeStartUtcMs, context.rangeEndUtcMs, context.timeZone,
             context.locale),
-        modeLabel: "day",
-        labels: dayHeaders.map(value => value.label),
+        modeLabel: "Day",
+        labels: [...dayHeaders.map(value => value.label), ...TIME_GRID_HOUR_LABELS],
         content,
     });
     if (!projected.ready) return projected;
-    return { ready: true, model: { layout, dayHeaders, projection: projected.projection } };
+    return {
+        ready: true,
+        model: {
+            layout,
+            dayHeaders,
+            workingHoursStartMinutes,
+            workingHoursEndMinutes,
+            projection: projected.projection,
+        },
+    };
 }

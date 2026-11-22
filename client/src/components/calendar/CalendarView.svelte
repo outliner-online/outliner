@@ -951,8 +951,8 @@ onDestroy(() => {
             layout={timeGridLayout}
             {timeZone}
             rangeStart={range.start}
-            workingHoursStartMinutes={acceptedDaysModel?.workingHoursStartMinutes ?? workingHoursStart}
-            workingHoursEndMinutes={acceptedDaysModel?.workingHoursEndMinutes ?? workingHoursEnd}
+            workingHoursStartMinutes={acceptedTimeGridModel?.workingHoursStartMinutes ?? workingHoursStart}
+            workingHoursEndMinutes={acceptedTimeGridModel?.workingHoursEndMinutes ?? workingHoursEnd}
             dayHeaders={acceptedTimeGridModel
                 ? acceptedTimeGridModel.dayHeaders
                 : computeDayHeaders(range.start, timeGridLayout.dayCount, timeZone, locale)}

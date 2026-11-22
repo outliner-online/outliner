@@ -34,10 +34,18 @@ describe("CalendarView Day projection boundary", { timeout: 30000 }, () => {
         item.start = new Date(anchorUtcMs).toISOString();
         item.allDay = false;
         item.duration = "PT30M";
+        const overlappingItem = new Items(projectDoc, project.tree, page.key).addNode("tester");
+        overlappingItem.text = "Overlapping standup";
+        overlappingItem.start = new Date(anchorUtcMs).toISOString();
+        overlappingItem.allDay = false;
+        overlappingItem.duration = "PT30M";
+        const dueItem = new Items(projectDoc, project.tree, page.key).addNode("tester");
+        dueItem.text = "Projection deadline";
+        dueItem.due = new Date(anchorUtcMs).toISOString();
 
         const calendarId = createCalendar(project, {
             name: "Day projection",
-            query: "SELECT id, text AS title, all_day, start_at, duration, "
+            query: "SELECT id, text AS title, all_day, start_at, duration, due, "
                 + "'item' AS source_kind, id AS source_id FROM outline_items",
             viewType: "day",
             timezone: "UTC",
@@ -45,6 +53,9 @@ describe("CalendarView Day projection boundary", { timeout: 30000 }, () => {
             roleStart: "start_at",
             roleAllDay: "all_day",
             roleDuration: "duration",
+            roleDue: "due",
+            workingHoursStartMinutes: 480,
+            workingHoursEndMinutes: 1020,
         });
         const range = computeViewRange(anchorUtcMs, "day", 1, "UTC");
         const observationContext: CalendarObservationContextV1 = {
@@ -75,8 +86,42 @@ describe("CalendarView Day projection boundary", { timeout: 30000 }, () => {
         const ready = projections.find(result => result.ready);
         expect(ready?.ready && ready.projection.content.map(value => value.title)).toContain("Projection standup");
         expect(component.getByTestId(`calendar-entry-item:${item.key}`).textContent).toContain("Projection standup");
+        if (!ready?.ready) throw new Error("Expected a ready Day projection");
+        expect(ready.projection.modeLabel).toBe("Day");
+        const displayedLabels = [...component.container.querySelectorAll(".day-header-cell, .hour-label")]
+            .map(node => node.textContent);
+        expect(ready.projection.labels).toEqual(displayedLabels);
+        expect(ready.projection.labels).toHaveLength(25);
+        const timed = ready.projection.content.filter(value => value.kind === "timed");
+        expect(timed.filter(value => value.title?.includes("standup"))).toEqual(expect.arrayContaining([
+            expect.objectContaining({ title: "Projection standup", column: expect.any(Number), columns: 2 }),
+            expect.objectContaining({ title: "Overlapping standup", column: expect.any(Number), columns: 2 }),
+        ]));
+        const milestone = component.getByTestId(`calendar-entry-milestone-item:${dueItem.key}`);
+        expect(milestone.textContent).toContain("◆ Projection deadline");
+        expect(ready.projection.content).toContainEqual(expect.objectContaining({
+            kind: "due",
+            title: "◆ Projection deadline",
+        }));
+        expect(ready.projection.content).toContainEqual({ kind: "working-hours", day: 0, start: 480, end: 1020 });
 
         const calendarMap = projectDoc.getMap("calendars").get(calendarId) as Y.Map<unknown>;
+        calendarMap.set("workingHoursStartMinutes", 600);
+        calendarMap.set("workingHoursEndMinutes", 900);
+        await waitFor(() => expect(projections.at(-1)).toEqual(expect.objectContaining({
+            ready: true,
+            projection: expect.objectContaining({
+                content: expect.arrayContaining([
+                    { kind: "working-hours", day: 0, start: 600, end: 900 },
+                ]),
+            }),
+        })));
+        await waitFor(() => {
+            const band = component.container.querySelector(".working-hours-band") as HTMLElement | null;
+            expect(band?.getAttribute("style")).toContain("top: 480px");
+            expect(band?.getAttribute("style")).toContain("height: 240px");
+        });
+
         calendarMap.set("query", "SELECT broken syntax");
         await waitFor(() => expect(component.getByTestId("calendar-stale-result")).toBeTruthy());
         await waitFor(() => expect(projections.at(-1)).toEqual({
