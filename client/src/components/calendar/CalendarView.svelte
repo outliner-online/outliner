@@ -18,6 +18,8 @@ import { analyzeCalendarColumnWritability } from "../../services/calendar/calend
 import { buildCalendarEntries, type CalendarEntry } from "../../services/calendar/calendarEntries";
 import { deriveCalendarDayVisibleModel, type CalendarDayVisibleModel } from "../../services/calendar/calendarDayVisibleModel";
 import { CALENDAR_DAYS_MODE_LABELS, deriveCalendarDaysVisibleModel, type CalendarDaysVisibleModel } from "$shared/notifications/calendarDaysVisibleModel";
+import { deriveCalendarGanttVisibleModel, type CalendarGanttVisibleModel } from "$shared/notifications/calendarGanttVisibleModel";
+import { GANTT_MODE_LABEL } from "$shared/services/calendarGanttPresentation";
 import { deriveCalendarMonthVisibleModel, type CalendarMonthVisibleModel } from "$shared/notifications/calendarMonthVisibleModel";
 import {
     resolveCalendarEntryWritability,
@@ -110,13 +112,13 @@ const VIEW_TYPE_OPTIONS: { value: string; label: string; }[] = [
     { value: "days", label: CALENDAR_DAYS_MODE_LABELS.days },
     { value: "week", label: CALENDAR_DAYS_MODE_LABELS.week },
     { value: "month", label: MONTH_MODE_LABEL },
-    { value: "gantt", label: "Gantt" },
+    { value: "gantt", label: GANTT_MODE_LABEL },
 ];
 
 const GANTT_SCALES = new Set<GanttScale>(["day", "week", "month", "quarter"]);
 
-function hasAcceptedProjection(type: string): type is "day" | "hours" | "days" | "week" | "month" {
-    return type === "day" || type === "hours" || type === "days" || type === "week" || type === "month";
+function hasAcceptedProjection(type: string): type is "day" | "hours" | "days" | "week" | "month" | "gantt" {
+    return type === "day" || type === "hours" || type === "days" || type === "week" || type === "month" || type === "gantt";
 }
 
 let settings = $state<CalendarSettings>(EMPTY_SETTINGS);
@@ -128,6 +130,8 @@ let catalogResultCurrent = $state(false);
 let acceptedDayModel = $state<CalendarDayVisibleModel | undefined>(undefined);
 let acceptedHoursModel = $state<CalendarHoursVisibleModel | undefined>(undefined);
 let acceptedDaysModel = $state<CalendarDaysVisibleModel | undefined>(undefined);
+let acceptedGanttModel = $state<CalendarGanttVisibleModel | undefined>(undefined);
+let ganttCollapsedEntryKeys = $state<string[]>([...(untrack(() => observationContext?.collapsedEntryKeys) ?? [])]);
 let acceptedMonthModel = $state<CalendarMonthVisibleModel | undefined>(undefined);
 let acceptedEvidence: {
     result: TableQueryResult;
@@ -343,6 +347,13 @@ function publishAcceptedModel(currentSettings: CalendarSettings): void {
         title: currentSettings.name,
         rangeLabel: acceptedEvidence.rangeLabel,
     };
+    if (input.context.viewType === "gantt") {
+        const derived = deriveCalendarGanttVisibleModel({ ...input, numericTickLabels: locale === undefined,
+            context: { ...input.context, collapsedEntryKeys: ganttCollapsedEntryKeys } });
+        acceptedGanttModel = derived.ready ? derived.model : undefined;
+        onVisibleProjection?.(derived.ready ? { ready: true, projection: derived.model.projection } : derived);
+        return;
+    }
     if (input.context.viewType === "hours") {
         const derived = deriveCalendarHoursVisibleModel(input);
         acceptedHoursModel = derived.ready ? derived.model : undefined;
@@ -378,6 +389,7 @@ function invalidateObservation(publishNonReady = hasAcceptedProjection(effective
     acceptedHoursModel = undefined;
     acceptedDaysModel = undefined;
     acceptedMonthModel = undefined;
+    acceptedGanttModel = undefined;
     if (publishNonReady) {
         onVisibleProjection?.({ ready: false, reason: "Accepted Calendar SQL evidence is stale or unavailable." });
     }
@@ -406,7 +418,8 @@ async function runQuery() {
             rangeStartUtcMs: currentRangeBounds.startUtcMs,
             rangeEndUtcMs: currentRangeBounds.endUtcMs,
             monthLaneFilter: currentViewType === "month" ? monthLaneFilter ?? null : null,
-            collapsedEntryKeys: [],
+            collapsedEntryKeys: currentViewType === "gantt" ? [...ganttCollapsedEntryKeys] : [],
+            ...(currentViewType === "gantt" ? { ganttScale } : {}),
         }
         : undefined;
 
@@ -472,6 +485,7 @@ function refreshMirror() {
     const queryChanged = next.query !== settings.query;
     const viewTypeChanged = next.viewType !== settings.viewType;
     const timezoneChanged = next.timezone !== settings.timezone;
+    if (viewTypeChanged && !observationContext) ganttCollapsedEntryKeys = [];
     const ganttScaleChanged = next.ganttScale !== settings.ganttScale;
     const weekStartChanged = (effectiveViewType === "week" || effectiveViewType === "month") && !observationContext && next.weekStart !== settings.weekStart;
     settings = next;
@@ -836,13 +850,18 @@ onDestroy(() => {
     {#if isGantt}
         <CalendarGanttChart
             entries={placedEntries}
+            acceptedModel={optimisticOverrides.size === 0 ? acceptedGanttModel : undefined}
+            onCollapsedEntryKeysChange={(keys) => {
+                ganttCollapsedEntryKeys = keys;
+                if (catalogResultCurrent && acceptedEvidence) publishAcceptedModel(settings);
+            }}
             groupAxes={settings.groupAxes}
             rangeStart={range.start}
             rangeEnd={range.end}
             ticks={ganttTicks}
             scale={ganttScale}
             {timeZone}
-            initialCollapsedEntryKeys={observationContext?.collapsedEntryKeys ?? []}
+            initialCollapsedEntryKeys={ganttCollapsedEntryKeys}
             onScaleChange={commitGanttScale}
             isLeafStartWritable={isStartWritable}
             isLeafDurationWritable={isDurationWritable}
