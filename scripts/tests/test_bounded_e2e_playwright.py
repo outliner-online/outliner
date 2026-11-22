@@ -16,7 +16,7 @@ MODULE = (CLI.parent / 'index.mjs').as_uri()
 
 
 class PlaywrightBoundaryTest(unittest.TestCase):
-    def run_probe(self, mode, tables_shard=False, new3_half=None, new2_shard=None):
+    def run_probe(self, mode, tables_shard=False, new3_half=None, new2_shard=None, new4_shard=None):
         with tempfile.TemporaryDirectory(prefix='bounded-playwright-') as directory:
             root = Path(directory)
             (root / 'context.json').write_text(json.dumps({'startedAt': datetime.now(timezone.utc).isoformat()}))
@@ -25,6 +25,8 @@ class PlaywrightBoundaryTest(unittest.TestCase):
                 projects = "projects:[{name:'new-3a'},{name:'new-3b'}],"
             if new2_shard:
                 projects = "projects:[{name:'new-2'}],"
+            if new4_shard:
+                projects = "projects:[{name:'new-4'}],"
             (root / 'playwright.config.mjs').write_text("export default {testDir:'.',retries:0,workers:1,"
                                                        + projects + "reporter:[['json',{outputFile:'report.json'}]]};")
             action = "process.exit(0)" if mode == 'incomplete' else "await new Promise(() => {})" if mode == 'timeout' else (
@@ -76,6 +78,21 @@ class PlaywrightBoundaryTest(unittest.TestCase):
                     import {{test}} from {json.dumps(MODULE)};
                     test('must remain on the other native shard', () => {{throw new Error('wrong shard executed')}});
                 """)
+            if new4_shard:
+                workflow = (ROOT / '.github/workflows/ci-test-e2e.yml').read_text()
+                branch = workflow.split('elif [[ "$project" =~ ^new-4-([12])$ ]]; then')[1].split('elif ')[0]
+                command = branch.split('npm run github:test:e2e -- ', 1)[1].split('2>&1 | tee', 1)[0].rstrip(' \\\n')
+                command = command.replace('../scripts/ci/new4-execution-reporter.mjs',
+                                          str(ROOT / 'scripts/ci/new4-execution-reporter.mjs'))
+                cli_arguments = shlex.split(command.replace('"$shard"', new4_shard).replace('\\\n', ' '))
+                self.assertEqual(cli_arguments, ['--project=new-4', '--shard=' + new4_shard,
+                                                 '--reporter=line,list,json,html,'
+                                                 + str(ROOT / 'scripts/ci/new4-execution-reporter.mjs')])
+                other = 'zzz-other.spec.mjs' if new4_shard == '1/2' else 'aaa-other.spec.mjs'
+                (root / other).write_text(f"""
+                    import {{test}} from {json.dumps(MODULE)};
+                    test('must remain on the other native shard', () => {{throw new Error('wrong shard executed')}});
+                """)
             result = subprocess.run([
                 sys.executable, str(RUNNER), '--context', str(root / 'context.json'),
                 '--status', str(root / 'status.json'), '--log', str(root / 'command.log'),
@@ -86,6 +103,10 @@ class PlaywrightBoundaryTest(unittest.TestCase):
             ], cwd=root, capture_output=True, text=True, timeout=20, env={
                 **os.environ, 'PLAYWRIGHT_JSON_OUTPUT_NAME': str(root / 'report.json'),
                 'PLAYWRIGHT_HTML_OPEN': 'never',
+                'NEW4_EXECUTION_REPORT': str(root / 'new4-execution.json'),
+                'NEW4_CI_SHARD': 'new-4-1' if new4_shard == '1/2' else 'new-4-2',
+                'NEW4_NATIVE_SHARD': new4_shard or '', 'E2E_BROWSER': 'chromium',
+                'E2E_PROJECT': 'new-4', 'E2E_EXECUTION_ID': 'fixture-run', 'GITHUB_SHA': 'fixture-sha',
             })
             status = json.loads((root / 'status.json').read_text())
             self.assertEqual(result.returncode, {'pass': 0, 'failure': 1, 'incomplete': 1, 'timeout': 124}[mode], result.stderr)
@@ -125,6 +146,14 @@ class PlaywrightBoundaryTest(unittest.TestCase):
 
     def test_new2_shipped_command_incomplete_report_cannot_pass(self):
         self.run_probe('incomplete', new2_shard='2/2')
+
+    def test_new4_shipped_native_shards_and_reporters(self):
+        for shard in ('1/2', '2/2'):
+            with self.subTest(shard=shard):
+                self.run_probe('pass', new4_shard=shard)
+
+    def test_new4_shipped_command_failure_is_nonzero(self):
+        self.run_probe('failure', new4_shard='2/2')
 
     def test_new3_shipped_command_failure_is_nonzero(self):
         self.run_probe('failure', new3_half='new-3b')

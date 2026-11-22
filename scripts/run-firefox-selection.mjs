@@ -32,7 +32,7 @@ function argumentsForRun(args) {
     const shared = [`--project=${project}`, ...(config ? [`--config=${config}`] : [])];
     return {
         project,
-        collection: [...shared, "--list", "--reporter=../scripts/tests/helpers/playwright-collection-reporter.mjs"],
+        collection: [...shared, "--list", "--reporter=../scripts/ci/playwright-collection-reporter.mjs"],
         execution: [...shared, ...execution],
     };
 }

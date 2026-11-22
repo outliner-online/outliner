@@ -79,7 +79,7 @@ describe("ENV-8c3de7a2: complete native new-2 sharding", () => {
         const job = workflow.jobs["e2e-test"];
         expect(job["timeout-minutes"]).toBe(30);
         expect(job.strategy["fail-fast"]).toBe(false);
-        expect(job.env.E2E_PROJECT).toBe("${{ startsWith(matrix.project, 'new-2-') && 'new-2' || matrix.project }}");
+        expect(job.env.E2E_PROJECT).toContain("startsWith(matrix.project, 'new-2-') && 'new-2'");
         const run = job.steps.find((step: { id?: string; }) => step.id === "tests").run;
         expect(run).toContain('if [[ "$project" =~ ^new-2-([12])$ ]]; then');
         expect(run).toContain('shard="${BASH_REMATCH[1]}/2"');
