@@ -6,7 +6,7 @@ import { Items, Project } from "../../schema/app-schema";
 import { computeViewRange } from "../../services/calendar/calendarGridRange";
 import { createCalendar } from "../../services/calendar/calendarService";
 
-export function mountDays(viewType: "days" | "week", withContext = true) {
+export function mountDays(viewType: "days" | "week", withContext = true, grouped = false) {
     const doc = new Y.Doc();
     const project = Project.fromDoc(doc);
     const page = new Items(doc, project.tree, "root").addNode("fixture");
@@ -19,11 +19,11 @@ export function mountDays(viewType: "days" | "week", withContext = true) {
         item.allDay = false;
         return item;
     };
-    timed("Early", "2026-03-15T15:15:00Z", "PT1H");
-    timed("Overlap", "2026-03-15T15:30:00Z", "PT1H");
-    timed("Clipped", "2026-03-18T14:30:00Z", "PT2H");
+    const early = timed("Early", "2026-03-15T15:15:00Z", "PT1H");
+    const overlap = timed("Overlap", "2026-03-15T15:30:00Z", "PT1H");
+    const clipped = timed("Clipped", "2026-03-18T14:30:00Z", "PT2H");
     timed("Week only", "2026-03-22T01:00:00Z", "PT1H");
-    timed("Outside", "2026-03-23T00:00:00Z", "PT1H");
+    const outside = timed("Outside", "2026-03-23T00:00:00Z", "PT1H");
     const allDay = timed("Carry", "2026-03-15", "P3D");
     allDay.allDay = true;
     const due = children.addNode("fixture");
@@ -33,15 +33,27 @@ export function mountDays(viewType: "days" | "week", withContext = true) {
     recurring.rrule = "FREQ=DAILY;COUNT=3";
     recurring.recurrenceDtstart = "2026-03-16T08:00:00";
     recurring.recurrenceTimezone = "Asia/Tokyo";
+    if (grouped) {
+        early.tags = ["Red", "Blue"];
+        overlap.tags = ["Blue"];
+        clipped.tags = allDay.tags = recurring.tags = ["Red"];
+        due.tags = ["Blue"];
+        outside.tags = ["Outside only"];
+    }
     const query = "SELECT id, text AS title, text || ' revised' AS alternate_title, all_day, "
         + "CASE WHEN all_day THEN start_on::text ELSE start_at::text END AS start_value, "
-        + "duration, due, rrule, 'Team A' AS team, 'item' AS source_kind, id AS source_id FROM outline_items ORDER BY id";
+        + "duration, due, rrule, " + (grouped ? "tags" : "'Team A'")
+        + " AS team, " + (grouped ? "'outline_items'" : "'item'")
+        + " AS source_kind, id AS source_id FROM outline_items ORDER BY id";
     const calendarId = createCalendar(project, {
         name: "Days projection",
         query,
         viewType,
         timezone: "UTC",
         weekStart: 0,
+        groupAxes: grouped ? ["team"] : [],
+        laneOrder: grouped ? ["Red", "Empty", "Blue"] : [],
+        showEmptyLanes: grouped,
         roleTitle: "title",
         roleStart: "start_value",
         roleDuration: "duration",
@@ -70,12 +82,22 @@ export function mountDays(viewType: "days" | "week", withContext = true) {
         observationContext: withContext ? context : undefined,
         onVisibleProjection: (result: CalendarProjectionResult) => results.push(result),
     });
-    return { doc, project, view, results, query, context, map: project.calendars.get(calendarId)! };
+    return {
+        doc,
+        project,
+        calendarId,
+        view,
+        results,
+        query,
+        context,
+        early,
+        outside,
+        map: project.calendars.get(calendarId)!,
+    };
 }
 
 /** Independent DOM/CSS reader: no layout, entry derivation or projection helper. */
-export function daysDom(root: HTMLElement) {
-    const grid = root.querySelector<HTMLElement>('[data-testid="calendar-time-grid"]')!;
+export function timeGridDom(grid: HTMLElement) {
     const days = Array.from(grid.querySelectorAll<HTMLElement>(".day-column"));
     const title = (node: Element) => node.querySelector(".entry-title")!.textContent!.trim();
     const percentages = (value: string) => (value.match(/-?[\d.]+(?=%)/g) ?? []).map(Number);
@@ -110,15 +132,21 @@ export function daysDom(root: HTMLElement) {
         content.push({ kind: "working-hours", day, start, end: start + parseFloat(band.style.height) * 60 / 48 });
     });
     return {
-        version: 1,
-        title: root.querySelector('[data-testid="calendar-name"]')!.textContent,
-        rangeLabel: root.querySelector('[data-testid="calendar-range-label"]')!.textContent,
-        modeLabel:
-            root.querySelector<HTMLSelectElement>('[data-testid="calendar-view-type"]')!.selectedOptions[0].textContent,
         labels: [
             ...Array.from(grid.querySelectorAll(".day-header-cell")).map(node => node.textContent!.trim()),
             ...Array.from(grid.querySelectorAll(".hour-label")).map(node => node.textContent!.trim()),
         ],
         content,
+    };
+}
+
+export function daysDom(root: HTMLElement) {
+    return {
+        version: 1,
+        title: root.querySelector('[data-testid="calendar-name"]')!.textContent,
+        rangeLabel: root.querySelector('[data-testid="calendar-range-label"]')!.textContent,
+        modeLabel:
+            root.querySelector<HTMLSelectElement>('[data-testid="calendar-view-type"]')!.selectedOptions[0].textContent,
+        ...timeGridDom(root.querySelector<HTMLElement>('[data-testid="calendar-time-grid"]')!),
     };
 }

@@ -195,9 +195,10 @@ const entryByKey = $derived(new Map(placedEntries.map((e) => [e.key, e])));
 // rendered as nested swimlanes here.
 const groupAxis = $derived(settings.groupAxes[0] as string | undefined);
 const groupingActive = $derived(groupAxis !== undefined);
+const acceptedLaneBands = $derived(optimisticOverrides.size === 0 ? acceptedDaysModel?.bands : undefined);
 const lanes = $derived(
     groupAxis
-        ? groupCalendarEntries(placedEntries, [groupAxis], {
+        ? acceptedLaneBands?.map(band => band.lane) ?? groupCalendarEntries(placedEntries, [groupAxis], {
             laneOrder: settings.laneOrder,
             showEmptyLanes: settings.showEmptyLanes,
         })
@@ -904,12 +905,13 @@ onDestroy(() => {
     {:else if groupingActive && lanes}
         <CalendarLaneTimeGrid
             {lanes}
+            acceptedBands={acceptedLaneBands}
             {timeZone}
             rangeStart={range.start}
             rangeEnd={range.end}
-            workingHoursStartMinutes={workingHoursStart}
-            workingHoursEndMinutes={workingHoursEnd}
-            dayHeaders={computeDayHeaders(range.start, Math.round((range.end - range.start) / 86_400_000), timeZone, locale)}
+            workingHoursStartMinutes={acceptedDaysModel?.workingHoursStartMinutes ?? workingHoursStart}
+            workingHoursEndMinutes={acceptedDaysModel?.workingHoursEndMinutes ?? workingHoursEnd}
+            dayHeaders={acceptedDaysModel?.dayHeaders ?? computeDayHeaders(range.start, Math.round((range.end - range.start) / 86_400_000), timeZone, locale)}
             todayUtcMs={todayAnchor(timeZone, Date.now())}
             {isStartWritable}
             {isDurationWritable}

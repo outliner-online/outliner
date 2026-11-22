@@ -101,12 +101,15 @@ describe.each(["days", "week"] as const)("production %s accepted projection", vi
         expect(recovered.ready && recovered.projection).toEqual(daysDom(view.container));
     }, 45000);
 
-    it("retains the separate grouped lane renderer with explicit non-ready projection", async () => {
+    it("retains interactive lane fallback when the selected group column is unavailable", async () => {
         const { view, results, map } = mountDays(viewType);
         await waitFor(() => expect(results.at(-1)?.ready).toBe(true));
-        map.set("groupAxes", ["team"]);
+        map.set("groupAxes", ["missing_group"]);
         await waitFor(() => expect(view.getByTestId("calendar-lane-time-grid")).toBeTruthy());
-        expect(results.at(-1)).toEqual({ ready: false, reason: "Grouped Days/Week projection is not ready." });
+        expect(results.at(-1)).toEqual({
+            ready: false,
+            reason: "Calendar grouping evidence is unavailable or ambiguous.",
+        });
         expect(view.getByRole("group", { name: "Early" })).toBeTruthy();
         map.set("groupAxes", []);
         await waitFor(() => expect(results.at(-1)?.ready).toBe(true));

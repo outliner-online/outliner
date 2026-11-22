@@ -43,10 +43,10 @@ describe.each(["days", "week"] as const)("shared %s producer", viewType => {
             .toBe(false);
     });
 
-    it("refuses grouped geometry and unresolved recurrence with a non-null project", () => {
+    it("refuses missing group evidence and unresolved recurrence with a non-null project", () => {
         const input = evidence(viewType);
         expect(deriveCalendarDaysVisibleModel({ ...input, settings: { ...input.settings, groupAxes: ["team"] } }))
-            .toEqual({ ready: false, reason: "Grouped Days/Week projection is not ready." });
+            .toEqual({ ready: false, reason: "Calendar grouping evidence is unavailable or ambiguous." });
         expect(deriveCalendarDaysVisibleModel({
             ...input,
             project: Project.fromDoc(new Y.Doc()),
@@ -66,6 +66,7 @@ describe.each(["days", "week"] as const)("shared %s producer", viewType => {
         const result = deriveCalendarDaysVisibleModel(evidence(viewType));
         expect(result.ready).toBe(true);
         if (!result.ready) throw Error(result.reason);
+        if (!result.model.layout) throw Error("Expected ungrouped layout");
         expect(result.model.layout.dayCount).toBe(viewType === "days" ? 3 : 7);
         expect(result.model.projection.modeLabel).toBe(viewType === "days" ? "Multi-day" : "Week");
         expect(result.model.projection.content[0]).toEqual({

@@ -5,6 +5,7 @@
 // component turns into pixels.
 
 import type { CalendarEntry } from "./calendarEntries.js";
+import { type CalendarLane, collapseLanePath } from "./calendarGrouping.js";
 
 const DAY_MS = 86_400_000;
 const DEFAULT_TIMED_DURATION_MS = 30 * 60 * 1000;
@@ -48,6 +49,25 @@ export interface TimeGridLayout {
     timed: TimedPlacement[];
     allDay: AllDayPlacement[];
     milestones: MilestonePlacement[];
+}
+
+export interface CalendarLaneTimeGridBand {
+    readonly lane: CalendarLane;
+    readonly label: string;
+    readonly layout: TimeGridLayout;
+}
+
+/** The actual flat lane renderer groups before clipping each band. */
+export function layoutCalendarLaneTimeGrid(
+    lanes: CalendarLane[],
+    rangeStart: number,
+    rangeEnd: number,
+): CalendarLaneTimeGridBand[] {
+    return lanes.map(lane => ({
+        lane,
+        label: collapseLanePath(lane.path),
+        layout: layoutTimeGrid(lane.entries, rangeStart, rangeEnd),
+    }));
 }
 
 interface OverlapItem {
