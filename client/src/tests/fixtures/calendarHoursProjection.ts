@@ -7,7 +7,7 @@ import { computeViewRange } from "../../services/calendar/calendarGridRange";
 import { createCalendar } from "../../services/calendar/calendarService";
 import { createRecurrenceOverride } from "../../services/calendar/recurrenceEditing";
 
-export function mountHours() {
+export function mountHours(options: { postReadyRecurrence?: boolean; } = {}) {
     const doc = new Y.Doc({ guid: "hours-projection-fixture" });
     const project = Project.fromDoc(doc);
     const page = new Items(doc, project.tree, "root").addNode("fixture");
@@ -29,14 +29,17 @@ export function mountHours() {
     const due = children.addNode("fixture");
     due.text = "Due";
     due.due = "2026-03-08T16:00:00Z";
-    const recurring = timed("Replaced occurrence", "2026-03-07T13:00:00Z", "PT30M");
-    recurring.rrule = "FREQ=DAILY;COUNT=3";
-    recurring.recurrenceDtstart = "2026-03-07T08:00:00";
+    const recurring = timed(options.postReadyRecurrence ? "Series" : "Replaced occurrence",
+        options.postReadyRecurrence ? "2026-03-08T12:00:00Z" : "2026-03-07T13:00:00Z", "PT30M");
+    recurring.rrule = options.postReadyRecurrence ? "FREQ=HOURLY;COUNT=3" : "FREQ=DAILY;COUNT=3";
+    recurring.recurrenceDtstart = options.postReadyRecurrence ? "2026-03-08T08:00:00" : "2026-03-07T08:00:00";
     recurring.recurrenceTimezone = "America/New_York";
-    createRecurrenceOverride(project.tree, recurring, {
-        occurrenceId: "2026-03-08T08:00:00",
-        startUtcMs: Date.parse("2026-03-08T12:00:00Z"),
-    }, { text: "Actual override" });
+    if (!options.postReadyRecurrence) {
+        createRecurrenceOverride(project.tree, recurring, {
+            occurrenceId: "2026-03-08T08:00:00",
+            startUtcMs: Date.parse("2026-03-08T12:00:00Z"),
+        }, { text: "Actual override" });
+    }
     const query = "SELECT id AS id, text AS title, text || ' revised' AS alternate_title, all_day AS all_day, "
         + "CASE WHEN all_day THEN start_on::text ELSE start_at::text END AS start_value, "
         + "duration AS duration, due AS due, rrule AS rrule, "
@@ -76,7 +79,18 @@ export function mountHours() {
         observationContext: context,
         onVisibleProjection: (result: CalendarProjectionResult) => results.push(result),
     });
-    return { doc, project, context, folded, query, results, view, map: project.calendars.get(calendarId)! };
+    return {
+        doc,
+        project,
+        calendarId,
+        context,
+        folded,
+        recurring,
+        query,
+        results,
+        view,
+        map: project.calendars.get(calendarId)!,
+    };
 }
 
 /** Read actual painted DOM semantics, never the layout/producer used to build them. */
