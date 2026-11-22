@@ -120,6 +120,8 @@ describe("Calendar observation route navigation", () => {
             expect(screen.getByTestId("calendar-view-probe").textContent).toContain(
                 `new-project-doc:${newProject.calendarId}`,
             );
+            expect(screen.getByRole("heading", { level: 1 }).textContent?.trim()).toBe("New Calendar");
+            expect(screen.queryByText("Old Calendar")).toBeNull();
             expect(screen.queryByText("Calendar not found")).toBeNull();
             expect(screen.queryByText("An error occurred")).toBeNull();
             expect(store.project?.ydoc.guid).toBe("new-project-doc");
