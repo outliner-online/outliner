@@ -65,6 +65,53 @@ class ServerExecutionBoundaryTest(unittest.TestCase):
             self.assertEqual(verify.returncode, 0, verify.stdout + verify.stderr)
             self.assertIn('Verified 2 native tests', verify.stdout)
 
+            outcome_path = root / 'server-test-results/shard-1/outcome.json'
+            outcome_path.write_text('null')
+            verify = subprocess.run(['node', 'scripts/ci/verify-server-test-shards.mjs',
+                                     'server-test-results', '2'], cwd=root, env=env,
+                                    text=True, capture_output=True, timeout=30)
+            self.assertNotEqual(verify.returncode, 0)
+            self.assertIn('shard 1 has invalid outcome evidence', verify.stderr)
+
+            for shard in ['1/2', '2/2']:
+                index = shard.split('/')[0]
+                result = subprocess.run(['bash', 'scripts/ci/run-server-test-shard.sh'], cwd=root,
+                                        env=env | {'SERVER_TEST_SHARD': shard,
+                                                   'SERVER_TEST_RESULT_DIR': f'server-test-results/shard-{index}'}, text=True,
+                                        capture_output=True, timeout=60)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+            full_path = root / 'server-test-results/shard-1/full.json'
+            full_path.write_text('null')
+            verify = subprocess.run(['node', 'scripts/ci/verify-server-test-shards.mjs',
+                                     'server-test-results', '2'], cwd=root, env=env,
+                                    text=True, capture_output=True, timeout=30)
+            self.assertNotEqual(verify.returncode, 0)
+            self.assertIn('shard 1 has invalid unsplit inventory evidence', verify.stderr)
+
+            for shard in ['1/2', '2/2']:
+                index = shard.split('/')[0]
+                result = subprocess.run(['bash', 'scripts/ci/run-server-test-shard.sh'], cwd=root,
+                                        env=env | {'SERVER_TEST_SHARD': shard,
+                                                   'SERVER_TEST_RESULT_DIR': f'server-test-results/shard-{index}'}, text=True,
+                                        capture_output=True, timeout=60)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+            outcome_path.write_text('{"runId":"stale","runAttempt":"2","commit":"abc","shard":"1/2","status":0}')
+            verify = subprocess.run(['node', 'scripts/ci/verify-server-test-shards.mjs',
+                                     'server-test-results', '2'], cwd=root, env=env,
+                                    text=True, capture_output=True, timeout=30)
+            self.assertNotEqual(verify.returncode, 0)
+            self.assertIn('shard 1 result is stale', verify.stderr)
+
+            for shard in ['1/2', '2/2']:
+                index = shard.split('/')[0]
+                result = subprocess.run(['bash', 'scripts/ci/run-server-test-shard.sh'], cwd=root,
+                                        env=env | {'SERVER_TEST_SHARD': shard,
+                                                   'SERVER_TEST_RESULT_DIR': f'server-test-results/shard-{index}'}, text=True,
+                                        capture_output=True, timeout=60)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
             for index in ['1', '2']:
                 for name in ['full.json', 'executed.json']:
                     result_path = root / f'server-test-results/shard-{index}/{name}'
