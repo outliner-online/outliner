@@ -20,7 +20,8 @@ export interface MonthChipPresentation {
 export interface CalendarMonthPresentation {
     readonly weekdayHeaders: readonly string[];
     readonly cellLabels: readonly string[];
-    readonly chips: ReadonlyMap<string, MonthChipPresentation>;
+    /** Concrete cell/entry positions; a source key may occur in several SQL rows. */
+    readonly chipsByCell: readonly (readonly MonthChipPresentation[])[];
 }
 
 export function monthWeekdayHeaders(weekStart: number, locale?: string): string[] {

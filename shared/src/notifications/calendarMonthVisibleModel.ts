@@ -91,12 +91,11 @@ export function deriveCalendarMonthVisibleModel(input: {
     const presentation: CalendarMonthPresentation = {
         weekdayHeaders: monthWeekdayHeaders(context.weekStart, context.locale),
         cellLabels: cells.map(cell => monthCellDateLabel(cell.dateUtcMs)),
-        chips: new Map(
-            entries.map(
-                entry => [entry.key,
-                    monthChipPresentation(laneLabel(entry),
-                        resolveCalendarEntryWritability(entry, input.settings, writable).startWritable)],
-            ),
+        chipsByCell: cells.map(cell =>
+            cell.entries.map(({ entry }) =>
+                monthChipPresentation(laneLabel(entry),
+                    resolveCalendarEntryWritability(entry, input.settings, writable).startWritable)
+            )
         ),
     };
     const projected = projectCalendarVisibleState(context, {
@@ -120,7 +119,7 @@ export function deriveCalendarMonthVisibleModel(input: {
                     cell: cell.dayIndex,
                     order,
                     title: entry.title,
-                    background: presentation.chips.get(entry.key)!.background,
+                    background: presentation.chipsByCell[cell.dayIndex][order].background,
                 })),
             ]),
         ],

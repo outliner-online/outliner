@@ -61,8 +61,8 @@ const weekdayHeaders = $derived(
     acceptedPresentation?.weekdayHeaders ?? monthWeekdayHeaders(weekStart, locale),
 );
 
-function chipPresentation(entry: CalendarEntry) {
-    return acceptedPresentation?.chips.get(entry.key) ?? monthChipPresentation(laneLabel?.(entry), isStartWritable(entry));
+function chipPresentation(entry: CalendarEntry, dayIndex: number, order: number) {
+    return acceptedPresentation?.chipsByCell[dayIndex]?.[order] ?? monthChipPresentation(laneLabel?.(entry), isStartWritable(entry));
 }
 
 function timeOfDayMs(startMs: number): number {
@@ -235,7 +235,7 @@ function onDrop(cell: MonthCell, e: DragEvent) {
                         {/if}
                     </div>
                 {/each}
-                {#each cell.entries as { entry } (entry.key)}
+                {#each cell.entries as { entry }, order (entry.key)}
                     <div
                         role="button"
                         tabindex="0"
@@ -243,8 +243,8 @@ function onDrop(cell: MonthCell, e: DragEvent) {
                         class:not-writable={!isStartWritable(entry)}
                         draggable={isStartWritable(entry)}
                         data-testid={`calendar-entry-${entry.key}`}
-                        data-lane={chipPresentation(entry).laneLabel}
-                        style={`background: ${chipPresentation(entry).background}`}
+                        data-lane={chipPresentation(entry, cell.dayIndex, order).laneLabel}
+                        style={`background: ${chipPresentation(entry, cell.dayIndex, order).background}`}
                         data-navigable={isSourceNavigable(entry) ? "true" : undefined}
                         ondragstart={(e) => onDragStart(entry, e)}
                         ondragend={clearDragLabel}
