@@ -74,6 +74,8 @@ export function mountGantt(collapsed = false, scale: GanttScale = "day", withCon
         onVisibleProjection: (result: CalendarProjectionResult) => results.push(result),
     });
     return {
+        project,
+        calendarId,
         view,
         results,
         map: project.calendars.get(calendarId)!,
