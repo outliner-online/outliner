@@ -60,6 +60,23 @@ class BoundedE2ETest(unittest.TestCase):
                 self.assertIn('test output', (self.root / 'command.log').read_text())
                 self.assertEqual(attachment.read_text(), 'original bytes')
 
+    def test_context_identity_is_retained_without_inventing_a_job_id(self):
+        context = json.loads(self.context.read_text())
+        context.update(runId='1234', runAttempt='2', ciShard='tables-2', commit='fixture-sha')
+        self.context.write_text(json.dumps(context))
+        result = self.run_command("print('identified command')")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual({key: self.status[key] for key in ('run_id', 'run_attempt', 'project', 'checkout_sha')},
+                         {'run_id': '1234', 'run_attempt': '2', 'project': 'tables-2', 'checkout_sha': 'fixture-sha'})
+        self.assertNotIn('job_id', self.status)
+
+    def test_missing_context_identity_remains_unknown(self):
+        result = self.run_command("print('local command')")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for key in ('run_id', 'run_attempt', 'project', 'checkout_sha'):
+            self.assertIsNone(self.status[key])
+        self.assertNotIn('job_id', self.status)
+
     def test_timeout_is_failure_even_when_term_handler_exits_zero(self):
         result = self.run_command(
             "import signal,time,sys; signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); "
@@ -77,6 +94,7 @@ class BoundedE2ETest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 143, result.stderr)
         self.assertEqual(self.status['status'], 'interrupted')
+        self.assertEqual(self.status['received_signal'], 15)
         self.assertEqual(self.status['remaining_processes'], [])
 
     def detached_child(self, parent_exits):

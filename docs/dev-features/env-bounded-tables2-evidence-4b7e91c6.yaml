@@ -1,0 +1,16 @@
+id: ENV-4b7e91c6
+title: Retain tables-2 diagnostics before cancellation and finalization
+title-ja: キャンセルと終了処理の前に tables-2 の診断を保持する
+description: Run both native tables shards through the existing Linux E2E supervisor with their unchanged project, shard selection, assertions and retries. Preserve the 30-minute job timeout while bounding the command to 20 minutes and 22 minutes from execution-context initialization, reserving time for owned-descendant cleanup and artifact upload. Retain successful, failed and cancelled post-startup evidence with run, attempt, shard and commit identity in the artifact name and execution context. A cancellation can prevent upload, so absent artifacts remain unavailable evidence rather than proof of successful cleanup. Before verified E2E entry, upload only the existing safe startup snapshot. Real Playwright CLI regressions exercise the shipped tables-2 selection, assertion failure, timeout, premature worker exit, retained attachments and exclusion of the other native shard. This change does not establish a runner-side Complete job fault or a cancellation root cause.
+category: environment
+status: implemented
+components:
+- .github/workflows/ci-test-e2e.yml
+- scripts/ci/run-bounded-e2e.py
+tests:
+- scripts/tests/env-firefox-ci-promotion-934d0f2a.spec.ts
+- scripts/tests/env-e2e-tables-two-shards-6f6d021a.spec.ts
+- scripts/tests/test_bounded_e2e.py
+- scripts/tests/test_bounded_e2e_playwright.py
+- scripts/tests/test_bounded_e2e_tables_artifacts.py
+- scripts/tests/test_bounded_e2e_startup_artifacts.py

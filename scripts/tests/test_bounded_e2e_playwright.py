@@ -16,7 +16,7 @@ MODULE = (CLI.parent / 'index.mjs').as_uri()
 
 
 class PlaywrightBoundaryTest(unittest.TestCase):
-    def run_probe(self, mode, tables_shard=False, new3_half=None, new2_shard=None, new4_shard=None):
+    def run_probe(self, mode, tables_shard=None, new3_half=None, new2_shard=None, new4_shard=None):
         with tempfile.TemporaryDirectory(prefix='bounded-playwright-') as directory:
             root = Path(directory)
             (root / 'context.json').write_text(json.dumps({'startedAt': datetime.now(timezone.utc).isoformat()}))
@@ -44,22 +44,24 @@ class PlaywrightBoundaryTest(unittest.TestCase):
             """)
             cli_arguments = []
             if tables_shard:
-                # Extract the shipped tables-1 branch, preserving its real CLI
+                # Extract the shipped tables branch, preserving its real CLI
                 # selection. Only redirect paths/budgets into this fixture and
                 # replace the npm entry with the installed real Playwright CLI.
                 workflow = (ROOT / '.github/workflows/ci-test-e2e.yml').read_text()
-                branch = workflow.split('elif [ "$project" = "tables-1" ]; then')[1].split('elif [[')[0]
+                branch = workflow.split('elif [[ "$project" =~ ^tables-([12])$ ]]; then')[1].split('else')[0]
+                branch = branch.replace('${BASH_REMATCH[1]}/2', tables_shard)
                 tokens = shlex.split(branch.replace('\\\n', ' '))
                 self.assertEqual(tokens[:2], ['python3', '../scripts/ci/run-bounded-e2e.py'])
                 prefix, command = tokens[2:tokens.index('--')], tokens[tokens.index('--') + 1:]
                 self.assertEqual(command[:4], ['npm', 'run', 'github:test:e2e', '--'])
                 cli_arguments = command[4:]
-                self.assertEqual(cli_arguments, ['--project=tables', '--shard=1/2'])
+                self.assertEqual(cli_arguments, ['--project=tables', '--shard=' + tables_shard])
                 self.assertIn('--timeout-seconds=1200', prefix)
                 self.assertIn('--job-budget-seconds=1320', prefix)
-                (root / 'zzz-other.spec.mjs').write_text(f"""
+                other = 'zzz-other.spec.mjs' if tables_shard == '1/2' else 'aaa-other.spec.mjs'
+                (root / other).write_text(f"""
                     import {{test}} from {json.dumps(MODULE)};
-                    test('must remain on shard two', () => {{throw new Error('wrong shard executed')}});
+                    test('must remain on the other native shard', () => {{throw new Error('wrong shard executed')}});
                 """)
             if new3_half:
                 workflow = (ROOT / '.github/workflows/ci-test-e2e.yml').read_text()
@@ -171,16 +173,28 @@ class PlaywrightBoundaryTest(unittest.TestCase):
         self.run_probe('timeout')
 
     def test_tables_shard_pass_retains_report_and_attachment(self):
-        self.run_probe('pass', tables_shard=True)
+        self.run_probe('pass', tables_shard='1/2')
 
     def test_tables_shard_failure_is_nonzero(self):
-        self.run_probe('failure', tables_shard=True)
+        self.run_probe('failure', tables_shard='1/2')
 
     def test_tables_shard_timeout_is_nonzero_and_retains_diagnostics(self):
-        self.run_probe('timeout', tables_shard=True)
+        self.run_probe('timeout', tables_shard='1/2')
 
     def test_tables_shard_premature_worker_exit_cannot_pass(self):
-        self.run_probe('incomplete', tables_shard=True)
+        self.run_probe('incomplete', tables_shard='1/2')
+
+    def test_tables2_shipped_shard_pass_retains_report_and_attachment(self):
+        self.run_probe('pass', tables_shard='2/2')
+
+    def test_tables2_shipped_shard_failure_is_nonzero(self):
+        self.run_probe('failure', tables_shard='2/2')
+
+    def test_tables2_shipped_shard_timeout_is_nonzero_and_retains_diagnostics(self):
+        self.run_probe('timeout', tables_shard='2/2')
+
+    def test_tables2_shipped_shard_premature_worker_exit_cannot_pass(self):
+        self.run_probe('incomplete', tables_shard='2/2')
 
 
 if __name__ == '__main__':
