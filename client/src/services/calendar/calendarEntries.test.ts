@@ -31,6 +31,24 @@ describe("buildCalendarEntries", () => {
             .toEqual(Object.fromEntries(before.map(entry => [entry.title, entry.renderKey])));
     });
 
+    it("keeps occurrence identities across singleton-to-duplicate and same-title reorder transitions", () => {
+        const original = { source_kind: "items", source_id: "same", title: "Same", start: "2026-03-10T09:00:00Z" };
+        const later = { ...original, start: "2026-03-10T11:00:00Z" };
+        const build = (rows: Record<string, unknown>[]) =>
+            buildCalendarEntries(
+                { columns: ["source_kind", "source_id", "title", "start"], rows },
+                { roleTitle: "title", roleStart: "start" },
+                "UTC",
+            );
+        const singletonKey = build([original])[0].renderKey;
+        const joined = build([original, later]);
+        expect(joined[0].renderKey).toBe(singletonKey);
+        expect(joined[1].renderKey).not.toBe(singletonKey);
+        const reordered = build([later, original]);
+        expect(Object.fromEntries(reordered.map(entry => [entry.startMs, entry.renderKey])))
+            .toEqual(Object.fromEntries(joined.map(entry => [entry.startMs, entry.renderKey])));
+    });
+
     it("builds a timed entry with an instant start", () => {
         const [entry] = buildCalendarEntries(
             {

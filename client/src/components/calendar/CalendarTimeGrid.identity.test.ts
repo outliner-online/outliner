@@ -91,3 +91,64 @@ it("keeps the focused logical row through accepted reorder without collapsing du
     await fireEvent.keyDown(betaHandle, { key: "ArrowUp" });
     expect(resized).toEqual([{ title: "Beta", duration: 30 * 60_000 }]);
 });
+
+it("keeps a focused singleton occurrence when a second row for its source arrives", async () => {
+    const original = {
+        source_kind: "tasks",
+        source_id: "shared",
+        title: "Original",
+        start: "2026-03-10T09:00:00Z",
+        duration: "00:30:00",
+    };
+    const resized: CalendarEntry[] = [];
+    const props = callbacks(entry => resized.push(entry));
+    const view = render(CalendarTimeGrid, {
+        ...props,
+        layout: layoutTimeGrid(entries([original]), rangeStart, rangeEnd),
+    });
+    const handle = view.getByLabelText("Resize Original") as HTMLElement;
+    handle.focus();
+
+    await view.rerender({
+        ...props,
+        layout: layoutTimeGrid(entries([
+            original,
+            { ...original, title: "Second", start: "2026-03-10T11:00:00Z" },
+        ]), rangeStart, rangeEnd),
+    });
+
+    expect(view.getByLabelText("Resize Original")).toBe(handle);
+    expect(document.activeElement).toBe(handle);
+    await fireEvent.keyDown(handle, { key: "ArrowDown" });
+    expect(resized.map(entry => [entry.title, entry.startMs])).toEqual([["Original", Date.parse(original.start)]]);
+});
+
+it("keeps focus on the same distinguishable occurrence when identical titles reorder", async () => {
+    const atNine = {
+        source_kind: "tasks",
+        source_id: "shared",
+        title: "Shared",
+        start: "2026-03-10T09:00:00Z",
+        duration: "00:30:00",
+    };
+    const atEleven = { ...atNine, start: "2026-03-10T11:00:00Z" };
+    const resized: CalendarEntry[] = [];
+    const props = callbacks(entry => resized.push(entry));
+    const view = render(CalendarTimeGrid, {
+        ...props,
+        layout: layoutTimeGrid(entries([atNine, atEleven]), rangeStart, rangeEnd),
+    });
+    const handles = view.getAllByLabelText("Resize Shared") as HTMLElement[];
+    const nineHandle = handles.find(handle => handle.parentElement?.getAttribute("style")?.includes("432px"))!;
+    nineHandle.focus();
+
+    await view.rerender({
+        ...props,
+        layout: layoutTimeGrid(entries([atEleven, atNine]), rangeStart, rangeEnd),
+    });
+
+    expect(document.activeElement).toBe(nineHandle);
+    expect(nineHandle.parentElement?.getAttribute("style")).toContain("432px");
+    await fireEvent.keyDown(nineHandle, { key: "ArrowDown" });
+    expect(resized.map(entry => entry.startMs)).toEqual([Date.parse(atNine.start)]);
+});
