@@ -288,6 +288,7 @@ const hasBand = $derived(layout.allDay.length > 0 || layout.milestones.length > 
 
     {#if hasBand}
         <div class="band-row" data-testid="calendar-all-day-band">
+            <!-- Position is the stable render identity: accepted rows may share source keys. -->
             {#each layout.allDay as entry, entryIndex (entryIndex)}
                 <div
                     role="group"
@@ -371,6 +372,7 @@ const hasBand = $derived(layout.allDay.length > 0 || layout.milestones.length > 
                             }%`}
                         ></div>
                     {/if}
+                    <!-- Preserve focus when optimistic layout objects replace accepted fragments. -->
                     {#each row.fragments as f, fragmentIndex (fragmentIndex)}
                         <div
                             role="group"
