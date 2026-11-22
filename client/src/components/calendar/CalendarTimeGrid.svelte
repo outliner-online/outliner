@@ -114,8 +114,10 @@ function restoreFocusedResize() {
 }
 
 $effect(() => {
-    layout;
-    void tick().then(restoreFocusedResize);
+    const pendingLayout = layout;
+    void tick().then(() => {
+        if (layout === pendingLayout) restoreFocusedResize();
+    });
 });
 
 let drag = $state<{
