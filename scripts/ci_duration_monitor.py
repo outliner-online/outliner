@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+from http.client import IncompleteRead
 import json
 import os
 import re
@@ -157,7 +158,7 @@ def _request(client: Client, method: str, path: str, payload: dict[str, object] 
     for attempt in range(attempts):
         try:
             response = client.request(method, path, payload)
-        except OSError:
+        except (OSError, IncompleteRead):
             if attempt + 1 == attempts:
                 raise
             logger.warning("GitHub GET {} transport unavailable; retrying read ({}/3)", path.split("?")[0], attempt + 2)
