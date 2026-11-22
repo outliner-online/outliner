@@ -2,6 +2,7 @@
 import { onMount } from "svelte";
 import type { GridNavDirection } from "../../../services/yjstable/gridKeyboardNav";
 import type { TextLineBreakPolicy } from "../textCellLineBreakPolicy";
+import { gridDisplayedCell } from "../../../../../shared/src/notifications/gridProjection";
 
 interface Props {
     value: unknown; editable: boolean; ariaLabel?: string; editing?: boolean; editSeed?: string;
@@ -21,7 +22,7 @@ let finished = false;
 let sessionGeneration = 0;
 
 function displayedValue(): string {
-    return value === null || value === undefined ? "" : String(value);
+    return (gridDisplayedCell("text", value) as { value: string }).value;
 }
 
 function resize() {

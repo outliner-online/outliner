@@ -1,13 +1,24 @@
 // Saved presentation stays separate from SELECT eligibility and physical write authorization.
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/svelte";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as Y from "yjs";
 import {
+    createGrid,
     getGridHandles,
     readGridComponents,
     setGridComponentField,
     setGridQuery,
 } from "../../services/yjstable/gridDocs";
+import { getGridProjection } from "../../services/yjstable/gridProjectionRegistry";
 import { resetPgliteForTests } from "../../services/yjstable/pgliteService";
+import {
+    addRecord,
+    createTable,
+    deleteRecord,
+    getTableHandles,
+    setRecordValue,
+    setSchemaText,
+} from "../../services/yjstable/tableDocs";
 import { resetTableEngineForTests } from "../../services/yjstable/tableEngine";
 import { fakeMonacoRegistry } from "../../tests/mocks/fakeMonaco";
 import { QUERY, setupSavedPresentation } from "./__fixtures__/mcpPresentation";
@@ -50,6 +61,243 @@ function cell(container: HTMLElement, id: string, column: string) {
 }
 
 describe("MCP-saved Grid presentation in the production runtime (#5436)", () => {
+    it("matches the live projection to occurrence-specific automatic UNION renderers", { timeout: 60000 }, async () => {
+        fixture.projectDoc.destroy();
+        const projectDoc = new Y.Doc({ guid: "grid-projection-union" });
+        const choices = getTableHandles(projectDoc, createTable(projectDoc, "Choices", "choices"))!;
+        const notes = getTableHandles(projectDoc, createTable(projectDoc, "Notes", "notes"))!;
+        setSchemaText(
+            choices,
+            "CREATE TABLE choices (id TEXT PRIMARY KEY, observed_on DATE NOT NULL, hidden TEXT)",
+        );
+        setSchemaText(notes, "CREATE TABLE notes (id TEXT PRIMARY KEY, observed_at TIMESTAMP NOT NULL, hidden TEXT)");
+        addRecord(choices, { observed_on: "2026-11-21", hidden: "choice-secret" }, "same");
+        addRecord(notes, { observed_at: "2026-11-22 12:34:56", hidden: "note-secret" }, "same");
+        const branchA =
+            "SELECT 'choices' AS source_kind, id AS source_id, observed_on AS value, hidden AS hidden FROM choices";
+        const branchB =
+            "SELECT 'notes' AS source_kind, id AS source_id, observed_at + INTERVAL '0 seconds' AS value, hidden AS hidden FROM notes";
+        const grid = getGridHandles(
+            projectDoc,
+            createGrid(projectDoc, {
+                name: "Heterogeneous",
+                query: `${branchA} UNION ALL ${branchB} ORDER BY source_kind`,
+            }),
+        )!;
+        setGridComponentField(grid, "source_kind", "hidden", true);
+        setGridComponentField(grid, "source_id", "hidden", true);
+        setGridComponentField(grid, "hidden", "hidden", true);
+        const view = render(ProjectGridView, { props: { grid, projectDoc } });
+        try {
+            await waitFor(() => expect(view.container.querySelectorAll("tbody tr")).toHaveLength(2), {
+                timeout: 30000,
+            });
+            // PostgreSQL promotes DATE and TIMESTAMP branches to one result
+            // OID. The first occurrence uses its accepted DATE field; the
+            // second is a computed output with no physical candidate and uses
+            // the typed fallback. Tie both controls and projection cells to
+            // their occurrences so a source-blind fallback cannot pass.
+            const dateCell = view.container.querySelector("tr[data-record-id='choices:same'] td[data-col='value']")!;
+            const textCell = view.container.querySelector("tr[data-record-id='notes:same'] td[data-col='value']")!;
+            await waitFor(() => expect(dateCell.querySelector("input[type='date']")).toHaveValue("2026-11-21"));
+            expect(textCell.querySelector("button")).toHaveTextContent("2026-11-22T12:34:56.000Z");
+            const displayedDate = (dateCell.querySelector("input[type='date']") as HTMLInputElement).value;
+            const displayedTimestamp = textCell.querySelector("button")!.textContent!;
+            expect(displayedTimestamp).not.toBe(displayedDate);
+            await waitFor(() => expect(getGridProjection(grid.gridId).status).toBe("ready"));
+            const initial = getGridProjection(grid.gridId);
+            expect(initial).toMatchObject({
+                status: "ready",
+                projection: {
+                    columns: [{ label: "value" }],
+                    rows: [[{ value: displayedDate }], [{ value: displayedTimestamp }]],
+                },
+            });
+
+            // Retain renderer inputs outside equality: an explicit text
+            // override changes only the date's displayed normalization.
+            setGridComponentField(grid, "value", "type", "text");
+            await waitFor(() => expect(view.container.querySelectorAll("td[data-col='value'] button")).toHaveLength(2));
+            const textProjection = getGridProjection(grid.gridId);
+            if (textProjection.status !== "ready") throw new Error("Expected accepted text projection");
+            expect(textProjection.projection.rows).toEqual([
+                [{ value: "2026-11-21T00:00:00.000Z" }],
+                [{ value: "2026-11-22T12:34:56.000Z" }],
+            ]);
+            expect(textProjection).not.toEqual(initial); // normalization changed, not merely renderer identity
+
+            // Prove the changed hidden value reached a fresh accepted result,
+            // then hide it again and compare only the displayed table content.
+            setRecordValue(choices, "same", "hidden", "changed-secret");
+            setGridComponentField(grid, "hidden", "hidden", false);
+            await waitFor(() =>
+                expect(view.container.querySelector("tr[data-record-id='choices:same'] td[data-col='hidden']"))
+                    .toHaveTextContent("changed-secret")
+            );
+            setGridComponentField(grid, "hidden", "hidden", true);
+            await waitFor(() => expect(view.container.querySelector("td[data-col='hidden']")).toBeNull());
+            await waitFor(() => expect(getGridProjection(grid.gridId)).toEqual(textProjection));
+
+            setRecordValue(notes, "same", "observed_at", "2026-11-23 01:02:03");
+            await waitFor(() =>
+                expect(getGridProjection(grid.gridId)).toMatchObject({
+                    status: "ready",
+                    projection: {
+                        rows: [
+                            [{ value: "2026-11-21T00:00:00.000Z" }],
+                            [{ value: "2026-11-23T01:02:03.000Z" }],
+                        ],
+                    },
+                })
+            );
+            await waitFor(() =>
+                expect(
+                    view.container.querySelector("tr[data-record-id='notes:same'] td[data-col='value'] button"),
+                ).toHaveTextContent("2026-11-23T01:02:03.000Z")
+            );
+            setRecordValue(notes, "same", "observed_at", "2026-11-22 12:34:56");
+            await waitFor(() => expect(getGridProjection(grid.gridId)).toEqual(textProjection));
+
+            // A duplicate occurrence remains independently represented.
+            setGridQuery(grid, `${branchA} UNION ALL ${branchA} UNION ALL ${branchB} ORDER BY source_kind`);
+            await waitFor(() => expect(view.container.querySelectorAll("tbody tr")).toHaveLength(3));
+            await waitFor(() =>
+                expect(getGridProjection(grid.gridId)).toMatchObject({
+                    status: "ready",
+                    projection: {
+                        rows: [textProjection.projection.rows[0], textProjection.projection.rows[0],
+                            textProjection.projection.rows[1]],
+                    },
+                })
+            );
+
+            // With complete metadata but no row source discriminator, the native OID fallback is authoritative.
+            setGridComponentField(grid, "value", "type", undefined);
+            setGridQuery(
+                grid,
+                "SELECT observed_on AS value FROM choices UNION ALL SELECT observed_at AS value FROM notes ORDER BY value",
+            );
+            await waitFor(() => expect(view.container.querySelectorAll("tbody tr")).toHaveLength(2));
+            await waitFor(() => expect(view.container.querySelectorAll("td[data-col='value'] button")).toHaveLength(2));
+            expect(view.container.querySelector("td[data-col='value'] input[type='date']")).toBeNull();
+            const ambiguousValues = ["2026-11-21T00:00:00.000Z", "2026-11-22T12:34:56.000Z"];
+            expect([...view.container.querySelectorAll("td[data-col='value'] button")].map(cell => cell.textContent))
+                .toEqual(ambiguousValues);
+            await waitFor(() =>
+                expect(getGridProjection(grid.gridId)).toMatchObject({
+                    status: "ready",
+                    projection: { rows: ambiguousValues.map(value => [{ value }]) },
+                })
+            );
+            const ambiguousProjection = getGridProjection(grid.gridId);
+            setGridComponentField(grid, "value", "type", "text");
+            await waitFor(() => expect(getGridProjection(grid.gridId)).toEqual(ambiguousProjection));
+            setGridComponentField(grid, "value", "type", undefined);
+
+            // The UI deliberately retains the last successful rows while a
+            // replacement query is invalid, but comparable content must not
+            // retain the superseded authority. A subsequent accepted result
+            // restores publication without remounting the Grid.
+            setGridQuery(grid, "SELECT missing_column AS value FROM choices");
+            await waitFor(() => expect(getGridProjection(grid.gridId)).toMatchObject({ status: "unavailable" }));
+            expect([...view.container.querySelectorAll("td[data-col='value'] button")].map(cell => cell.textContent))
+                .toEqual(ambiguousValues);
+            setRecordValue(notes, "same", "observed_at", "2026-11-24 04:05:06");
+            setGridQuery(
+                grid,
+                "SELECT observed_on AS value FROM choices UNION ALL SELECT observed_at AS value FROM notes ORDER BY value",
+            );
+            const recoveredValues = ["2026-11-21T00:00:00.000Z", "2026-11-24T04:05:06.000Z"];
+            await waitFor(() =>
+                expect(getGridProjection(grid.gridId)).toMatchObject({
+                    status: "ready",
+                    projection: { rows: recoveredValues.map(value => [{ value }]) },
+                })
+            );
+            await waitFor(() =>
+                expect(
+                    [...view.container.querySelectorAll("td[data-col='value'] button")].map(cell => cell.textContent),
+                )
+                    .toEqual(recoveredValues)
+            );
+        } finally {
+            view.unmount();
+            projectDoc.destroy();
+        }
+        expect(getGridProjection(grid.gridId)).toMatchObject({ status: "unavailable" });
+    });
+
+    it("keeps physical UNION fields occurrence-aligned across accepted results", { timeout: 60000 }, async () => {
+        fixture.projectDoc.destroy();
+        const projectDoc = new Y.Doc({ guid: "grid-projection-physical-union" });
+        const choices = getTableHandles(projectDoc, createTable(projectDoc, "Choices", "choices"))!;
+        const notes = getTableHandles(projectDoc, createTable(projectDoc, "Notes", "notes"))!;
+        setSchemaText(choices, "CREATE TABLE choices (id TEXT PRIMARY KEY, observed_on DATE NOT NULL)");
+        setSchemaText(notes, "CREATE TABLE notes (id TEXT PRIMARY KEY, observed_at TIMESTAMP NOT NULL)");
+        addRecord(choices, { observed_on: "2026-11-21" }, "same");
+        addRecord(notes, { observed_at: "2026-11-22 12:34:56" }, "same");
+        const grid = getGridHandles(
+            projectDoc,
+            createGrid(projectDoc, {
+                name: "Physical fields",
+                query: "SELECT 'choices' AS source_kind, id AS source_id, observed_on AS value FROM choices "
+                    + "UNION ALL SELECT 'notes' AS source_kind, id AS source_id, observed_at AS value FROM notes "
+                    + "ORDER BY source_kind",
+            }),
+        )!;
+        setGridComponentField(grid, "source_kind", "hidden", true);
+        setGridComponentField(grid, "source_id", "hidden", true);
+        const view = render(ProjectGridView, { props: { grid, projectDoc } });
+        try {
+            await waitFor(() => expect(view.container.querySelectorAll("tbody tr")).toHaveLength(2), {
+                timeout: 30000,
+            });
+            const choiceValue = view.container.querySelector(
+                "tr[data-record-id='choices:same'] td[data-col='value']",
+            )!;
+            const noteValue = view.container.querySelector(
+                "tr[data-record-id='notes:same'] td[data-col='value']",
+            )!;
+            await waitFor(() => expect(choiceValue.querySelector("input[type='date']")).toHaveValue("2026-11-21"));
+            expect(noteValue.querySelector("button")).toHaveTextContent("2026-11-22T12:34:56.000Z");
+            await waitFor(() =>
+                expect(getGridProjection(grid.gridId)).toMatchObject({
+                    status: "ready",
+                    projection: {
+                        rows: [[{ value: "2026-11-21" }], [{ value: "2026-11-22T12:34:56.000Z" }]],
+                    },
+                })
+            );
+
+            setRecordValue(choices, "same", "observed_on", "2026-11-25");
+            setRecordValue(notes, "same", "observed_at", "2026-11-26 04:05:06");
+            await waitFor(() => expect(choiceValue.querySelector("input[type='date']")).toHaveValue("2026-11-25"));
+            await waitFor(() =>
+                expect(noteValue.querySelector("button")).toHaveTextContent("2026-11-26T04:05:06.000Z")
+            );
+            await waitFor(() =>
+                expect(getGridProjection(grid.gridId)).toMatchObject({
+                    status: "ready",
+                    projection: {
+                        rows: [[{ value: "2026-11-25" }], [{ value: "2026-11-26T04:05:06.000Z" }]],
+                    },
+                })
+            );
+            const changedProjection = getGridProjection(grid.gridId);
+            deleteRecord(notes, "same");
+            addRecord(notes, { observed_at: "2026-11-26 04:05:06" }, "replacement");
+            await waitFor(() =>
+                expect(
+                    view.container.querySelector("tr[data-record-id='notes:replacement'] td[data-col='value'] button"),
+                ).toHaveTextContent("2026-11-26T04:05:06.000Z")
+            );
+            await waitFor(() => expect(getGridProjection(grid.gridId)).toEqual(changedProjection));
+        } finally {
+            view.unmount();
+            projectDoc.destroy();
+        }
+    });
+
     it("round-trips Japanese labels, visibility, exact column identities and SQL row order in two placements", async () => {
         const first = await mount();
         const second = await mount();
@@ -73,6 +321,24 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
             )
                 .toEqual(["done", "due_date", "title"]);
         }
+    });
+
+    it("keeps the remaining placement registered when the newest placement unmounts", async () => {
+        const first = await mount();
+        const second = await mount();
+        await waitFor(() => expect(getGridProjection(fixture.grid.gridId).status).toBe("ready"));
+        second.unmount();
+        await waitFor(() => expect(getGridProjection(fixture.grid.gridId).status).toBe("ready"));
+        setRecordValue(fixture.handles, "r1", "title", "Write revised report");
+        await waitFor(() => expect(cell(first.container, "r1", "title")).toHaveTextContent("Write revised report"));
+        await waitFor(() =>
+            expect(getGridProjection(fixture.grid.gridId)).toMatchObject({
+                status: "ready",
+                projection: {
+                    rows: expect.arrayContaining([expect.arrayContaining([{ value: "Write revised report" }])]),
+                },
+            })
+        );
     });
 
     it("shows saved settings in the real definition editor under result names", async () => {
