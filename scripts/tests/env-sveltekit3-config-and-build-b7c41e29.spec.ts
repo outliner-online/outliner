@@ -143,10 +143,25 @@ describe("SvelteKit 3 production service worker in a browser", () => {
     };
 
     /** Firebase Hosting for the static output: files as-is, index.html as the SPA fallback. */
-    function serveBuild(): Promise<http.Server> {
+    interface DisableObservation {
+        deviceId: string;
+        uid?: string;
+    }
+
+    function tokenPayload(token: string): { email?: string; user_id?: string; } {
+        try {
+            return JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8"));
+        } catch {
+            return {};
+        }
+    }
+
+    function serveBuild(disables: DisableObservation[] = []): Promise<http.Server> {
         const server = http.createServer((req, res) => {
             const pathname = decodeURIComponent(new URL(req.url ?? "/", "http://localhost").pathname);
             if (req.method === "POST" && /^\/api\/notifications\/push\/devices\/[^/]+\/disable$/u.test(pathname)) {
+                const token = req.headers.authorization?.match(/^Bearer (.+)$/u)?.[1] ?? "";
+                disables.push({ deviceId: pathname.split("/").at(-2)!, uid: tokenPayload(token).user_id });
                 res.writeHead(200, { "content-type": "application/json" });
                 res.end(JSON.stringify({ deviceId: pathname.split("/").at(-2), revision: 2, state: "disabled" }));
                 return;
@@ -182,6 +197,34 @@ describe("SvelteKit 3 production service worker in a browser", () => {
     async function installIsolatedAuthFixture(page: import("@playwright/test").Page, accounts: Map<string, string>) {
         await page.route("https://identitytoolkit.googleapis.com/**", async route => {
             const url = new URL(route.request().url());
+            if (url.pathname.endsWith("accounts:lookup")) {
+                const request = route.request().postDataJSON() as { idToken?: string; };
+                const payload = tokenPayload(request.idToken ?? "");
+                const uid = payload.user_id;
+                if (!uid || !payload.email || accounts.get(payload.email) !== uid) {
+                    await route.fulfill({
+                        status: 400,
+                        contentType: "application/json",
+                        body: '{"error":{"message":"INVALID_ID_TOKEN"}}',
+                    });
+                    return;
+                }
+                await route.fulfill({
+                    status: 200,
+                    contentType: "application/json",
+                    body: JSON.stringify({
+                        users: [{
+                            createdAt: "1700000000000",
+                            email: payload.email,
+                            emailVerified: true,
+                            lastLoginAt: "1700000000000",
+                            localId: uid,
+                            providerUserInfo: [],
+                        }],
+                    }),
+                });
+                return;
+            }
             if (!url.pathname.endsWith("accounts:signInWithPassword")) {
                 await route.fulfill({
                     status: 400,
@@ -212,6 +255,22 @@ describe("SvelteKit 3 production service worker in a browser", () => {
                     registered: true,
                 }),
             });
+        });
+    }
+
+    async function readBindingFromWorker(page: import("@playwright/test").Page) {
+        return page.evaluate(async () => {
+            const registration = await navigator.serviceWorker.ready;
+            if (!registration.active) throw new Error("built worker is not active");
+            const channel = new MessageChannel();
+            const response = new Promise<{ binding: { fence: number; generation?: string; }; workerBootId: string; }>(
+                (resolve, reject) => {
+                    channel.port1.onmessage = event =>
+                        event.data?.error ? reject(new Error(event.data.error)) : resolve(event.data);
+                },
+            );
+            registration.active.postMessage("outliner:read-web-push-binding", [channel.port2]);
+            return response;
         });
     }
 
@@ -313,7 +372,8 @@ describe("SvelteKit 3 production service worker in a browser", () => {
         const { chromium } = createRequire(path.join(clientDir, "package.json"))(
             "@playwright/test",
         ) as typeof import("@playwright/test");
-        const server = await serveBuild();
+        const disables: DisableObservation[] = [];
+        const server = await serveBuild(disables);
         const executablePath = chromiumExecutable();
         const browser = await chromium.launch({
             args: ["--no-sandbox"],
@@ -338,6 +398,7 @@ describe("SvelteKit 3 production service worker in a browser", () => {
             await page.locator("#password").fill("isolated-password-a");
             await page.locator("button.email-login-btn").click();
             await expect(page.locator("button.logout-btn")).toBeVisible();
+            const deviceId = `account_a_device_${suffix}`.replace(/[^A-Za-z0-9_-]/gu, "_");
             await page.evaluate(async () => new Promise<void>((resolve, reject) => {
                 localStorage.removeItem("outliner:web-push-armed");
                 const open = indexedDB.open("outliner-web-push", 1);
@@ -354,35 +415,33 @@ describe("SvelteKit 3 production service worker in a browser", () => {
                     tx.onerror = () => reject(tx.error);
                 };
             }));
+            await page.evaluate(id => localStorage.setItem("outliner:web-push-device", id), deviceId);
+            const armedWorkerView = await readBindingFromWorker(page);
+            expect(armedWorkerView.binding).toEqual({
+                fence: 11,
+                generation: "account_a_generation",
+                vapidKeyId: "key-1",
+            });
 
             await page.locator("button.logout-btn").click();
             await expect(page.locator(".email-login-form")).toBeVisible();
-            const restartedWorker = await page.evaluate(async () => {
+            await expect.poll(() => disables).toEqual([{ deviceId, uid: `uid-a-${suffix}` }]);
+            await page.evaluate(async () => {
                 const registration = await navigator.serviceWorker.ready;
                 await registration.unregister();
                 await navigator.serviceWorker.register("/service-worker.js", { scope: "/" });
-                return (await navigator.serviceWorker.ready).active?.scriptURL;
             });
-            expect(restartedWorker).toBe(`${base}/service-worker.js`);
+            const restartedWorkerView = await readBindingFromWorker(page);
+            expect(restartedWorkerView.workerBootId).not.toBe(armedWorkerView.workerBootId);
+            expect(restartedWorkerView.binding).toEqual({ fence: 12 });
 
             await page.locator("#email").fill(accountB);
             await page.locator("#password").fill("isolated-password-b");
             await page.locator("button.email-login-btn").click();
             await expect(page.locator("button.logout-btn")).toBeVisible();
-            const binding = await page.evaluate(async () =>
-                new Promise<{ fence: number; generation?: string; }>((resolve, reject) => {
-                    const open = indexedDB.open("outliner-web-push", 1);
-                    open.onerror = () => reject(open.error);
-                    open.onsuccess = () => {
-                        const read = open.result.transaction("enrollment", "readonly").objectStore("enrollment").get(
-                            "current",
-                        );
-                        read.onsuccess = () => resolve(read.result);
-                        read.onerror = () => reject(read.error);
-                    };
-                })
-            );
-            expect(binding).toEqual({ fence: 12 });
+            const accountBWorkerView = await readBindingFromWorker(page);
+            expect(accountBWorkerView.workerBootId).toBe(restartedWorkerView.workerBootId);
+            expect(accountBWorkerView.binding).toEqual({ fence: 12 });
         } finally {
             await browser.close();
             await new Promise(resolve => server.close(resolve));

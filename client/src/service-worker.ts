@@ -29,9 +29,41 @@ interface SyncServiceWorkerGlobalScope {
         type: "fetch",
         listener: (event: { request: Request; respondWith(r: Promise<Response> | Response): void; }) => void,
     ): void;
+    addEventListener(
+        type: "message",
+        listener: (event: { data: unknown; ports: Array<{ postMessage(value: unknown): void; }>; }) => void,
+    ): void;
 }
 
 declare const self: SyncServiceWorkerGlobalScope;
+const WORKER_BOOT_ID = crypto.randomUUID();
+
+function readEnrollmentBinding(): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+        const open = indexedDB.open("outliner-web-push", 1);
+        open.onupgradeneeded = () => open.result.createObjectStore("enrollment");
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+            const read = open.result.transaction("enrollment", "readonly").objectStore("enrollment").get("current");
+            read.onsuccess = () => {
+                open.result.close();
+                resolve(read.result ?? { fence: 0 });
+            };
+            read.onerror = () => {
+                open.result.close();
+                reject(read.error);
+            };
+        };
+    });
+}
+
+self.addEventListener("message", event => {
+    if (event.data !== "outliner:read-web-push-binding" || !event.ports[0]) return;
+    readEnrollmentBinding().then(
+        binding => event.ports[0].postMessage({ binding, workerBootId: WORKER_BOOT_ID }),
+        () => event.ports[0].postMessage({ error: "binding_unavailable", workerBootId: WORKER_BOOT_ID }),
+    );
+});
 
 self.addEventListener("install", event => {
     event.waitUntil(
