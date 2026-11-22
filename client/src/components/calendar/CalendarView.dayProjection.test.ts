@@ -9,6 +9,7 @@ import { createCalendar, destroyCalendarUndoManager } from "../../services/calen
 import { globalUndoRouter } from "../../services/undo/undoRouter.svelte";
 import { resetPgliteForTests } from "../../services/yjstable/pgliteService";
 import { resetTableEngineForTests } from "../../services/yjstable/tableEngine";
+import { daysDom } from "../../tests/fixtures/calendarDaysProjection";
 import CalendarView from "./CalendarView.svelte";
 
 configure({ asyncUtilTimeout: 15000 });
@@ -30,15 +31,20 @@ describe("CalendarView Day projection boundary", { timeout: 30000 }, () => {
         const page = new Items(projectDoc, project.tree, "root").addNode("tester");
         const item = new Items(projectDoc, project.tree, page.key).addNode("tester");
         item.text = "Projection standup";
-        const anchorUtcMs = Date.now();
+        const anchorUtcMs = Date.parse("2026-03-16T12:00:00Z");
         item.start = new Date(anchorUtcMs).toISOString();
         item.allDay = false;
         item.duration = "PT30M";
         const overlappingItem = new Items(projectDoc, project.tree, page.key).addNode("tester");
         overlappingItem.text = "Overlapping standup";
-        overlappingItem.start = new Date(anchorUtcMs).toISOString();
+        overlappingItem.start = new Date(anchorUtcMs + 15 * 60000).toISOString();
         overlappingItem.allDay = false;
         overlappingItem.duration = "PT30M";
+        const nonOverlappingItem = new Items(projectDoc, project.tree, page.key).addNode("tester");
+        nonOverlappingItem.text = "Independent standup";
+        nonOverlappingItem.start = new Date(anchorUtcMs + 2 * 60 * 60000).toISOString();
+        nonOverlappingItem.allDay = false;
+        nonOverlappingItem.duration = "PT30M";
         const dueItem = new Items(projectDoc, project.tree, page.key).addNode("tester");
         dueItem.text = "Projection deadline";
         dueItem.due = new Date(anchorUtcMs).toISOString();
@@ -83,7 +89,11 @@ describe("CalendarView Day projection boundary", { timeout: 30000 }, () => {
 
         await waitFor(() => expect(component.getByTestId(`calendar-entry-item:${item.key}`)).toBeTruthy());
         await waitFor(() => expect(projections.some(result => result.ready)).toBe(true));
-        const ready = projections.find(result => result.ready);
+        await waitFor(() => {
+            const latest = projections.at(-1);
+            expect(latest?.ready && latest.projection).toEqual(daysDom(component.container));
+        });
+        const ready = projections.at(-1);
         expect(ready?.ready && ready.projection.content.map(value => value.title)).toContain("Projection standup");
         expect(component.getByTestId(`calendar-entry-item:${item.key}`).textContent).toContain("Projection standup");
         if (!ready?.ready) throw new Error("Expected a ready Day projection");
@@ -93,10 +103,16 @@ describe("CalendarView Day projection boundary", { timeout: 30000 }, () => {
         expect(ready.projection.labels).toEqual(displayedLabels);
         expect(ready.projection.labels).toHaveLength(25);
         const timed = ready.projection.content.filter(value => value.kind === "timed");
-        expect(timed.filter(value => value.title?.includes("standup"))).toEqual(expect.arrayContaining([
-            expect.objectContaining({ title: "Projection standup", column: expect.any(Number), columns: 2 }),
-            expect.objectContaining({ title: "Overlapping standup", column: expect.any(Number), columns: 2 }),
-        ]));
+        const overlapping = timed.filter(value =>
+            value.title === "Projection standup" || value.title === "Overlapping standup"
+        );
+        expect(overlapping).toHaveLength(2);
+        expect(overlapping.map(value => value.column).sort()).toEqual([0, 1]);
+        expect(overlapping.map(value => value.columns)).toEqual([2, 2]);
+        expect(timed.find(value => value.title === "Independent standup")).toEqual(expect.objectContaining({
+            column: 0,
+            columns: 1,
+        }));
         const milestone = component.getByTestId(`calendar-entry-milestone-item:${dueItem.key}`);
         expect(milestone.textContent).toContain("◆ Projection deadline");
         expect(ready.projection.content).toContainEqual(expect.objectContaining({
