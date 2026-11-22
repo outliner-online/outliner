@@ -46,6 +46,7 @@ describe("compiled comparable Calendar state excludes transient today decoration
                     start: 0.5,
                     end: 12.5 / 24,
                     column: 0,
+                    columns: 1,
                 });
             }
         });

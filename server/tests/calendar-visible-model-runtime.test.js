@@ -5,7 +5,7 @@ import { calendarInput, modes } from "./calendar-visible-model-fixture.js";
 
 // Native Node ESM imports actual ES2020 output: no browser, bundler, alias loader or visible-state adapter.
 describe("compiled Calendar production dispatcher", () => {
-    const labels = { day: "day", hours: "Hour Map", days: "Multi-day", week: "Week", month: "Month", gantt: "Gantt" };
+    const labels = { day: "Day", hours: "Hour Map", days: "Multi-day", week: "Week", month: "Month", gantt: "Gantt" };
     for (const mode of modes) {
         it(`${mode}: derives accepted structure with a canonical DST context independent of today decoration`, () => {
             const { input } = calendarInput(mode);

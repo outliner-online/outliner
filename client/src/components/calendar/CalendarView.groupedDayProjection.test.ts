@@ -87,7 +87,7 @@ describe("production grouped Day accepted bands", () => {
             expect(f.view.queryByTestId("calendar-lane-time-grid")).toBeNull();
             expect([band().style.top, band().style.height]).toEqual(["480px", "288px"]);
             const value = f.results.at(-1)!;
-            expect(value.ready && value.projection.modeLabel).toBe("day");
+            expect(value.ready && value.projection.modeLabel).toBe("Day");
         });
     }, 45000);
 
