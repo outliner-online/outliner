@@ -37,7 +37,7 @@ export async function openRouteProject(
     }
 
     const client = await getAuthorizedYjsClientByProjectTitle(projectName);
-    if (!client) return undefined;
+    if (!client || isDestroyed()) return undefined;
 
     yjsStore.yjsClient = client as unknown as NonNullable<typeof yjsStore.yjsClient>;
     const projectDoc = client.getProject?.();

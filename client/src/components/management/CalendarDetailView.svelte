@@ -45,6 +45,7 @@
     let calendarDisplayName: string | undefined = $state(undefined);
     let isDestroyed = false;
     let projectHandle: RouteProjectHandle | undefined = undefined;
+    let loadGeneration = 0;
 
     // Public projects stay readable for anonymous visitors. Deriving the gate
     // instead of folding the demo case into `isAuthenticated` keeps the auth
@@ -76,7 +77,13 @@
     async function loadCalendar() {
         if (!projectName || !calendarName || !canAccess) return;
 
-        logger.info(`Loading standalone calendar: project="${projectName}", calendar="${calendarName}"`);
+        const generation = ++loadGeneration;
+        const requestedProjectName = projectName;
+        const requestedCalendarName = calendarName;
+        const requestedContext = observationContext;
+        const isStale = () => isDestroyed || generation !== loadGeneration;
+
+        logger.info(`Loading standalone calendar: project="${requestedProjectName}", calendar="${requestedCalendarName}"`);
         isLoading = true;
         error = undefined;
         notFound = false;
@@ -87,14 +94,18 @@
             // parameter change cannot leak a demo client reference.
             projectHandle?.release();
             projectHandle = undefined;
-            projectHandle = observationContext
-                ? await openRouteProjectById(projectName, () => isDestroyed)
-                : await openRouteProject(projectName, () => isDestroyed);
-            if (!projectHandle) {
+            const openedHandle = requestedContext
+                ? await openRouteProjectById(requestedProjectName, isStale)
+                : await openRouteProject(requestedProjectName, isStale);
+            if (isStale()) {
+                openedHandle?.release();
+                return;
+            }
+            projectHandle = openedHandle;
+            if (!openedHandle) {
                 notFound = true;
                 return;
             }
-            if (isDestroyed) return;
 
             if (!store.project?.ydoc) {
                 error = "Failed to load project document.";
@@ -104,12 +115,12 @@
             const project = Project.fromDoc(store.project.ydoc);
             // The route carries the display name; falling back to the id
             // keeps links written against the identifier working too.
-            const entry = observationContext
-                ? listCalendars(project).find((e) => e.id === calendarName)
-                : listCalendars(project).find((e) => e.settings.name === calendarName)
-                    ?? listCalendars(project).find((e) => e.id === calendarName);
+            const entry = requestedContext
+                ? listCalendars(project).find((e) => e.id === requestedCalendarName)
+                : listCalendars(project).find((e) => e.settings.name === requestedCalendarName)
+                    ?? listCalendars(project).find((e) => e.id === requestedCalendarName);
             if (!entry) {
-                logger.warn(`Calendar "${calendarName}" not found in project "${projectName}"`);
+                logger.warn(`Calendar "${requestedCalendarName}" not found in project "${requestedProjectName}"`);
                 notFound = true;
                 return;
             }
@@ -119,11 +130,12 @@
             calendarProjectId = yjsStore.currentProjectId ?? undefined;
             calendarDisplayName = entry.settings.name;
         } catch (err) {
+            if (isStale()) return;
             if (err instanceof DemoInitAborted) return;
             logger.error({ error: err }, "Failed to load calendar page:");
             error = err instanceof Error ? err.message : "An error occurred while loading the calendar.";
         } finally {
-            isLoading = false;
+            if (!isStale()) isLoading = false;
         }
     }
 
@@ -140,6 +152,7 @@
 
         return () => {
             isDestroyed = true;
+            loadGeneration++;
             projectHandle?.release();
             projectHandle = undefined;
         };
