@@ -146,6 +146,11 @@ describe("SvelteKit 3 production service worker in a browser", () => {
     function serveBuild(): Promise<http.Server> {
         const server = http.createServer((req, res) => {
             const pathname = decodeURIComponent(new URL(req.url ?? "/", "http://localhost").pathname);
+            if (req.method === "POST" && /^\/api\/notifications\/push\/devices\/[^/]+\/disable$/u.test(pathname)) {
+                res.writeHead(200, { "content-type": "application/json" });
+                res.end(JSON.stringify({ deviceId: pathname.split("/").at(-2), revision: 2, state: "disabled" }));
+                return;
+            }
             let file = path.join(buildDir, pathname);
             if (!file.startsWith(buildDir) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
                 file = path.join(buildDir, "index.html");
@@ -154,6 +159,60 @@ describe("SvelteKit 3 production service worker in a browser", () => {
             fs.createReadStream(file).pipe(res);
         });
         return new Promise(resolve => server.listen(0, "127.0.0.1", () => resolve(server)));
+    }
+
+    function fixtureToken(uid: string, email: string): string {
+        const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString("base64url");
+        const now = Math.floor(Date.now() / 1000);
+        return `${encode({ alg: "none", typ: "JWT" })}.${
+            encode({
+                aud: "outliner-d57b0",
+                auth_time: now,
+                email,
+                exp: now + 3600,
+                firebase: { sign_in_provider: "password" },
+                iat: now,
+                iss: "https://securetoken.google.com/outliner-d57b0",
+                sub: uid,
+                user_id: uid,
+            })
+        }.fixture`;
+    }
+
+    async function installIsolatedAuthFixture(page: import("@playwright/test").Page, accounts: Map<string, string>) {
+        await page.route("https://identitytoolkit.googleapis.com/**", async route => {
+            const url = new URL(route.request().url());
+            if (!url.pathname.endsWith("accounts:signInWithPassword")) {
+                await route.fulfill({
+                    status: 400,
+                    contentType: "application/json",
+                    body: '{"error":{"message":"UNSUPPORTED"}}',
+                });
+                return;
+            }
+            const request = route.request().postDataJSON() as { email?: string; };
+            const uid = request.email && accounts.get(request.email);
+            if (!request.email || !uid) {
+                await route.fulfill({
+                    status: 400,
+                    contentType: "application/json",
+                    body: '{"error":{"message":"EMAIL_NOT_FOUND"}}',
+                });
+                return;
+            }
+            await route.fulfill({
+                status: 200,
+                contentType: "application/json",
+                body: JSON.stringify({
+                    email: request.email,
+                    expiresIn: "3600",
+                    idToken: fixtureToken(uid, request.email),
+                    localId: uid,
+                    refreshToken: `refresh-${uid}`,
+                    registered: true,
+                }),
+            });
+        });
     }
 
     /** Same Chromium resolution as client/playwright.config.ts. */
@@ -244,6 +303,86 @@ describe("SvelteKit 3 production service worker in a browser", () => {
             const offline = await page.goto(`${base}/some-project/some-page`);
             expect(offline?.status()).toBe(200);
             expect(await page.content()).toContain("/_app/immutable/entry/");
+        } finally {
+            await browser.close();
+            await new Promise(resolve => server.close(resolve));
+        }
+    }, 180_000);
+
+    test("account switch keeps the prior enrollment disarmed across a built-worker restart", async () => {
+        const { chromium } = createRequire(path.join(clientDir, "package.json"))(
+            "@playwright/test",
+        ) as typeof import("@playwright/test");
+        const server = await serveBuild();
+        const executablePath = chromiumExecutable();
+        const browser = await chromium.launch({
+            args: ["--no-sandbox"],
+            ...(executablePath ? { executablePath } : {}),
+        });
+        try {
+            const context = await browser.newContext();
+            const page = await context.newPage();
+            const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+            const accountA = `push-a-${suffix}@example.test`;
+            const accountB = `push-b-${suffix}@example.test`;
+            await installIsolatedAuthFixture(page,
+                new Map([[accountA, `uid-a-${suffix}`], [accountB, `uid-b-${suffix}`]]));
+            const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+            await page.goto(`${base}/`);
+            const firstWorker = await page.evaluate(async () =>
+                (await navigator.serviceWorker.ready).active?.scriptURL
+            );
+            expect(firstWorker).toBe(`${base}/service-worker.js`);
+
+            await page.locator("#email").fill(accountA);
+            await page.locator("#password").fill("isolated-password-a");
+            await page.locator("button.email-login-btn").click();
+            await expect(page.locator("button.logout-btn")).toBeVisible();
+            await page.evaluate(async () => new Promise<void>((resolve, reject) => {
+                localStorage.removeItem("outliner:web-push-armed");
+                const open = indexedDB.open("outliner-web-push", 1);
+                open.onupgradeneeded = () => open.result.createObjectStore("enrollment");
+                open.onerror = () => reject(open.error);
+                open.onsuccess = () => {
+                    const tx = open.result.transaction("enrollment", "readwrite");
+                    tx.objectStore("enrollment").put({
+                        fence: 11,
+                        generation: "account_a_generation",
+                        vapidKeyId: "key-1",
+                    }, "current");
+                    tx.oncomplete = () => resolve();
+                    tx.onerror = () => reject(tx.error);
+                };
+            }));
+
+            await page.locator("button.logout-btn").click();
+            await expect(page.locator(".email-login-form")).toBeVisible();
+            const restartedWorker = await page.evaluate(async () => {
+                const registration = await navigator.serviceWorker.ready;
+                await registration.unregister();
+                await navigator.serviceWorker.register("/service-worker.js", { scope: "/" });
+                return (await navigator.serviceWorker.ready).active?.scriptURL;
+            });
+            expect(restartedWorker).toBe(`${base}/service-worker.js`);
+
+            await page.locator("#email").fill(accountB);
+            await page.locator("#password").fill("isolated-password-b");
+            await page.locator("button.email-login-btn").click();
+            await expect(page.locator("button.logout-btn")).toBeVisible();
+            const binding = await page.evaluate(async () =>
+                new Promise<{ fence: number; generation?: string; }>((resolve, reject) => {
+                    const open = indexedDB.open("outliner-web-push", 1);
+                    open.onerror = () => reject(open.error);
+                    open.onsuccess = () => {
+                        const read = open.result.transaction("enrollment", "readonly").objectStore("enrollment").get(
+                            "current",
+                        );
+                        read.onsuccess = () => resolve(read.result);
+                        read.onerror = () => reject(read.error);
+                    };
+                })
+            );
+            expect(binding).toEqual({ fence: 12 });
         } finally {
             await browser.close();
             await new Promise(resolve => server.close(resolve));
