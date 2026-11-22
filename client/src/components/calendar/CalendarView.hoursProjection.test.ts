@@ -71,4 +71,21 @@ describe("production Hours accepted-evidence projection", { timeout: 45000 }, ()
         const recovered = results.at(-1)!;
         expect(recovered.ready && recovered.projection).toEqual(hoursDom(view.container));
     });
+
+    it("keeps a successful recurring SQL anchor interactive but non-ready without its real outline source", async () => {
+        const { view, results, map } = mountHours();
+        await waitFor(() => expect(results.at(-1)?.ready).toBe(true));
+        // Real PGlite result with a non-null mounted Project; no acquisition/query mock.
+        map.set("query", "SELECT 'Missing source anchor' AS title, '2026-03-08T12:00:00Z' AS start_value, "
+            + "'00:30:00' AS duration, 'FREQ=HOURLY;COUNT=2' AS rrule, 'item' AS source_kind, "
+            + "'unhydrated-source' AS source_id");
+        await waitFor(() => expect(view.getByRole("group", { name: "Missing source anchor" })).toBeTruthy());
+        expect(view.queryByTestId("calendar-query-error")).toBeNull();
+        expect(results.at(-1)).toEqual({
+            ready: false,
+            reason: "Calendar recurrence outline evidence is unavailable.",
+        });
+        expect(hoursDom(view.container).content.filter(value => value.kind === "fragment"))
+            .toMatchObject([{ row: 7, start: 0, end: 30, title: "Missing source anchor" }]);
+    });
 });

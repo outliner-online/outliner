@@ -12,7 +12,6 @@ import {
     hourRowLabel,
     layoutHourMinuteGrid,
 } from "../services/calendarHourMinuteLayout.js";
-import { isOutlineItemSourceKind } from "../services/calendarSourceIdentity.js";
 import {
     type CalendarObservationContextV1,
     type CalendarVisibleProjection,
@@ -48,14 +47,6 @@ export function deriveCalendarHoursVisibleModel(input: {
     if (validated.valid === false) return { ready: false, reason: validated.error };
     const context = validated.context;
     if (context.viewType !== "hours") return { ready: false, reason: "Hours evidence requires Hours context." };
-    if (
-        !input.project && input.result.rows.some(row =>
-            row.rrule
-            && typeof row.source_kind === "string" && isOutlineItemSourceKind(row.source_kind)
-        )
-    ) {
-        return { ready: false, reason: "Calendar recurrence outline evidence is unavailable." };
-    }
     const accepted = deriveAcceptedCalendarEntries({
         current: input.current,
         result: input.result,
