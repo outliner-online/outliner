@@ -19,7 +19,10 @@ import { formatDragMoveLabel, formatDragResizeLabel, formatDuration } from "../.
 import type { CalendarEntry } from "../../services/calendar/calendarEntries";
 import {
     DEFAULT_TIMED_DURATION_MS,
+    HOUR_MAP_MINUTE_TICKS,
     type HourMinuteLayout,
+    hourMinuteTickLabel,
+    hourRowLabel,
     shiftInstant,
 } from "../../services/calendar/calendarHourMinuteLayout";
 import CalendarDragTooltip from "./CalendarDragTooltip.svelte";
@@ -29,7 +32,6 @@ const LANE_HEIGHT_PX = 22;
 const KEYBOARD_STEP_MINUTES = 15;
 /** Every row's minute track spans one whole hour, whatever slice of it the row itself covers. */
 const MINUTES_PER_ROW = 60;
-const MINUTE_TICKS = [0, 15, 30, 45];
 /** Pointer travel below this is a click, not a drag (#4982). */
 const CLICK_TOLERANCE_PX = 4;
 
@@ -278,8 +280,8 @@ const hasBand = $derived(layout.allDay.length > 0 || layout.milestones.length > 
             {#if dayHeader}{dayHeader.label}{/if}
         </div>
         <div class="minute-axis">
-            {#each MINUTE_TICKS as tick (tick)}
-                <span class="minute-tick" style={`left: ${(tick / 60) * 100}%`}>:{String(tick).padStart(2, "0")}</span>
+            {#each HOUR_MAP_MINUTE_TICKS as tick (tick)}
+                <span class="minute-tick" style={`left: ${(tick / 60) * 100}%`}>{hourMinuteTickLabel(tick)}</span>
             {/each}
         </div>
     </div>
@@ -357,7 +359,7 @@ const hasBand = $derived(layout.allDay.length > 0 || layout.milestones.length > 
                 bind:this={rowEls[row.rowIndex]}
             >
                 <div class="hour-gutter" title={row.isRepeatedHour ? "Repeated hour (DST)" : undefined}>
-                    {String(row.hour).padStart(2, "0")}{row.isRepeatedHour ? "*" : ""}
+                    {hourRowLabel(row)}
                 </div>
                 <div class="minute-track" bind:this={trackEls[row.rowIndex]}>
                     {#if row.workingStartMinute !== undefined && row.workingEndMinute !== undefined}

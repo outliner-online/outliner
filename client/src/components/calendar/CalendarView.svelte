@@ -11,6 +11,7 @@
 import { onDestroy, onMount, untrack } from "svelte";
 import type { Project } from "$shared/app-schema";
 import type { CalendarObservationContextV1, CalendarProjectionResult } from "$shared/notifications/calendarProjection";
+import { deriveCalendarHoursVisibleModel, type CalendarHoursVisibleModel } from "$shared/notifications/calendarHoursVisibleModel";
 import * as Y from "yjs";
 import { analyzeCalendarEditability } from "../../services/calendar/calendarEditability";
 import { analyzeCalendarColumnWritability } from "../../services/calendar/calendarColumnWritability";
@@ -34,8 +35,8 @@ import {
     todayAnchor,
     type CalendarViewType,
 } from "../../services/calendar/calendarGridRange";
-import { computeDayHeaders } from "../../services/calendar/calendarDayHeaders";
-import { layoutHourMinuteGrid } from "../../services/calendar/calendarHourMinuteLayout";
+import { computeDayHeaders, formatCalendarRangeLabel } from "../../services/calendar/calendarDayHeaders";
+import { HOUR_MAP_MODE_LABEL, layoutHourMinuteGrid } from "../../services/calendar/calendarHourMinuteLayout";
 import {
     collapseLanePath,
     entryAxisValues,
@@ -103,7 +104,7 @@ const EMPTY_SETTINGS: CalendarSettings = {
 
 const VIEW_TYPE_OPTIONS: { value: string; label: string; }[] = [
     { value: "day", label: "Day" },
-    { value: "hours", label: "Hour Map" },
+    { value: "hours", label: HOUR_MAP_MODE_LABEL },
     { value: "days", label: "Multi-day" },
     { value: "week", label: "Week" },
     { value: "month", label: "Month" },
@@ -119,7 +120,8 @@ let queryError = $state<string | undefined>(undefined);
 let writeError = $state<string | undefined>(undefined);
 let catalogResultCurrent = $state(false);
 let acceptedDayModel = $state<CalendarDayVisibleModel | undefined>(undefined);
-let acceptedDayEvidence: {
+let acceptedHoursModel = $state<CalendarHoursVisibleModel | undefined>(undefined);
+let acceptedEvidence: {
     result: TableQueryResult;
     context: CalendarObservationContextV1;
     rangeLabel: string;
@@ -228,7 +230,9 @@ const timeGridLayout = $derived(
 // falling back to the lane time grid.
 const hourMinuteLayout = $derived(
     isHourMap
-        ? layoutHourMinuteGrid(placedEntries, range.start, range.end, timeZone, {
+        ? optimisticOverrides.size === 0 && acceptedHoursModel
+        ? acceptedHoursModel.layout
+        : layoutHourMinuteGrid(placedEntries, range.start, range.end, timeZone, {
             workingHoursStartMinutes: workingHoursStart,
             workingHoursEndMinutes: workingHoursEnd,
         })
@@ -315,17 +319,24 @@ const pgSchema = projectSchemaName(projectId);
 // svelte-ignore state_referenced_locally
 const session = createTableEngineSession({ projectDoc: project.ydoc, projectId });
 
-function publishAcceptedDayModel(currentSettings: CalendarSettings): void {
-    if (!acceptedDayEvidence) return;
-    const derived = deriveCalendarDayVisibleModel({
+function publishAcceptedModel(currentSettings: CalendarSettings): void {
+    if (!acceptedEvidence) return;
+    const input = {
         current: true,
-        result: acceptedDayEvidence.result,
+        result: acceptedEvidence.result,
         settings: currentSettings,
         project,
-        context: acceptedDayEvidence.context,
+        context: acceptedEvidence.context,
         title: currentSettings.name,
-        rangeLabel: acceptedDayEvidence.rangeLabel,
-    });
+        rangeLabel: acceptedEvidence.rangeLabel,
+    };
+    if (input.context.viewType === "hours") {
+        const derived = deriveCalendarHoursVisibleModel(input);
+        acceptedHoursModel = derived.ready ? derived.model : undefined;
+        onVisibleProjection?.(derived.ready ? { ready: true, projection: derived.model.projection } : derived);
+        return;
+    }
+    const derived = deriveCalendarDayVisibleModel(input);
     if (derived.ready) {
         acceptedDayModel = derived.model;
         onVisibleProjection?.({ ready: true, projection: derived.model.projection });
@@ -335,9 +346,10 @@ function publishAcceptedDayModel(currentSettings: CalendarSettings): void {
     }
 }
 
-function invalidateDayObservation(publishNonReady = effectiveViewType === "day"): void {
-    acceptedDayEvidence = undefined;
+function invalidateObservation(publishNonReady = effectiveViewType === "day" || effectiveViewType === "hours"): void {
+    acceptedEvidence = undefined;
     acceptedDayModel = undefined;
+    acceptedHoursModel = undefined;
     if (publishNonReady) {
         onVisibleProjection?.({ ready: false, reason: "Accepted Calendar SQL evidence is stale or unavailable." });
     }
@@ -355,13 +367,13 @@ async function runQuery() {
     const currentRangeBounds = { startUtcMs: range.start, endUtcMs: range.end };
     const currentRangeLabel = rangeLabel;
     const currentViewType = effectiveViewType;
-    const currentDayContext: CalendarObservationContextV1 | undefined = currentViewType === "day"
+    const currentContext: CalendarObservationContextV1 | undefined = currentViewType === "day" || currentViewType === "hours"
         ? {
             version: 1,
             locale: locale ?? new Intl.DateTimeFormat().resolvedOptions().locale,
             timeZone: currentTimeZone,
             weekStart,
-            viewType: "day",
+            viewType: currentViewType,
             anchorUtcMs,
             rangeStartUtcMs: currentRangeBounds.startUtcMs,
             rangeEndUtcMs: currentRangeBounds.endUtcMs,
@@ -383,12 +395,12 @@ async function runQuery() {
         result = outcome.result;
         queryError = undefined;
         catalogResultCurrent = true;
-        if (currentDayContext) {
-            acceptedDayEvidence = { result: outcome.result, context: currentDayContext, rangeLabel: currentRangeLabel };
+        if (currentContext) {
+            acceptedEvidence = { result: outcome.result, context: currentContext, rangeLabel: currentRangeLabel };
             // Roles and other presentation settings do not require another
             // SQL execution. Use their latest committed value even when they
             // changed while this accepted query was in flight.
-            publishAcceptedDayModel(settings);
+            publishAcceptedModel(settings);
         }
         // The query result is authoritative: drop any optimistic placement
         // whose row has now come back, whether or not it agrees with the
@@ -397,26 +409,26 @@ async function runQuery() {
     } else {
         catalogResultCurrent = false;
         queryError = outcome.error;
-        if (currentDayContext) {
-            invalidateDayObservation();
+        if (currentContext) {
+            invalidateObservation();
         }
     }
 }
 
 function scheduleRequery(
     invalidateCurrentResult = false,
-    invalidateObservation = false,
-    publishNonReady = effectiveViewType === "day",
+    invalidateComparable = false,
+    publishNonReady = effectiveViewType === "day" || effectiveViewType === "hours",
 ) {
-    if (invalidateObservation) {
+    if (invalidateComparable) {
         // Cancel an in-flight generation before the debounce. Its captured
         // range must never be paired with labels from the new navigation.
         queryGeneration++;
-        invalidateDayObservation(publishNonReady);
+        invalidateObservation(publishNonReady);
     }
     if (invalidateCurrentResult) {
         catalogResultCurrent = false;
-        invalidateDayObservation();
+        invalidateObservation();
     }
     if (requeryTimer !== undefined) clearTimeout(requeryTimer);
     requeryTimer = setTimeout(() => {
@@ -436,16 +448,16 @@ function refreshMirror() {
     settings = next;
     queryInput = next.query;
     if (queryChanged || timezoneChanged) {
-        scheduleRequery(true, true, previousViewType === "day" || next.viewType === "day");
+        scheduleRequery(true, true, [previousViewType, next.viewType].some(type => type === "day" || type === "hours"));
     } else if (viewTypeChanged || ganttScaleChanged) {
         // Presentation-only changes reuse the same current SQL result. They
         // must not temporarily revoke drag/write authority while the
         // debounced refresh confirms that unchanged result.
-        scheduleRequery(false, true, previousViewType === "day" || next.viewType === "day");
-    } else if (catalogResultCurrent && acceptedDayEvidence) {
+        scheduleRequery(false, true, [previousViewType, next.viewType].some(type => type === "day" || type === "hours"));
+    } else if (catalogResultCurrent && acceptedEvidence) {
         // Role/grouping/lane presentation changes reuse the accepted rows but
-        // must rebuild both the production Day model and its projection.
-        publishAcceptedDayModel(next);
+        // must rebuild both the production model and its projection.
+        publishAcceptedModel(next);
     }
     if (!isInitialSyncDone) {
         isInitialSyncDone = true;
@@ -503,7 +515,7 @@ function goNext() {
 // the label must read them back in that zone; `toISOString` would name the
 // UTC day, which is the previous one for any zone ahead of UTC.
 const rangeLabel = $derived(
-    `${new Intl.DateTimeFormat(locale, { timeZone, dateStyle: "medium" }).format(new Date(range.start))} – ${new Intl.DateTimeFormat(locale, { timeZone, dateStyle: "medium" }).format(new Date(range.end - 1))} (${timeZone})`,
+    formatCalendarRangeLabel(range.start, range.end, timeZone, locale),
 );
 
 // --- Write dispatch: drag/resize/keyboard all funnel through here. ---
@@ -681,7 +693,7 @@ onMount(() => {
         catalogResultCurrent = false;
         // Retain the intentionally stale rendered rows, but revoke the
         // comparable observation as soon as its catalog authority is lost.
-        invalidateDayObservation();
+        invalidateObservation();
         if (state.status === "building") {
             queryError = "SQL catalog is rebuilding";
         } else if (state.status === "error") {
@@ -824,7 +836,7 @@ onDestroy(() => {
         <CalendarHourMinuteGrid
             layout={hourMinuteLayout}
             {timeZone}
-            dayHeader={computeDayHeaders(range.start, 1, timeZone, locale)[0]}
+            dayHeader={acceptedHoursModel?.dayHeader ?? computeDayHeaders(range.start, 1, timeZone, locale)[0]}
             {isStartWritable}
             {isDurationWritable}
             onDragMove={previewStart}
