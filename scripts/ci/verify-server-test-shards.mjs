@@ -29,7 +29,15 @@ for (let index = 1; index <= total; index++) {
         if (outcome.shard !== `${index}/${total}`) failures.push(`shard ${index} has the wrong shard identity`);
         if (outcome.status !== 0) failures.push(`shard ${index} native Mocha exit was ${outcome.status}`);
     }
-    const fullKeys = full?.tests.map(test => `${test.file}\0${test.title}`).sort();
+    if (full && (!Array.isArray(full.tests) || full.tests.length === 0)) {
+        failures.push(`shard ${index} has no native tests in the unsplit inventory`);
+    }
+    if (actual && (!Array.isArray(actual.tests) || actual.tests.length === 0)) {
+        failures.push(`shard ${index} has no executed native tests`);
+    }
+    const fullKeys = Array.isArray(full?.tests)
+        ? full.tests.map(test => `${test.file}\0${test.title}`).sort()
+        : undefined;
     if (fullKeys && new Set(fullKeys).size !== fullKeys.length) {
         failures.push("unsharded inventory contains duplicate native identities");
     }
@@ -37,7 +45,7 @@ for (let index = 1; index <= total; index++) {
     else if (fullKeys && JSON.stringify(fullKeys) !== JSON.stringify(canonical)) {
         failures.push(`shard ${index} disagrees on the unsplit inventory`);
     }
-    if (actual) executed.push(...actual.tests.map(test => `${test.file}\0${test.title}`));
+    if (Array.isArray(actual?.tests)) executed.push(...actual.tests.map(test => `${test.file}\0${test.title}`));
 }
 if (new Set(executed).size !== executed.length) failures.push("executed shard inventories overlap");
 if (canonical && JSON.stringify([...executed].sort()) !== JSON.stringify(canonical)) {

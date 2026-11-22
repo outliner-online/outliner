@@ -65,6 +65,25 @@ class ServerExecutionBoundaryTest(unittest.TestCase):
             self.assertEqual(verify.returncode, 0, verify.stdout + verify.stderr)
             self.assertIn('Verified 2 native tests', verify.stdout)
 
+            for index in ['1', '2']:
+                for name in ['full.json', 'executed.json']:
+                    result_path = root / f'server-test-results/shard-{index}/{name}'
+                    result_path.write_text('{"tests":[]}')
+            verify = subprocess.run(['node', 'scripts/ci/verify-server-test-shards.mjs',
+                                     'server-test-results', '2'], cwd=root, env=env,
+                                    text=True, capture_output=True, timeout=30)
+            self.assertNotEqual(verify.returncode, 0)
+            self.assertIn('shard 1 has no native tests in the unsplit inventory', verify.stderr)
+            self.assertIn('shard 2 has no executed native tests', verify.stderr)
+
+            for shard in ['1/2', '2/2']:
+                index = shard.split('/')[0]
+                result = subprocess.run(['bash', 'scripts/ci/run-server-test-shard.sh'], cwd=root,
+                                        env=env | {'SERVER_TEST_SHARD': shard,
+                                                   'SERVER_TEST_RESULT_DIR': f'server-test-results/shard-{index}'}, text=True,
+                                        capture_output=True, timeout=60)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
             (root / 'server/tests/b.test.js').write_text('it("second",()=>{throw new Error("native failure")});')
             subprocess.run(['bash', 'scripts/ci/run-server-test-shard.sh'], cwd=root,
                            env=env | {'SERVER_TEST_SHARD': '2/2'}, check=True,
