@@ -24,7 +24,7 @@ import { onMount } from "svelte";
 import type { DayHeader } from "../../services/calendar/calendarDayHeaders";
 import { formatDragMoveLabel, formatDragResizeLabel, formatDuration } from "../../services/calendar/calendarDragLabel";
 import type { CalendarEntry } from "../../services/calendar/calendarEntries";
-import type { TimeGridLayout } from "../../services/calendar/calendarTimeGridLayout";
+import { TIME_GRID_HOUR_LABELS, type TimeGridLayout, timeGridMilestoneLabel } from "../../services/calendar/calendarTimeGridLayout";
 import CalendarDragTooltip from "./CalendarDragTooltip.svelte";
 
 const DAY_MS = 86_400_000;
@@ -91,7 +91,6 @@ let {
 }: Props = $props();
 
 const dayHeightPx = 24 * ROW_HEIGHT_PX;
-const hours = Array.from({ length: 24 }, (_, i) => i);
 
 let gridEl: HTMLDivElement | undefined = $state();
 let scrollEl: HTMLDivElement | undefined = $state();
@@ -352,7 +351,7 @@ onMount(() => {
                         class="entry-title"
                         data-testid="calendar-entry-title"
                         onkeydown={(e) => onEntryKeydown(m.entry, e)}
-                    >◆ {m.entry.title}</div>
+                    >{timeGridMilestoneLabel(m.entry.title)}</div>
                     {#if isDeletable(m.entry)}
                         <button
                             type="button"
@@ -372,8 +371,8 @@ onMount(() => {
 
     <div class="scroll-area" bind:this={scrollEl} data-testid="calendar-time-grid-scroll">
         <div class="hour-gutter">
-            {#each hours as h (h)}
-                <div class="hour-label" style={`height: ${ROW_HEIGHT_PX}px`}>{String(h).padStart(2, "0")}:00</div>
+            {#each TIME_GRID_HOUR_LABELS as label (label)}
+                <div class="hour-label" style={`height: ${ROW_HEIGHT_PX}px`}>{label}</div>
             {/each}
         </div>
         <div class="day-columns" bind:this={gridEl} style={`height: ${dayHeightPx}px`}>

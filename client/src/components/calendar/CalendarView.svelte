@@ -17,6 +17,7 @@ import { analyzeCalendarEditability } from "../../services/calendar/calendarEdit
 import { analyzeCalendarColumnWritability } from "../../services/calendar/calendarColumnWritability";
 import { buildCalendarEntries, type CalendarEntry } from "../../services/calendar/calendarEntries";
 import { deriveCalendarDayVisibleModel, type CalendarDayVisibleModel } from "../../services/calendar/calendarDayVisibleModel";
+import { CALENDAR_DAYS_MODE_LABELS, deriveCalendarDaysVisibleModel, type CalendarDaysVisibleModel } from "$shared/notifications/calendarDaysVisibleModel";
 import {
     resolveCalendarEntryWritability,
     writeCalendarEntryDuration,
@@ -105,13 +106,17 @@ const EMPTY_SETTINGS: CalendarSettings = {
 const VIEW_TYPE_OPTIONS: { value: string; label: string; }[] = [
     { value: "day", label: "Day" },
     { value: "hours", label: HOUR_MAP_MODE_LABEL },
-    { value: "days", label: "Multi-day" },
-    { value: "week", label: "Week" },
+    { value: "days", label: CALENDAR_DAYS_MODE_LABELS.days },
+    { value: "week", label: CALENDAR_DAYS_MODE_LABELS.week },
     { value: "month", label: "Month" },
     { value: "gantt", label: "Gantt" },
 ];
 
 const GANTT_SCALES = new Set<GanttScale>(["day", "week", "month", "quarter"]);
+
+function hasAcceptedProjection(type: string): type is "day" | "hours" | "days" | "week" {
+    return type === "day" || type === "hours" || type === "days" || type === "week";
+}
 
 let settings = $state<CalendarSettings>(EMPTY_SETTINGS);
 let queryInput = $state("");
@@ -121,6 +126,7 @@ let writeError = $state<string | undefined>(undefined);
 let catalogResultCurrent = $state(false);
 let acceptedDayModel = $state<CalendarDayVisibleModel | undefined>(undefined);
 let acceptedHoursModel = $state<CalendarHoursVisibleModel | undefined>(undefined);
+let acceptedDaysModel = $state<CalendarDaysVisibleModel | undefined>(undefined);
 let acceptedEvidence: {
     result: TableQueryResult;
     context: CalendarObservationContextV1;
@@ -215,11 +221,12 @@ const monthFilteredEntries = $derived(
 );
 
 const isHourMap = $derived(!isGantt && viewType === "hours");
+const acceptedTimeGridModel = $derived(viewType === "day" ? acceptedDayModel : acceptedDaysModel);
 const timeGridLayout = $derived(
     isGantt || isHourMap || viewType === "month" || groupingActive
         ? undefined
-        : viewType === "day" && optimisticOverrides.size === 0 && acceptedDayModel
-        ? acceptedDayModel.layout
+        : optimisticOverrides.size === 0 && acceptedTimeGridModel
+        ? acceptedTimeGridModel.layout
         : layoutTimeGrid(placedEntries, range.start, range.end),
 );
 // The Hour Map (#4972) is a single-day projection of the *same* entries every
@@ -336,6 +343,12 @@ function publishAcceptedModel(currentSettings: CalendarSettings): void {
         onVisibleProjection?.(derived.ready ? { ready: true, projection: derived.model.projection } : derived);
         return;
     }
+    if (input.context.viewType === "days" || input.context.viewType === "week") {
+        const derived = deriveCalendarDaysVisibleModel(input);
+        acceptedDaysModel = derived.ready ? derived.model : undefined;
+        onVisibleProjection?.(derived.ready ? { ready: true, projection: derived.model.projection } : derived);
+        return;
+    }
     const derived = deriveCalendarDayVisibleModel(input);
     if (derived.ready) {
         acceptedDayModel = derived.model;
@@ -346,10 +359,11 @@ function publishAcceptedModel(currentSettings: CalendarSettings): void {
     }
 }
 
-function invalidateObservation(publishNonReady = effectiveViewType === "day" || effectiveViewType === "hours"): void {
+function invalidateObservation(publishNonReady = hasAcceptedProjection(effectiveViewType)): void {
     acceptedEvidence = undefined;
     acceptedDayModel = undefined;
     acceptedHoursModel = undefined;
+    acceptedDaysModel = undefined;
     if (publishNonReady) {
         onVisibleProjection?.({ ready: false, reason: "Accepted Calendar SQL evidence is stale or unavailable." });
     }
@@ -367,7 +381,7 @@ async function runQuery() {
     const currentRangeBounds = { startUtcMs: range.start, endUtcMs: range.end };
     const currentRangeLabel = rangeLabel;
     const currentViewType = effectiveViewType;
-    const currentContext: CalendarObservationContextV1 | undefined = currentViewType === "day" || currentViewType === "hours"
+    const currentContext: CalendarObservationContextV1 | undefined = hasAcceptedProjection(currentViewType)
         ? {
             version: 1,
             locale: locale ?? new Intl.DateTimeFormat().resolvedOptions().locale,
@@ -418,7 +432,7 @@ async function runQuery() {
 function scheduleRequery(
     invalidateCurrentResult = false,
     invalidateComparable = false,
-    publishNonReady = effectiveViewType === "day" || effectiveViewType === "hours",
+    publishNonReady = hasAcceptedProjection(effectiveViewType),
 ) {
     if (invalidateComparable) {
         // Cancel an in-flight generation before the debounce. Its captured
@@ -445,15 +459,15 @@ function refreshMirror() {
     const viewTypeChanged = next.viewType !== settings.viewType;
     const timezoneChanged = next.timezone !== settings.timezone;
     const ganttScaleChanged = next.ganttScale !== settings.ganttScale;
+    const weekStartChanged = effectiveViewType === "week" && !observationContext && next.weekStart !== settings.weekStart;
     settings = next;
     queryInput = next.query;
     if (queryChanged || timezoneChanged) {
-        scheduleRequery(true, true, [previousViewType, next.viewType].some(type => type === "day" || type === "hours"));
-    } else if (viewTypeChanged || ganttScaleChanged) {
-        // Presentation-only changes reuse the same current SQL result. They
-        // must not temporarily revoke drag/write authority while the
-        // debounced refresh confirms that unchanged result.
-        scheduleRequery(false, true, [previousViewType, next.viewType].some(type => type === "day" || type === "hours"));
+        scheduleRequery(true, true, [previousViewType, next.viewType].some(hasAcceptedProjection));
+    } else if (viewTypeChanged || ganttScaleChanged || weekStartChanged) {
+        // Range/mode changes recapture SQL evidence while keeping existing
+        // drag/write authority until the debounced query refreshes it.
+        scheduleRequery(false, true, [previousViewType, next.viewType].some(hasAcceptedProjection));
     } else if (catalogResultCurrent && acceptedEvidence) {
         // Role/grouping/lane presentation changes reuse the accepted rows but
         // must rebuild both the production model and its projection.
@@ -919,10 +933,10 @@ onDestroy(() => {
             layout={timeGridLayout}
             {timeZone}
             rangeStart={range.start}
-            workingHoursStartMinutes={workingHoursStart}
-            workingHoursEndMinutes={workingHoursEnd}
-            dayHeaders={viewType === "day" && acceptedDayModel
-                ? acceptedDayModel.dayHeaders
+            workingHoursStartMinutes={acceptedDaysModel?.workingHoursStartMinutes ?? workingHoursStart}
+            workingHoursEndMinutes={acceptedDaysModel?.workingHoursEndMinutes ?? workingHoursEnd}
+            dayHeaders={acceptedTimeGridModel
+                ? acceptedTimeGridModel.dayHeaders
                 : computeDayHeaders(range.start, timeGridLayout.dayCount, timeZone, locale)}
             todayUtcMs={todayAnchor(timeZone, Date.now())}
             {isStartWritable}
