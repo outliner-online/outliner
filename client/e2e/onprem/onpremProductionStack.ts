@@ -4,8 +4,10 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import type { Duplex, Readable } from "node:stream";
+import type * as Y from "yjs";
 import { loadConfig } from "../../../server/src/config";
 import { startOnPremServer } from "../../../server/src/onprem-server";
+import { createDocumentLoader, createDocumentStore } from "../../../server/src/persistence";
 
 const MIME: Record<string, string> = {
     ".css": "text/css",
@@ -256,6 +258,20 @@ export class OnPremProductionStack {
     }
     get origin() {
         return `http://127.0.0.1:${this.originPort}`;
+    }
+
+    // Private fixture admission/storage only. Browser reads still traverse the
+    // production session, room authorization, acquisition, and route code.
+    async seedProjectDocument(projectId: string, title: string, doc: Y.Doc, admit = true) {
+        if (!this.backend) throw new Error("Stack is not running");
+        if (admit) await this.backend.directory.ensureDescriptor("local-user", projectId, title);
+        await createDocumentStore(this.backend.persistence)(`projects/${projectId}`, doc);
+    }
+
+    async readProjectDocument(projectId: string) {
+        if (!this.backend) throw new Error("Stack is not running");
+        return this.backend.hocuspocus.documents.get(`projects/${projectId}`)
+            ?? await createDocumentLoader(this.backend.persistence)(`projects/${projectId}`);
     }
 
     async start() {

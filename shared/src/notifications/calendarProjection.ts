@@ -123,7 +123,7 @@ function invalid(error: string): CalendarContextValidationResult {
 
 export function encodeCalendarObservationContext(context: CalendarObservationContextV1): string {
     const result = validateCalendarObservationContext(context);
-    if (!result.valid) throw new Error(result.error);
+    if (result.valid === false) throw new Error(result.error);
     return JSON.stringify(result.context);
 }
 
@@ -158,7 +158,7 @@ export function projectCalendarVisibleState(
     visible: Omit<CalendarVisibleProjection, "version"> | undefined,
 ): CalendarProjectionResult {
     const context = validateCalendarObservationContext(contextValue);
-    if (!context.valid) return { ready: false, reason: context.error };
+    if (context.valid === false) return { ready: false, reason: context.error };
     if (!visible) return { ready: false, reason: "Authoritative Calendar visible-state evidence is unavailable." };
     const content = visible.content.map(item => Object.freeze({ ...item }));
     return {

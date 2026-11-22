@@ -1,6 +1,6 @@
 <script lang="ts">
     import Loader from "../Loader.svelte";
-    import { onMount } from "svelte";
+    import { onMount, untrack } from "svelte";
     import { goto } from "$app/navigation";
     import { userManager } from "../../auth/UserManager";
     import AuthComponent from "../AuthComponent.svelte";
@@ -140,8 +140,11 @@
     }
 
     $effect(() => {
+        void observationContext;
         if (canAccess && projectName && calendarName) {
-            loadCalendar();
+            // Acquire/release reads the reactive client registry. Those reads
+            // must not subscribe this route to its own connection changes.
+            untrack(() => loadCalendar());
         } else {
             isLoading = false;
         }
