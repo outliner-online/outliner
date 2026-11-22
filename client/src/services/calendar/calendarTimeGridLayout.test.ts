@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { CalendarEntry } from "./calendarEntries";
 import { layoutTimeGrid } from "./calendarTimeGridLayout";
 
@@ -11,6 +11,21 @@ function entry(overrides: Partial<CalendarEntry>): CalendarEntry {
 }
 
 describe("layoutTimeGrid", () => {
+    it("uses locale-independent title ordering for equal-time overlap columns", () => {
+        const localeCompare = vi.spyOn(String.prototype, "localeCompare").mockImplementation(() => {
+            throw new Error("ambient locale comparator must not be used");
+        });
+        const layout = layoutTimeGrid([
+            entry({ key: "angstrom", title: "Ångström", startMs: RANGE_START + 9 * 3_600_000, durationMs: 3_600_000 }),
+            entry({ key: "zebra", title: "Zebra", startMs: RANGE_START + 9 * 3_600_000, durationMs: 3_600_000 }),
+        ], RANGE_START, RANGE_END);
+        expect(layout.timed.map(placement => [placement.entry.title, placement.columnIndex])).toEqual([
+            ["Ångström", 1],
+            ["Zebra", 0],
+        ]);
+        localeCompare.mockRestore();
+    });
+
     it("places a timed entry at the correct day and fractional position", () => {
         const e = entry({
             key: "a",

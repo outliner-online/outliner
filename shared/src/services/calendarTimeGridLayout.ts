@@ -85,8 +85,9 @@ interface OverlapItem {
  * overlap split the width only within their own cluster, not the whole day.
  */
 function assignOverlapColumns(items: OverlapItem[]): Map<OverlapItem, { columnIndex: number; columnCount: number; }> {
+    const compareText = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
     const sorted = [...items].sort((a, b) =>
-        a.start - b.start || a.end - b.end || a.entry.title.localeCompare(b.entry.title) || a.id - b.id
+        a.start - b.start || a.end - b.end || compareText(a.entry.title, b.entry.title) || a.id - b.id
     );
     const result = new Map<OverlapItem, { columnIndex: number; columnCount: number; }>();
 

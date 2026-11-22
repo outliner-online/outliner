@@ -20,7 +20,7 @@
 // implement cross-lane drops with native DnD (mirroring `CalendarMonthGrid`'s
 // existing pattern) without touching reschedule at all.
 
-import { onMount } from "svelte";
+import { onMount, tick } from "svelte";
 import type { DayHeader } from "../../services/calendar/calendarDayHeaders";
 import { formatDragMoveLabel, formatDragResizeLabel, formatDuration } from "../../services/calendar/calendarDragLabel";
 import type { CalendarEntry } from "../../services/calendar/calendarEntries";
@@ -94,6 +94,29 @@ const dayHeightPx = 24 * ROW_HEIGHT_PX;
 
 let gridEl: HTMLDivElement | undefined = $state();
 let scrollEl: HTMLDivElement | undefined = $state();
+let focusedResizeRenderKey: string | undefined;
+
+const renderKey = (entry: CalendarEntry) => entry.renderKey ?? entry.key;
+const currentEntry = (entry: CalendarEntry) => {
+    const key = renderKey(entry);
+    return layout.timed.find(placement => renderKey(placement.entry) === key)?.entry
+        ?? layout.allDay.find(placement => renderKey(placement.entry) === key)?.entry
+        ?? layout.milestones.find(placement => renderKey(placement.entry) === key)?.entry
+        ?? entry;
+};
+
+function restoreFocusedResize() {
+    if (!focusedResizeRenderKey || !gridEl || document.activeElement !== document.body) return;
+    const handle = [...gridEl.querySelectorAll<HTMLElement>(".resize-handle")]
+        .find(element => element.dataset.renderKey === focusedResizeRenderKey);
+    if (handle) handle.focus();
+    else focusedResizeRenderKey = undefined;
+}
+
+$effect(() => {
+    layout;
+    void tick().then(restoreFocusedResize);
+});
 
 let drag = $state<{
     kind: "move" | "resize"
@@ -293,8 +316,7 @@ onMount(() => {
 
     {#if layout.allDay.length > 0 || layout.milestones.length > 0}
         <div class="band-row" data-testid="calendar-all-day-band" style={`grid-template-columns: repeat(${layout.dayCount}, 1fr)`}>
-            <!-- Position is the stable render identity: accepted rows may share source keys. -->
-            {#each layout.allDay as p, placementIndex (placementIndex)}
+            {#each layout.allDay as p (renderKey(p.entry))}
                 <div
                     role="group"
                     aria-label={p.entry.title}
@@ -331,7 +353,7 @@ onMount(() => {
                     {/if}
                 </div>
             {/each}
-            {#each layout.milestones as m, placementIndex (placementIndex)}
+            {#each layout.milestones as m (renderKey(m.entry))}
                 <div
                     role="group"
                     aria-label={m.entry.title}
@@ -391,8 +413,7 @@ onMount(() => {
                     ></div>
                 </div>
             {/each}
-            <!-- Keep focused controls mounted while accepted and optimistic layouts exchange objects. -->
-            {#each layout.timed as p, placementIndex (placementIndex)}
+            {#each layout.timed as p (renderKey(p.entry))}
                 <div
                     role="group"
                     aria-label={p.entry.title}
@@ -444,8 +465,10 @@ onMount(() => {
                             aria-label={`Resize ${p.entry.title}`}
                             class="resize-handle"
                             data-testid={`calendar-entry-resize-${p.entry.key}`}
-                            onpointerdown={(e) => beginDrag("resize", p.entry, e)}
-                            onkeydown={(e) => onResizeKeydown(p.entry, e)}
+                            data-render-key={renderKey(p.entry)}
+                            onfocus={() => focusedResizeRenderKey = renderKey(p.entry)}
+                            onpointerdown={(e) => beginDrag("resize", currentEntry(p.entry), e)}
+                            onkeydown={(e) => onResizeKeydown(currentEntry(p.entry), e)}
                         ></div>
                     {/if}
                     {#if isLaneWritable?.(p.entry)}

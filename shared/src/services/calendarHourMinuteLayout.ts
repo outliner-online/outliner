@@ -210,10 +210,11 @@ interface LaneItem {
  * Deterministic: ties in start are broken by end, then by key.
  */
 export function assignOverlapLanes(items: LaneItem[]): Map<string, number> {
+    const compareText = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
     const sorted = [...items].sort((a, b) =>
         a.start - b.start || a.end - b.end
-        || (a.orderKey ?? a.key).localeCompare(b.orderKey ?? b.key)
-        || a.key.localeCompare(b.key)
+        || compareText(a.orderKey ?? a.key, b.orderKey ?? b.key)
+        || compareText(a.key, b.key)
     );
     const laneEnds: number[] = [];
     const lanes = new Map<string, number>();

@@ -14,6 +14,7 @@
 // parent `CalendarView`, which owns writability, optimistic placement and the
 // actual write, exactly as the time grid does.
 
+import { tick } from "svelte";
 import type { DayHeader } from "../../services/calendar/calendarDayHeaders";
 import { formatDragMoveLabel, formatDragResizeLabel, formatDuration } from "../../services/calendar/calendarDragLabel";
 import type { CalendarEntry } from "../../services/calendar/calendarEntries";
@@ -80,6 +81,30 @@ let {
 
 let trackEls: (HTMLDivElement | undefined)[] = $state([]);
 let rowEls: (HTMLDivElement | undefined)[] = $state([]);
+let rootEl: HTMLDivElement | undefined = $state();
+let focusedResizeRenderKey: string | undefined;
+
+const renderKey = (entry: CalendarEntry) => entry.renderKey ?? entry.key;
+const currentEntry = (entry: CalendarEntry) => {
+    const key = renderKey(entry);
+    return layout.rows.flatMap(row => row.fragments).find(fragment => renderKey(fragment.entry) === key)?.entry
+        ?? layout.allDay.find(candidate => renderKey(candidate) === key)
+        ?? layout.milestones.find(candidate => renderKey(candidate) === key)
+        ?? entry;
+};
+
+function restoreFocusedResize() {
+    if (!focusedResizeRenderKey || !rootEl || document.activeElement !== document.body) return;
+    const handle = [...rootEl.querySelectorAll<HTMLElement>(".resize-handle")]
+        .find(element => element.dataset.renderKey === focusedResizeRenderKey);
+    if (handle) handle.focus();
+    else focusedResizeRenderKey = undefined;
+}
+
+$effect(() => {
+    layout;
+    void tick().then(restoreFocusedResize);
+});
 
 let drag = $state<{
     kind: "move" | "resize"
@@ -274,7 +299,7 @@ const hasBand = $derived(layout.allDay.length > 0 || layout.milestones.length > 
 
 <svelte:window onpointermove={onPointerMove} onpointerup={onPointerUp} onpointercancel={onPointerCancel} />
 
-<div class="hour-map" class:dragging={drag !== undefined} data-testid="calendar-hour-minute-grid">
+<div class="hour-map" class:dragging={drag !== undefined} data-testid="calendar-hour-minute-grid" bind:this={rootEl}>
     <div class="axis-header">
         <div class="hour-gutter" data-testid="calendar-hour-map-day-label">
             {#if dayHeader}{dayHeader.label}{/if}
@@ -288,8 +313,7 @@ const hasBand = $derived(layout.allDay.length > 0 || layout.milestones.length > 
 
     {#if hasBand}
         <div class="band-row" data-testid="calendar-all-day-band">
-            <!-- Position is the stable render identity: accepted rows may share source keys. -->
-            {#each layout.allDay as entry, entryIndex (entryIndex)}
+            {#each layout.allDay as entry (renderKey(entry))}
                 <div
                     role="group"
                     aria-label={entry.title}
@@ -318,7 +342,7 @@ const hasBand = $derived(layout.allDay.length > 0 || layout.milestones.length > 
                     {/if}
                 </div>
             {/each}
-            {#each layout.milestones as entry, entryIndex (entryIndex)}
+            {#each layout.milestones as entry (renderKey(entry))}
                 <div
                     role="group"
                     aria-label={entry.title}
@@ -372,8 +396,7 @@ const hasBand = $derived(layout.allDay.length > 0 || layout.milestones.length > 
                             }%`}
                         ></div>
                     {/if}
-                    <!-- Preserve focus when optimistic layout objects replace accepted fragments. -->
-                    {#each row.fragments as f, fragmentIndex (fragmentIndex)}
+                    {#each row.fragments as f (`${renderKey(f.entry)}:${f.rowIndex}`)}
                         <div
                             role="group"
                             aria-label={f.isTitleAnchor ? f.entry.title : `${f.entry.title} (continued)`}
@@ -432,8 +455,10 @@ const hasBand = $derived(layout.allDay.length > 0 || layout.milestones.length > 
                                     aria-label={`Resize ${f.entry.title}`}
                                     class="resize-handle"
                                     data-testid={`calendar-entry-resize-${f.entry.key}`}
-                                    onpointerdown={(e) => beginDrag("resize", f.entry, row.rowIndex, e)}
-                                    onkeydown={(e) => onResizeKeydown(f.entry, e)}
+                                    data-render-key={renderKey(f.entry)}
+                                    onfocus={() => focusedResizeRenderKey = renderKey(f.entry)}
+                                    onpointerdown={(e) => beginDrag("resize", currentEntry(f.entry), row.rowIndex, e)}
+                                    onkeydown={(e) => onResizeKeydown(currentEntry(f.entry), e)}
                                 ></div>
                             {/if}
                         </div>

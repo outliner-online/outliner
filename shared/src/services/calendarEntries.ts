@@ -28,6 +28,12 @@ export interface CalendarEntryRoles {
 export interface CalendarEntry {
     /** Stable identity across a requery: `source_kind:source_id`, or the row index as a last resort. */
     key: string;
+    /**
+     * Stable identity for one rendered query-row occurrence. Unlike `key`,
+     * this remains unique when a query returns more than one row for the same
+     * source object. It is presentation identity only and is never persisted.
+     */
+    renderKey?: string;
     sourceKind?: string;
     sourceId?: string;
     /**
@@ -199,6 +205,30 @@ export function buildCalendarEntries(
             raw: row,
         });
     });
+
+    const bySourceKey = new Map<string, CalendarEntry[]>();
+    for (const entry of entries) {
+        const group = bySourceKey.get(entry.key) ?? [];
+        group.push(entry);
+        bySourceKey.set(entry.key, group);
+    }
+    for (const [sourceKey, group] of bySourceKey) {
+        if (group.length === 1) {
+            group[0].renderKey = sourceKey;
+            continue;
+        }
+        const semanticCounts = new Map<string, number>();
+        for (const entry of group) {
+            // Do not include mutable placement geometry here: a resize must not
+            // replace the interactive DOM node. The displayed row semantics
+            // distinguish ordinary joined rows; an ordinal only disambiguates
+            // otherwise identical duplicate occurrences.
+            const semanticKey = JSON.stringify([sourceKey, entry.title]);
+            const occurrence = semanticCounts.get(semanticKey) ?? 0;
+            semanticCounts.set(semanticKey, occurrence + 1);
+            entry.renderKey = JSON.stringify([semanticKey, occurrence]);
+        }
+    }
 
     return entries;
 }

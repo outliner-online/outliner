@@ -12,6 +12,25 @@ const SETTINGS = {
 };
 
 describe("buildCalendarEntries", () => {
+    it("assigns stable unique render identities to duplicate source rows across reordering", () => {
+        const rows = [
+            { source_kind: "tasks", source_id: "shared", title: "Alpha", start: "2026-03-10T09:00:00Z" },
+            { source_kind: "tasks", source_id: "shared", title: "Beta", start: "2026-03-10T10:00:00Z" },
+        ];
+        const build = (orderedRows: typeof rows) =>
+            buildCalendarEntries(
+                { columns: Object.keys(rows[0]), rows: orderedRows },
+                { roleTitle: "title", roleStart: "start" },
+                "UTC",
+            );
+
+        const before = build(rows);
+        const after = build([...rows].reverse());
+        expect(new Set(before.map(entry => entry.renderKey)).size).toBe(2);
+        expect(Object.fromEntries(after.map(entry => [entry.title, entry.renderKey])))
+            .toEqual(Object.fromEntries(before.map(entry => [entry.title, entry.renderKey])));
+    });
+
     it("builds a timed entry with an instant start", () => {
         const [entry] = buildCalendarEntries(
             {
