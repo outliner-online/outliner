@@ -265,8 +265,19 @@ describe("SvelteKit 3 production service worker in a browser", () => {
             const channel = new MessageChannel();
             const response = new Promise<{ binding: { fence: number; generation?: string; }; workerBootId: string; }>(
                 (resolve, reject) => {
+                    const timeout = setTimeout(
+                        () =>
+                            reject(
+                                new Error(
+                                    "built worker did not return its Web Push enrollment binding within 5 seconds",
+                                ),
+                            ),
+                        5_000,
+                    );
                     channel.port1.onmessage = event =>
-                        event.data?.error ? reject(new Error(event.data.error)) : resolve(event.data);
+                        event.data?.error
+                            ? (clearTimeout(timeout), reject(new Error(event.data.error)))
+                            : (clearTimeout(timeout), resolve(event.data));
                 },
             );
             registration.active.postMessage("outliner:read-web-push-binding", [channel.port2]);

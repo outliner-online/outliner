@@ -31,7 +31,11 @@ interface SyncServiceWorkerGlobalScope {
     ): void;
     addEventListener(
         type: "message",
-        listener: (event: { data: unknown; ports: Array<{ postMessage(value: unknown): void; }>; }) => void,
+        listener: (event: {
+            data: unknown;
+            ports: Array<{ postMessage(value: unknown): void; }>;
+            waitUntil(p: Promise<unknown>): void;
+        }) => void,
     ): void;
 }
 
@@ -59,9 +63,12 @@ function readEnrollmentBinding(): Promise<unknown> {
 
 self.addEventListener("message", event => {
     if (event.data !== "outliner:read-web-push-binding" || !event.ports[0]) return;
-    readEnrollmentBinding().then(
-        binding => event.ports[0].postMessage({ binding, workerBootId: WORKER_BOOT_ID }),
-        () => event.ports[0].postMessage({ error: "binding_unavailable", workerBootId: WORKER_BOOT_ID }),
+    const port = event.ports[0];
+    event.waitUntil(
+        readEnrollmentBinding().then(
+            binding => port.postMessage({ binding, workerBootId: WORKER_BOOT_ID }),
+            () => port.postMessage({ error: "binding_unavailable", workerBootId: WORKER_BOOT_ID }),
+        ),
     );
 });
 
