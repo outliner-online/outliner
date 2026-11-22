@@ -65,7 +65,9 @@ export function deriveCalendarDaysVisibleModel(input: {
     if (
         groupAxis !== undefined && (
             input.result.columns.filter(column => column === groupAxis).length !== 1
-            || input.result.rows.some(row => !Object.hasOwn(row, groupAxis) || row[groupAxis] === undefined)
+            || input.result.rows.some(
+                row => !Object.prototype.hasOwnProperty.call(row, groupAxis) || row[groupAxis] === undefined,
+            )
         )
     ) {
         return { ready: false, reason: "Calendar grouping evidence is unavailable or ambiguous." };
