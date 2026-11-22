@@ -53,8 +53,10 @@ class ServerExecutionBoundaryTest(unittest.TestCase):
             (root / 'server/tests/b.test.js').write_text('it("second",()=>{});')
             env = os.environ | {'GITHUB_RUN_ID': '7', 'GITHUB_RUN_ATTEMPT': '2', 'GITHUB_SHA': 'abc'}
             for shard in ['1/2', '2/2']:
+                index = shard.split('/')[0]
                 result = subprocess.run(['bash', 'scripts/ci/run-server-test-shard.sh'], cwd=root,
-                                        env=env | {'SERVER_TEST_SHARD': shard}, text=True,
+                                        env=env | {'SERVER_TEST_SHARD': shard,
+                                                   'SERVER_TEST_RESULT_DIR': f'server-test-results/shard-{index}'}, text=True,
                                         capture_output=True, timeout=60)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             verify = subprocess.run(['node', 'scripts/ci/verify-server-test-shards.mjs',

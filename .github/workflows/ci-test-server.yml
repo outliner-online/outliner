@@ -50,7 +50,7 @@ jobs:
           DISABLE_POSTHOG: true
           VITE_DISABLE_FLUID_TELEMETRY: true
 
-      - name: Run server tests shard
+      - name: Run server tests
         shell: bash
         run: |
           set -o pipefail
@@ -81,7 +81,13 @@ jobs:
     if: always()
     needs: server-test-shard
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     permissions:
+      packages: read
       contents: read
     steps:
       - name: Checkout code

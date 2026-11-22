@@ -22,6 +22,7 @@ test("a dedicated workflow runs the server suite", () => {
     expect(workflow).toMatch(/workflow_dispatch:/);
     expect(workflow).toMatch(/uses: \.\/\.github\/actions\/setup-test-env/);
     expect(workflow).toMatch(/matrix:\s+shard: \[1, 2\]/);
+    expect(workflow).toMatch(/- name: Run server tests\n/);
     expect(workflow).toMatch(/SERVER_TEST_SHARD="\$\{\{ matrix\.shard \}\}\/2"/);
     expect(workflow).toMatch(/verify-server-test-shards\.mjs downloaded-server-tests\/server-test-results 2/);
     expect(workflow).toMatch(/name: server-test\n/);

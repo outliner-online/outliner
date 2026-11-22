@@ -9,6 +9,9 @@ if [[ ! "$SHARD" =~ ^([1-9][0-9]*)/([1-9][0-9]*)$ ]] || (( BASH_REMATCH[1] > BAS
 fi
 INDEX="${BASH_REMATCH[1]}" TOTAL="${BASH_REMATCH[2]}"
 RESULT_DIR="${SERVER_TEST_RESULT_DIR:-$ROOT_DIR/server-test-results/shard-$INDEX}"
+if [[ "$RESULT_DIR" != /* ]]; then
+    RESULT_DIR="$ROOT_DIR/$RESULT_DIR"
+fi
 mkdir -p "$RESULT_DIR"
 
 cd "$ROOT_DIR/server"
