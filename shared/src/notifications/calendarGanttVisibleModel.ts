@@ -2,14 +2,16 @@ import type { Project } from "../app-schema.js";
 import { type CalendarQueryRows, deriveAcceptedCalendarEntries } from "../services/calendarAcceptedEntries.js";
 import { formatCalendarRangeLabel } from "../services/calendarDayHeaders.js";
 import { type CalendarEntryRoles, resolveCalendarEntryWritability } from "../services/calendarEntries.js";
-import { type GanttLayoutResult, layoutGantt } from "../services/calendarGanttLayout.js";
+import { type GanttLayoutResult, type GanttRow, layoutGantt } from "../services/calendarGanttLayout.js";
 import {
+    GANTT_GROUPED_HINT,
     GANTT_MODE_LABEL,
     GANTT_SCALE_OPTIONS,
     type GanttRowPresentation,
     presentGanttRow,
 } from "../services/calendarGanttPresentation.js";
 import { computeGanttTicks, type GanttTick } from "../services/calendarGridRange.js";
+import { hasCalendarGroupingEvidence } from "../services/calendarGrouping.js";
 import { analyzeDirectSelectProjection } from "../services/directSelectProjection.js";
 import {
     type CalendarObservationContextV1,
@@ -26,6 +28,7 @@ export interface CalendarGanttSettings extends CalendarEntryRoles {
 export interface CalendarGanttVisibleModel {
     readonly layout: GanttLayoutResult;
     readonly rowPresentations: readonly GanttRowPresentation[];
+    readonly laneRowPresentations: readonly (readonly GanttRowPresentation[])[];
     readonly ticks: GanttTick[];
     readonly projection: CalendarVisibleProjection;
 }
@@ -33,7 +36,7 @@ export type CalendarGanttVisibleModelResult =
     | { readonly ready: true; readonly model: CalendarGanttVisibleModel; }
     | { readonly ready: false; readonly reason: string; };
 
-/** Ungrouped production hierarchy and rendered geometry from one accepted revision. */
+/** Production hierarchy or raw-value flat lanes and rendered geometry from one accepted revision. */
 export function deriveCalendarGanttVisibleModel(input: {
     readonly current: boolean;
     readonly result: CalendarQueryRows;
@@ -47,8 +50,9 @@ export function deriveCalendarGanttVisibleModel(input: {
     if (validated.valid === false) return { ready: false, reason: validated.error };
     const context = validated.context;
     if (context.viewType !== "gantt") return { ready: false, reason: "Gantt evidence requires Gantt context." };
-    if (input.settings.groupAxes.length > 0) {
-        return { ready: false, reason: "Grouped Gantt projection is unavailable." };
+    const axis = input.settings.groupAxes[0];
+    if (axis !== undefined && !hasCalendarGroupingEvidence(input.result, axis)) {
+        return { ready: false, reason: "Calendar grouping evidence is unavailable or ambiguous." };
     }
     const accepted = deriveAcceptedCalendarEntries({
         current: input.current,
@@ -59,14 +63,22 @@ export function deriveCalendarGanttVisibleModel(input: {
         range: { startUtcMs: context.rangeStartUtcMs, endUtcMs: context.rangeEndUtcMs },
     });
     if (!accepted.ready) return accepted;
-    const layout = layoutGantt(accepted.entries, [], new Set(context.collapsedEntryKeys));
+    const layout = layoutGantt(accepted.entries, [...input.settings.groupAxes], new Set(context.collapsedEntryKeys));
+    if (
+        layout.grouped
+        && (layout.lanes ?? []).some(lane => new Set(lane.rows.map(row => row.key)).size !== lane.rows.length)
+    ) return { ready: false, reason: "Grouped Gantt row identities are ambiguous." };
     const rows = layout.rows ?? [];
     const rowPresentations = rows.map(row => presentGanttRow(row, context.rangeStartUtcMs, context.rangeEndUtcMs));
+    const laneRowPresentations = (layout.lanes ?? []).map(lane =>
+        lane.rows.map(row => presentGanttRow(row, context.rangeStartUtcMs, context.rangeEndUtcMs))
+    );
     const ticks = computeGanttTicks(context.rangeStartUtcMs, context.rangeEndUtcMs, context.ganttScale!,
         context.timeZone, input.numericTickLabels ? undefined : context.locale);
     const writable = analyzeDirectSelectProjection(input.settings.query);
     const content: Record<string, string | number | boolean | null>[] = [
         { kind: "scale", label: GANTT_SCALE_OPTIONS.find(option => option.value === context.ganttScale)!.label },
+        ...(layout.grouped ? [{ kind: "grouped-hint", label: GANTT_GROUPED_HINT }] : []),
         ...ticks.map((tick, order) => ({
             kind: "tick",
             order,
@@ -74,9 +86,15 @@ export function deriveCalendarGanttVisibleModel(input: {
             left: (tick.startUtcMs - context.rangeStartUtcMs) / (context.rangeEndUtcMs - context.rangeStartUtcMs) * 100,
         })),
     ];
-    rows.forEach((row, order) => {
-        const presentation = rowPresentations[order];
+    const appendRow = (
+        row: GanttRow,
+        order: number,
+        presentation: GanttRowPresentation,
+        lane?: number,
+    ) => {
+        const position: Record<string, number> = lane === undefined ? {} : { lane };
         content.push({
+            ...position,
             kind: "row",
             row: order,
             title: row.entry.title,
@@ -86,6 +104,7 @@ export function deriveCalendarGanttVisibleModel(input: {
         });
         if (row.barStartMs !== undefined) {
             content.push({
+                ...position,
                 kind: "bar",
                 row: order,
                 title: row.entry.title,
@@ -97,6 +116,7 @@ export function deriveCalendarGanttVisibleModel(input: {
             });
         } else if (presentation.startPointPct !== undefined) {
             content.push({
+                ...position,
                 kind: "point",
                 row: order,
                 title: `● ${row.entry.title}`,
@@ -104,17 +124,27 @@ export function deriveCalendarGanttVisibleModel(input: {
             });
         }
         if (presentation.duePct !== undefined) {
-            content.push({ kind: "due", row: order, label: "◆", left: presentation.duePct });
+            content.push({ ...position, kind: "due", row: order, label: "◆", left: presentation.duePct });
         }
-    });
+    };
+    if (layout.grouped) {
+        (layout.lanes ?? []).forEach((lane, laneIndex) => {
+            content.push({ kind: "lane", lane: laneIndex, label: lane.key ?? "(none)" });
+            lane.rows.forEach((row, order) => appendRow(row, order, laneRowPresentations[laneIndex][order], laneIndex));
+        });
+    } else rows.forEach((row, order) => appendRow(row, order, rowPresentations[order]));
     const projected = projectCalendarVisibleState(context, {
         title: input.settings.name,
         rangeLabel: formatCalendarRangeLabel(context.rangeStartUtcMs, context.rangeEndUtcMs, context.timeZone,
             context.locale),
         modeLabel: GANTT_MODE_LABEL,
-        labels: [...GANTT_SCALE_OPTIONS.map(option => option.label), ...ticks.map(tick => tick.label)],
+        labels: [...GANTT_SCALE_OPTIONS.map(option => option.label), ...ticks.map(tick => tick.label),
+            ...(layout.lanes ?? []).map(lane => lane.key ?? "(none)")],
         content,
     });
     if (!projected.ready) return projected;
-    return { ready: true, model: { layout, rowPresentations, ticks, projection: projected.projection } };
+    return {
+        ready: true,
+        model: { layout, rowPresentations, laneRowPresentations, ticks, projection: projected.projection },
+    };
 }

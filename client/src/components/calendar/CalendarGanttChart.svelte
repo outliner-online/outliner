@@ -19,7 +19,7 @@ import { type GanttRow, layoutGantt } from "../../services/calendar/calendarGant
 import type { GanttSubtreeShiftAnalysis } from "../../services/calendar/calendarGanttWrite";
 import type { GanttScale, GanttTick } from "../../services/calendar/calendarGridRange";
 import type { CalendarGanttVisibleModel } from "$shared/notifications/calendarGanttVisibleModel";
-import { GANTT_SCALE_OPTIONS, presentGanttRow } from "$shared/services/calendarGanttPresentation";
+import { GANTT_GROUPED_HINT, GANTT_SCALE_OPTIONS, presentGanttRow } from "$shared/services/calendarGanttPresentation";
 import CalendarDragTooltip from "./CalendarDragTooltip.svelte";
 
 const ROW_HEIGHT_PX = 28;
@@ -112,8 +112,10 @@ function onRowDoubleClick(row: GanttRow, e: MouseEvent) {
 const layout = $derived(acceptedModel?.layout ?? layoutGantt(entries, groupAxes, collapsedKeys));
 const renderedTicks = $derived(acceptedModel?.ticks ?? ticks);
 
-function rowPresentation(row: GanttRow, order: number) {
-    return acceptedModel?.rowPresentations[order] ?? presentGanttRow(row, rangeStart, rangeEnd);
+function rowPresentation(row: GanttRow, order: number, lane?: number) {
+    const accepted = lane === undefined ? acceptedModel?.rowPresentations[order]
+        : acceptedModel?.laneRowPresentations[lane]?.[order];
+    return accepted ?? presentGanttRow(row, rangeStart, rangeEnd);
 }
 
 function toggleCollapse(key: string) {
@@ -311,15 +313,15 @@ function onRowKeydown(row: GanttRow, e: KeyboardEvent) {
     onLeafKeyboardMove(row.entry, row.barStartMs + deltaMs);
 }
 
-function barLeftPct(row: GanttRow, order: number): number {
-    const presentation = rowPresentation(row, order);
+function barLeftPct(row: GanttRow, order: number, lane?: number): number {
+    const presentation = rowPresentation(row, order, lane);
     if (!presentation.barInRange) return 0;
     const shift = subtreePreviewRowKey === row.key && subtreePreviewDeltaMs !== undefined ? subtreePreviewDeltaMs / (rangeEnd - rangeStart) : 0;
     return Math.max(0, (presentation.barStartFraction + shift) * 100);
 }
 
-function barWidthPct(row: GanttRow, order: number): number {
-    return rowPresentation(row, order).barWidthPct;
+function barWidthPct(row: GanttRow, order: number, lane?: number): number {
+    return rowPresentation(row, order, lane).barWidthPct;
 }
 
 </script>
@@ -342,7 +344,7 @@ function barWidthPct(row: GanttRow, order: number): number {
         </label>
         {#if layout.grouped}
             <span class="grouped-hint" data-testid="calendar-gantt-grouped-hint">
-                Grouped by axis — hierarchy and roll-up are flattened while a group axis is active.
+                {GANTT_GROUPED_HINT}
             </span>
         {/if}
     </div>
@@ -358,19 +360,19 @@ function barWidthPct(row: GanttRow, order: number): number {
 
     <div class="gantt-body">
         {#if layout.grouped}
-            {#each layout.lanes ?? [] as lane (lane.key ?? "\0null")}
+            {#each layout.lanes ?? [] as lane, laneIndex (lane.key ?? "\0null")}
                 <div class="lane-section">
                     <div class="lane-header" data-testid={`calendar-gantt-lane-${lane.key ?? "none"}`}>
                         {lane.key ?? "(none)"}
                     </div>
                     {#each lane.rows as row, order (row.key)}
-                        {@render ganttRow(row, order)}
+                        {@render ganttRow(row, order, laneIndex)}
                     {/each}
                 </div>
             {/each}
         {:else}
             {#each layout.rows ?? [] as row, order (row.key)}
-                {@render ganttRow(row, order)}
+                {@render ganttRow(row, order, undefined)}
             {/each}
         {/if}
     </div>
@@ -380,9 +382,9 @@ function barWidthPct(row: GanttRow, order: number): number {
     <CalendarDragTooltip label={dragLabel} clientX={pointerX} clientY={pointerY} />
 {/if}
 
-{#snippet ganttRow(row: GanttRow, order: number)}
+{#snippet ganttRow(row: GanttRow, order: number, lane: number | undefined)}
     <div class="gantt-row" style={`height: ${ROW_HEIGHT_PX}px`} data-testid={`calendar-gantt-row-${row.key}`}>
-        <div class="label-cell" style={`width: ${LABEL_COLUMN_PX}px; padding-left: ${rowPresentation(row, order).labelPaddingPx}px`}>
+        <div class="label-cell" style={`width: ${LABEL_COLUMN_PX}px; padding-left: ${rowPresentation(row, order, lane).labelPaddingPx}px`}>
             {#if row.hasChildren}
                 <button
                     type="button"
@@ -404,7 +406,7 @@ function barWidthPct(row: GanttRow, order: number): number {
                     class:not-writable={!row.isRollup && !isLeafStartWritable(row.entry)}
                     data-testid={`calendar-gantt-bar-${row.key}`}
                     data-navigable={isSourceNavigable(row.entry) ? "true" : undefined}
-                    style={`left: ${barLeftPct(row, order)}%; width: ${barWidthPct(row, order)}%`}
+                    style={`left: ${barLeftPct(row, order, lane)}%; width: ${barWidthPct(row, order, lane)}%`}
                     onpointerdown={(e) => row.isRollup ? beginSubtreeDrag(row, e) : beginLeafDrag(row, e)}
                     onkeydown={(e) => onRowKeydown(row, e)}
                     ondblclick={(e) => onRowDoubleClick(row, e)}
@@ -421,27 +423,27 @@ function barWidthPct(row: GanttRow, order: number): number {
                         ></div>
                     {/if}
                 </div>
-            {:else if row.startPointMs !== undefined && rowPresentation(row, order).startPointPct !== undefined}
+            {:else if row.startPointMs !== undefined && rowPresentation(row, order, lane).startPointPct !== undefined}
                 <div
                     class="start-point"
                     role="button"
                     tabindex="0"
                     data-testid={`calendar-gantt-point-${row.key}`}
                     data-navigable={isSourceNavigable(row.entry) ? "true" : undefined}
-                    style={`left: ${rowPresentation(row, order).startPointPct}%`}
+                    style={`left: ${rowPresentation(row, order, lane).startPointPct}%`}
                     ondblclick={(e) => onRowDoubleClick(row, e)}
                     onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") onRowDoubleClick(row, e as unknown as MouseEvent); }}
                     oncontextmenu={(e) => onEntryContextMenu?.(row.entry, e)}
                 >● {row.entry.title}</div>
             {/if}
-            {#if row.dueMarkerMs !== undefined && rowPresentation(row, order).duePct !== undefined}
+            {#if row.dueMarkerMs !== undefined && rowPresentation(row, order, lane).duePct !== undefined}
                 <div
                     class="due-marker"
                     role="button"
                     tabindex="0"
                     data-testid={`calendar-gantt-milestone-${row.key}`}
                     data-navigable={isSourceNavigable(row.entry) ? "true" : undefined}
-                    style={`left: ${rowPresentation(row, order).duePct}%`}
+                    style={`left: ${rowPresentation(row, order, lane).duePct}%`}
                     ondblclick={(e) => onRowDoubleClick(row, e)}
                     onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") onRowDoubleClick(row, e as unknown as MouseEvent); }}
                     oncontextmenu={(e) => onEntryContextMenu?.(row.entry, e)}

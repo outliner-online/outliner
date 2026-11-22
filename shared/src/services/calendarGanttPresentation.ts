@@ -1,5 +1,6 @@
 import { ganttInstantFraction, type GanttRow, placeGanttBar } from "./calendarGanttLayout.js";
 
+export const GANTT_GROUPED_HINT = "Grouped by axis — hierarchy and roll-up are flattened while a group axis is active.";
 export const GANTT_MODE_LABEL = "Gantt";
 export const GANTT_SCALE_OPTIONS = [
     { value: "day", label: "Day" },

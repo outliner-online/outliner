@@ -100,14 +100,14 @@ describe("shared accepted ungrouped Gantt producer", () => {
                 }).ready,
             ).toBe(false);
         });
-    it("holds stale SQL, grouped mode, invalid context and unresolved recurrence explicitly", () => {
+    it("holds stale SQL, missing group evidence, invalid context and unresolved recurrence explicitly", () => {
         const input = evidence();
         expect(deriveCalendarGanttVisibleModel({ ...input, current: false })).toEqual({
             ready: false,
             reason: "Accepted Calendar SQL evidence is stale or unavailable.",
         });
         expect(deriveCalendarGanttVisibleModel({ ...input, settings: { ...input.settings, groupAxes: ["team"] } }))
-            .toEqual({ ready: false, reason: "Grouped Gantt projection is unavailable." });
+            .toEqual({ ready: false, reason: "Calendar grouping evidence is unavailable or ambiguous." });
         expect(deriveCalendarGanttVisibleModel({ ...input, context: { ...input.context, timeZone: "invalid" } }).ready)
             .toBe(false);
         input.result.rows[0].rrule = "FREQ=DAILY";

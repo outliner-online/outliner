@@ -84,7 +84,7 @@ describe("Gantt accepted evidence boundaries", () => {
         45000,
     );
 
-    it("holds failed SQL and grouped Gantt comparable evidence while preserving existing fallback rendering",
+    it("holds failed SQL while preserving existing fallback rendering, then renders complete grouped Gantt evidence",
         async () => {
             const f = mountGantt();
             await waitFor(() => expect(f.results.at(-1)?.ready).toBe(true));
@@ -100,11 +100,11 @@ describe("Gantt accepted evidence boundaries", () => {
             f.map.set("query", f.query);
             await waitFor(() => expect(f.results.at(-1)?.ready).toBe(true));
             f.map.set("groupAxes", ["team"]);
-            await waitFor(() =>
-                expect(f.results.at(-1)).toEqual({ ready: false, reason: "Grouped Gantt projection is unavailable." })
-            );
+            await waitFor(() => expect(f.results.at(-1)?.ready).toBe(true));
             expect(f.view.getByTestId("calendar-gantt-grouped-hint")).toBeTruthy();
             expect(f.view.container.querySelector(".gantt-bar.rollup")).toBeNull();
+            const grouped = f.results.at(-1)!;
+            expect(grouped.ready && ganttCssObservation(grouped.projection)).toEqual(ganttDom(f.view.container));
             f.map.set("groupAxes", []);
             await waitFor(() => expect(f.results.at(-1)?.ready).toBe(true));
             const recovered = f.results.at(-1)!;
