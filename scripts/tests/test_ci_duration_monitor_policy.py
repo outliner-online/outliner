@@ -44,6 +44,8 @@ class PolicyTests(unittest.TestCase):
         # These exact API intervals are applied to the reviewed current separated
         # execution contract. Historical server wrapper timing is not retroactively
         # certified as pure test time: live provenance still requires that contract.
+        # The historical new-4 execution is now an aggregate check; retain that
+        # sample as diagnostic rather than treating the aggregate as a test shard.
         for row in records:
             run = copy.deepcopy(row['run'])
             run.update(repository={'full_name':REPOSITORY}, head_repository={'full_name':REPOSITORY})
@@ -56,11 +58,15 @@ class PolicyTests(unittest.TestCase):
         with patch.object(monitor, 'logger'):
             report = monitor.run_monitor(self.github, (workflow,), REPOSITORY, 'ignored', now=now, lookback_hours=48, publish=False)
         admitted = {a['family']: a for a in report['admission'] if a['qualifying_job_ids']}
-        self.assertEqual(set(admitted), {'unit-tests','server-tests','e2e-chromium'})
-        self.assertEqual(report['admission_summary']['qualifying_candidates'],3)
-        self.assertEqual(report['admission_summary']['qualifying_families_new'],3)
+        self.assertEqual(set(admitted), {'unit-tests','server-tests'})
+        self.assertEqual(report['admission_summary']['qualifying_candidates'],2)
+        self.assertEqual(report['admission_summary']['qualifying_families_new'],2)
         measured = {s['job_id']:s['qualifying_test_step_seconds'] for o in report['observations'] for s in o['samples'] if s['diagnostic_reason'] is None}
-        self.assertEqual(measured, {136731411619:721,136731411435:802,136798530012:1003})
+        self.assertEqual(measured, {136731411619:721,136731411435:802})
+        retired = next(s for o in report['observations'] for s in o['samples'] if s['job_id'] == 136798530012)
+        self.assertEqual(retired['test_step_seconds'], 1003)
+        self.assertIsNone(retired['qualifying_test_step_seconds'])
+        self.assertEqual(retired['diagnostic_reason'], 'configured test step is absent from the current job entrypoint')
         observations = [o for o in monitor.collect(self.github,(workflow,),NOW-timedelta(days=2),monitor.CurrentSource(self.github,monitor._call,REPOSITORY))[0] if o.samples]
         for row in records:
             observation = next(o for o in observations if o.family.key==row['family'])
@@ -136,7 +142,7 @@ class PolicyTests(unittest.TestCase):
 
     def test_current_browser_variants_use_steps_not_reporter_format(self):
         workflows=self.repository_sources();workflow=next(w for w in workflows if w.path.endswith('/ci.yml'))
-        for variant in ['new-4','new-3a','new-3b','firefox-selection-new','onprem']:
+        for variant in ['new-4-1','new-4-2','new-4','new-3a','new-3b','firefox-selection-new','onprem']:
             self.github.runs=[{**GitHub().runs[0],'path':workflow.path}]
             candidate=job(seconds=900,name='e2e-test / e2e-test ('+variant+')')
             candidate['steps'][0]['name']='Run E2E tests ('+variant+')'
@@ -144,7 +150,10 @@ class PolicyTests(unittest.TestCase):
             with patch.object(monitor,'logger'):
                 result=monitor.run_monitor(self.github,(workflow,),REPOSITORY,'ignored',now=NOW,lookback_hours=48,publish=False)
             admitted=[a for a in result['admission'] if a['qualifying_job_ids']]
-            self.assertEqual(len(admitted),0 if variant=='onprem' else 1)
+            self.assertEqual(len(admitted),0 if variant in {'onprem','new-4'} else 1)
+            if variant == 'new-4':
+                sample = next(s for o in result['observations'] for s in o['samples'])
+                self.assertEqual(sample['diagnostic_reason'], 'configured test step is absent from the current job entrypoint')
 
     def test_unknown_branch_fork_base_variant_and_source_are_diagnostic(self):
         for mode in ['branch','unverified-pr','foreign-base','retired','source','inactive','wrong-step','step-failed','step-short','setup-dominates']:
