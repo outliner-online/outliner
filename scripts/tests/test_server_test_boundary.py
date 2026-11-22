@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -10,6 +11,17 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class ServerExecutionBoundaryTest(unittest.TestCase):
+    def test_server_wrapper_preserves_exact_baseline_exclusions(self):
+        exclude_pattern = re.compile(r'--exclude\s+"([^"]+)"')
+        wrapper = (ROOT / 'scripts/run-server-test-command.sh').read_text()
+        baseline = (ROOT / 'scripts/tests/fixtures/ci-duration/server-command-baseline.sh').read_text()
+
+        wrapper_excludes = sorted(exclude_pattern.findall(wrapper))
+        baseline_excludes = sorted(exclude_pattern.findall(baseline))
+
+        self.assertEqual(len(baseline_excludes), 13)
+        self.assertEqual(wrapper_excludes, baseline_excludes)
+
     def test_actual_mocha_selection_exit_and_local_setup_are_preserved(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);(root/'scripts').mkdir();(root/'server/tests').mkdir(parents=True)
