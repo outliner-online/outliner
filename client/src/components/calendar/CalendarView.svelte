@@ -360,7 +360,9 @@ function publishAcceptedModel(currentSettings: CalendarSettings): void {
         onVisibleProjection?.(derived.ready ? { ready: true, projection: derived.model.projection } : derived);
         return;
     }
-    if (input.context.viewType === "days" || input.context.viewType === "week") {
+    if (input.context.viewType === "days" || input.context.viewType === "week"
+        || (input.context.viewType === "day" && currentSettings.groupAxes.length > 0)) {
+        if (input.context.viewType === "day") acceptedDayModel = undefined;
         const derived = deriveCalendarDaysVisibleModel(input);
         acceptedDaysModel = derived.ready ? derived.model : undefined;
         onVisibleProjection?.(derived.ready ? { ready: true, projection: derived.model.projection } : derived);
@@ -373,6 +375,7 @@ function publishAcceptedModel(currentSettings: CalendarSettings): void {
         onVisibleProjection?.(derived.ready ? { ready: true, projection: derived.model.projection } : derived);
         return;
     }
+    acceptedDaysModel = undefined;
     const derived = deriveCalendarDayVisibleModel(input);
     if (derived.ready) {
         acceptedDayModel = derived.model;

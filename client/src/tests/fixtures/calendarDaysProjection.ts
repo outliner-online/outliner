@@ -6,7 +6,7 @@ import { Items, Project } from "../../schema/app-schema";
 import { computeViewRange } from "../../services/calendar/calendarGridRange";
 import { createCalendar } from "../../services/calendar/calendarService";
 
-export function mountDays(viewType: "days" | "week", withContext = true, grouped = false) {
+export function mountDays(viewType: "day" | "days" | "week", withContext = true, grouped = false) {
     const doc = new Y.Doc();
     const project = Project.fromDoc(doc);
     const page = new Items(doc, project.tree, "root").addNode("fixture");
@@ -21,14 +21,14 @@ export function mountDays(viewType: "days" | "week", withContext = true, grouped
     };
     const early = timed("Early", "2026-03-15T15:15:00Z", "PT1H");
     const overlap = timed("Overlap", "2026-03-15T15:30:00Z", "PT1H");
-    const clipped = timed("Clipped", "2026-03-18T14:30:00Z", "PT2H");
+    const clipped = timed("Clipped", viewType === "day" ? "2026-03-16T14:30:00Z" : "2026-03-18T14:30:00Z", "PT2H");
     timed("Week only", "2026-03-22T01:00:00Z", "PT1H");
     const outside = timed("Outside", "2026-03-23T00:00:00Z", "PT1H");
     const allDay = timed("Carry", "2026-03-15", "P3D");
     allDay.allDay = true;
     const due = children.addNode("fixture");
     due.text = "Due";
-    due.due = "2026-03-17T04:00:00Z";
+    due.due = viewType === "day" ? "2026-03-16T04:00:00Z" : "2026-03-17T04:00:00Z";
     const recurring = timed("Recurring", "2026-03-15T23:00:00Z", "PT30M");
     recurring.rrule = "FREQ=DAILY;COUNT=3";
     recurring.recurrenceDtstart = "2026-03-16T08:00:00";

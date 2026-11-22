@@ -192,7 +192,7 @@ describe("CalendarView Day projection boundary", { timeout: 30000 }, () => {
         spy.mockRestore();
     });
 
-    it("keeps grouped Day rendering but reports its projection as non-ready", async () => {
+    it("publishes accepted grouped Day bands through the native lane renderer", async () => {
         const projectId = "proj-calendar-grouped-day-projection";
         const projectDoc = new Y.Doc({ guid: projectId });
         const project = Project.fromDoc(projectDoc);
@@ -238,10 +238,11 @@ describe("CalendarView Day projection boundary", { timeout: 30000 }, () => {
             },
         });
         await waitFor(() => expect(component.getByTestId("calendar-lane-time-grid")).toBeTruthy());
-        await waitFor(() => expect(projections.at(-1)).toEqual({
-            ready: false,
-            reason: "Grouped Day projection is not ready.",
-        }));
+        await waitFor(() => expect(projections.at(-1)?.ready).toBe(true));
+        const grouped = projections.at(-1)!;
+        expect(grouped.ready && grouped.projection.modeLabel).toBe("Day");
+        expect(grouped.ready && grouped.projection.content[0]).toEqual({ kind: "lane", lane: 0, label: "Team A" });
+        expect(component.getByTestId("calendar-lane-Team A")).toBeTruthy();
     });
 
     it("cannot publish a previous Day response after navigation invalidates its generation", async () => {

@@ -22,7 +22,7 @@ import {
     validateCalendarObservationContext,
 } from "./calendarProjection.js";
 
-export const CALENDAR_DAYS_MODE_LABELS = { days: "Multi-day", week: "Week" } as const;
+export const CALENDAR_DAYS_MODE_LABELS = { day: "Day", days: "Multi-day", week: "Week" } as const;
 
 export interface CalendarDaysSettings extends CalendarEntryRoles {
     readonly name: string;
@@ -46,7 +46,7 @@ export type CalendarDaysVisibleModelResult =
     | { readonly ready: true; readonly model: CalendarDaysVisibleModel; }
     | { readonly ready: false; readonly reason: string; };
 
-/** Accepted SQL, committed outline/roles and validated context -> the actual Days/Week grid and lane bands. */
+/** Accepted SQL, committed outline/roles and validated context -> Days/Week grids and flat Day/Days/Week lane bands. */
 export function deriveCalendarDaysVisibleModel(input: {
     readonly current: boolean;
     readonly result: CalendarQueryRows;
@@ -57,8 +57,11 @@ export function deriveCalendarDaysVisibleModel(input: {
     const validated = validateCalendarObservationContext(input.context);
     if (validated.valid === false) return { ready: false, reason: validated.error };
     const context = validated.context;
-    if (context.viewType !== "days" && context.viewType !== "week") {
-        return { ready: false, reason: "Days/Week evidence requires Days or Week context." };
+    if (
+        context.viewType !== "days" && context.viewType !== "week"
+        && (context.viewType !== "day" || input.settings.groupAxes.length === 0)
+    ) {
+        return { ready: false, reason: "Time-grid evidence requires grouped Day, Days or Week context." };
     }
     // The production flat lane renderer uses the first configured axis only.
     const groupAxis = input.settings.groupAxes[0];
