@@ -1,8 +1,11 @@
 import { expect, test } from "@playwright/test";
 import { Items } from "../../../shared/src/app-schema";
 import { computeViewRange } from "../../../shared/src/services/calendarGridRange";
+import { registerCoverageHooks } from "../utils/registerCoverageHooks";
 import { calendarProject, savedContext, savedPath } from "./calendarRouteFixture";
 import { login, stackFor } from "./helpers";
+
+registerCoverageHooks();
 
 test.use({ timezoneId: "Pacific/Honolulu", locale: "ja-JP" });
 

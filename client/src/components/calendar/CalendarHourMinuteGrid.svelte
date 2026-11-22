@@ -288,7 +288,7 @@ const hasBand = $derived(layout.allDay.length > 0 || layout.milestones.length > 
 
     {#if hasBand}
         <div class="band-row" data-testid="calendar-all-day-band">
-            {#each layout.allDay as entry (entry)}
+            {#each layout.allDay as entry, entryIndex (entryIndex)}
                 <div
                     role="group"
                     aria-label={entry.title}
@@ -317,7 +317,7 @@ const hasBand = $derived(layout.allDay.length > 0 || layout.milestones.length > 
                     {/if}
                 </div>
             {/each}
-            {#each layout.milestones as entry (entry)}
+            {#each layout.milestones as entry, entryIndex (entryIndex)}
                 <div
                     role="group"
                     aria-label={entry.title}
@@ -371,7 +371,7 @@ const hasBand = $derived(layout.allDay.length > 0 || layout.milestones.length > 
                             }%`}
                         ></div>
                     {/if}
-                    {#each row.fragments as f (f)}
+                    {#each row.fragments as f, fragmentIndex (fragmentIndex)}
                         <div
                             role="group"
                             aria-label={f.isTitleAnchor ? f.entry.title : `${f.entry.title} (continued)`}

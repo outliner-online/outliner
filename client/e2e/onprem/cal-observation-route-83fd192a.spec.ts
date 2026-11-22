@@ -1,6 +1,9 @@
 import { expect, test, type WebSocket } from "@playwright/test";
+import { registerCoverageHooks } from "../utils/registerCoverageHooks";
 import { calendarProject, savedContext, savedPath } from "./calendarRouteFixture";
 import { login, stackFor } from "./helpers";
+
+registerCoverageHooks();
 
 test.use({ timezoneId: "Pacific/Honolulu", locale: "ja-JP" });
 

@@ -1,7 +1,10 @@
 import { expect, test } from "@playwright/test";
+import { registerCoverageHooks } from "../utils/registerCoverageHooks";
 import { savedPath } from "./calendarRouteFixture";
 import { savedModeContext, savedModeProject } from "./calendarSavedModesFixture";
 import { login, stackFor } from "./helpers";
+
+registerCoverageHooks();
 
 test.use({ timezoneId: "Pacific/Honolulu", locale: "ja-JP" });
 

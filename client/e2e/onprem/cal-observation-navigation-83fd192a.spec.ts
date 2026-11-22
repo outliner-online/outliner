@@ -3,8 +3,11 @@ import { MessageType } from "@hocuspocus/provider";
 import { expect, test } from "@playwright/test";
 import { createDecoder, readVarString, readVarUint } from "lib0/decoding";
 import { messageYjsSyncStep2 } from "y-protocols/sync";
+import { registerCoverageHooks } from "../utils/registerCoverageHooks";
 import { calendarProject, savedPath } from "./calendarRouteFixture";
 import { login, stackFor } from "./helpers";
+
+registerCoverageHooks();
 
 test("a real old room acquisition completing last cannot overwrite the newer Calendar route",
     async ({ page }, info) => {
