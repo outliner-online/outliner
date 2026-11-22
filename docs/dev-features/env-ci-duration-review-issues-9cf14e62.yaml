@@ -5,15 +5,15 @@ description: The daily CI monitor uses GitHub-native step timestamps and conclus
 category: environment
 status: implemented
 components:
-- .github/ci-duration-issue.md
-- .github/ci-duration-monitor.json
 - .github/workflows/ci-duration-monitor.yml
-- .github/workflows/ci-test-server.yml
-- scripts/ci_duration_github.py
+- .github/ci-duration-monitor.json
+- .github/ci-duration-issue.md
 - scripts/ci_duration_monitor.py
+- scripts/ci_duration_github.py
 - scripts/ci_duration_policy.py
 - scripts/run-server-test-command.sh
 - scripts/run-server-tests.sh
+- .github/workflows/ci-test-server.yml
 tests:
 - scripts/tests/test_ci_duration_monitor.py
 - scripts/tests/test_ci_duration_monitor_config.py
