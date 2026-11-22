@@ -87,8 +87,23 @@ test("a reset drains buffered upstream data to native close while the authentica
             // same backend; optimistic local text or unrelated bytes cannot pass.
             const observer = await observerContext.newPage();
             await login(observer, stack);
+            const beforeObserver = stack.transportSnapshot().length;
             await observer.goto(peer.url());
+            await expect.poll(() =>
+                stack.transportSnapshot().slice(beforeObserver).find(event =>
+                    event.kind === "ws-open" && event.url === peerTunnel.url
+                )?.id
+            ).not.toBeUndefined();
+            const observerTunnel = stack.transportSnapshot().slice(beforeObserver).find(event =>
+                event.kind === "ws-open" && event.url === peerTunnel.url
+            )!;
+            expect(observerTunnel.id).not.toBe(peerTunnel.id);
+            const observerData = await stack.waitForTransportEvent("ws-upstream-data", observerTunnel.url, {
+                id: observerTunnel.id,
+                stage: "fresh authenticated observer backend data",
+            });
             await expect(observer.getByText(marker, { exact: true })).toBeVisible({ timeout: 15_000 });
+            expect(observerData.id).toBe(observerTunnel.id);
             expect(stack.isTunnelOpen(peerTunnel.id)).toBe(true);
             expect(stack.transportSnapshot().some(event => event.id === peerTunnel.id && event.kind.includes("close")))
                 .toBe(false);
