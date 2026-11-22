@@ -152,6 +152,7 @@ export type CalendarProjectionResult =
 /**
  * Freezes complete production-derived visible semantics for comparison. Callers must refuse to invoke this
  * until accepted SQL results, committed settings, recurrence inputs, and layout output belong to one revision.
+ * Serialization primitive only: authoritative callers use deriveCalendarVisibleModel with structural evidence.
  */
 export function projectCalendarVisibleState(
     contextValue: unknown,

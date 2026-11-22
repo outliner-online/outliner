@@ -11,16 +11,17 @@
 import { onDestroy, onMount, untrack } from "svelte";
 import type { Project } from "$shared/app-schema";
 import type { CalendarObservationContextV1, CalendarProjectionResult } from "$shared/notifications/calendarProjection";
-import { deriveCalendarHoursVisibleModel, type CalendarHoursVisibleModel } from "$shared/notifications/calendarHoursVisibleModel";
+import type { CalendarHoursVisibleModel } from "$shared/notifications/calendarHoursVisibleModel";
 import * as Y from "yjs";
 import { analyzeCalendarEditability } from "../../services/calendar/calendarEditability";
 import { analyzeCalendarColumnWritability } from "../../services/calendar/calendarColumnWritability";
 import { buildCalendarEntries, type CalendarEntry } from "../../services/calendar/calendarEntries";
-import { deriveCalendarDayVisibleModel, type CalendarDayVisibleModel } from "../../services/calendar/calendarDayVisibleModel";
-import { CALENDAR_DAYS_MODE_LABELS, deriveCalendarDaysVisibleModel, type CalendarDaysVisibleModel } from "$shared/notifications/calendarDaysVisibleModel";
-import { deriveCalendarGanttVisibleModel, type CalendarGanttVisibleModel } from "$shared/notifications/calendarGanttVisibleModel";
+import type { CalendarDayVisibleModel } from "$shared/notifications/calendarDayVisibleModel";
+import { deriveCalendarVisibleModel } from "$shared/notifications/calendarVisibleModel";
+import { CALENDAR_DAYS_MODE_LABELS, type CalendarDaysVisibleModel } from "$shared/notifications/calendarDaysVisibleModel";
+import type { CalendarGanttVisibleModel } from "$shared/notifications/calendarGanttVisibleModel";
 import { GANTT_MODE_LABEL } from "$shared/services/calendarGanttPresentation";
-import { deriveCalendarMonthVisibleModel, type CalendarMonthVisibleModel } from "$shared/notifications/calendarMonthVisibleModel";
+import type { CalendarMonthVisibleModel } from "$shared/notifications/calendarMonthVisibleModel";
 import {
     resolveCalendarEntryWritability,
     writeCalendarEntryDuration,
@@ -136,7 +137,6 @@ let acceptedMonthModel = $state<CalendarMonthVisibleModel | undefined>(undefined
 let acceptedEvidence: {
     result: TableQueryResult;
     context: CalendarObservationContextV1;
-    rangeLabel: string;
 } | undefined;
 let anchorUtcMs = $state(untrack(() => observationContext?.anchorUtcMs) ?? Date.now());
 let optimisticOverrides = $state<OptimisticOverrides>(createOptimisticOverrides());
@@ -338,52 +338,32 @@ const session = createTableEngineSession({ projectDoc: project.ydoc, projectId }
 
 function publishAcceptedModel(currentSettings: CalendarSettings): void {
     if (!acceptedEvidence) return;
-    const input = {
-        current: true,
-        result: acceptedEvidence.result,
+    const context = acceptedEvidence.context;
+    const derived = deriveCalendarVisibleModel({
+        authority: { current: true, result: acceptedEvidence.result, project },
         settings: currentSettings,
-        project,
-        context: acceptedEvidence.context,
-        title: currentSettings.name,
-        rangeLabel: acceptedEvidence.rangeLabel,
-    };
-    if (input.context.viewType === "gantt") {
-        const derived = deriveCalendarGanttVisibleModel({ ...input, numericTickLabels: locale === undefined,
-            context: { ...input.context, collapsedEntryKeys: ganttCollapsedEntryKeys } });
-        acceptedGanttModel = derived.ready ? derived.model : undefined;
-        onVisibleProjection?.(derived.ready ? { ready: true, projection: derived.model.projection } : derived);
-        return;
-    }
-    if (input.context.viewType === "hours") {
-        const derived = deriveCalendarHoursVisibleModel(input);
-        acceptedHoursModel = derived.ready ? derived.model : undefined;
-        onVisibleProjection?.(derived.ready ? { ready: true, projection: derived.model.projection } : derived);
-        return;
-    }
-    if (input.context.viewType === "days" || input.context.viewType === "week"
-        || (input.context.viewType === "day" && currentSettings.groupAxes.length > 0)) {
-        if (input.context.viewType === "day") acceptedDayModel = undefined;
-        const derived = deriveCalendarDaysVisibleModel(input);
-        acceptedDaysModel = derived.ready ? derived.model : undefined;
-        onVisibleProjection?.(derived.ready ? { ready: true, projection: derived.model.projection } : derived);
-        return;
-    }
-    if (input.context.viewType === "month") {
-        const derived = deriveCalendarMonthVisibleModel({ ...input,
-            context: { ...input.context, monthLaneFilter: monthLaneFilter ?? null } });
-        acceptedMonthModel = derived.ready ? derived.model : undefined;
-        onVisibleProjection?.(derived.ready ? { ready: true, projection: derived.model.projection } : derived);
-        return;
-    }
+        context: { ...context,
+            ...(context.viewType === "gantt" ? { collapsedEntryKeys: ganttCollapsedEntryKeys } : {}),
+            ...(context.viewType === "month" ? { monthLaneFilter: monthLaneFilter ?? null } : {}) },
+        numericGanttTickLabels: locale === undefined,
+    });
+    acceptedDayModel = undefined;
     acceptedDaysModel = undefined;
-    const derived = deriveCalendarDayVisibleModel(input);
-    if (derived.ready) {
-        acceptedDayModel = derived.model;
-        onVisibleProjection?.({ ready: true, projection: derived.model.projection });
-    } else {
-        acceptedDayModel = undefined;
+    acceptedHoursModel = undefined;
+    acceptedMonthModel = undefined;
+    acceptedGanttModel = undefined;
+    if (!derived.ready) {
         onVisibleProjection?.(derived);
+        return;
     }
+    switch (derived.kind) {
+        case "day": acceptedDayModel = derived.model; break;
+        case "days": acceptedDaysModel = derived.model; break;
+        case "hours": acceptedHoursModel = derived.model; break;
+        case "month": acceptedMonthModel = derived.model; break;
+        case "gantt": acceptedGanttModel = derived.model; break;
+    }
+    onVisibleProjection?.({ ready: true, projection: derived.model.projection });
 }
 
 function invalidateObservation(publishNonReady = hasAcceptedProjection(effectiveViewType)): void {
@@ -408,7 +388,6 @@ async function runQuery() {
     const currentTimeZone = timeZone;
     const currentSettings = settings;
     const currentRangeBounds = { startUtcMs: range.start, endUtcMs: range.end };
-    const currentRangeLabel = rangeLabel;
     const currentViewType = effectiveViewType;
     const currentContext: CalendarObservationContextV1 | undefined = hasAcceptedProjection(currentViewType)
         ? {
@@ -440,7 +419,7 @@ async function runQuery() {
         queryError = undefined;
         catalogResultCurrent = true;
         if (currentContext) {
-            acceptedEvidence = { result: outcome.result, context: currentContext, rangeLabel: currentRangeLabel };
+            acceptedEvidence = { result: outcome.result, context: currentContext };
             // Roles and other presentation settings do not require another
             // SQL execution. Use their latest committed value even when they
             // changed while this accepted query was in flight.
