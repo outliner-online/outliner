@@ -7,5 +7,5 @@ status: implemented
 components:
 - .github/dependabot.yml
 tests:
-- scripts/tests/dependabot-docker-selection-smoke.mjs
 - scripts/tests/env-dependabot-actions-and-docker-coverage-b8751e2c.spec.ts
+- scripts/tests/dependabot-docker-selection-smoke.mjs
