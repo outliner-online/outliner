@@ -127,4 +127,36 @@ describe("Calendar observation route navigation", () => {
             expect(store.project?.ydoc.guid).toBe("new-project-doc");
         });
     });
+
+    it("resolves a demo observation Calendar strictly by ID despite a matching name", async () => {
+        const doc = new Y.Doc({ guid: "demo" });
+        const project = Project.fromDoc(doc);
+        const targetId = createCalendar(project, {
+            name: "Target Calendar",
+            query: "SELECT 1 AS id",
+            viewType: "day",
+            groupAxes: [],
+        });
+        createCalendar(project, {
+            name: targetId,
+            query: "SELECT 2 AS id",
+            viewType: "day",
+            groupAxes: [],
+        });
+        routeState.docs.set("demo", doc);
+
+        render(CalendarDetailView, {
+            projectName: "demo",
+            calendarName: targetId,
+            observationContext: observationContext(),
+        });
+        await waitFor(() => expect(routeState.pending.has("demo")).toBe(true));
+        routeState.pending.get("demo")!();
+
+        await waitFor(() => {
+            expect(screen.getByTestId("calendar-view-probe").textContent).toContain(`demo:${targetId}`);
+            expect(screen.getByRole("heading", { level: 1 }).textContent?.trim()).toBe("Target Calendar");
+            expect(screen.queryByRole("heading", { name: targetId })).toBeNull();
+        });
+    });
 });

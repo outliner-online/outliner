@@ -306,6 +306,72 @@ describe("CalendarView Day projection boundary", { timeout: 30000 }, () => {
         expect(component.getByTestId("calendar-lane-Team A")).toBeTruthy();
     });
 
+    it("preserves distinct accepted SQL rows that share one source identity", async () => {
+        const projectId = "proj-calendar-duplicate-source-rows";
+        const projectDoc = new Y.Doc({ guid: projectId });
+        const project = Project.fromDoc(projectDoc);
+        const calendarId = createCalendar(project, {
+            name: "Duplicate source rows",
+            query: "SELECT 1 AS id",
+            viewType: "day",
+            timezone: "UTC",
+            roleTitle: "title",
+            roleStart: "start_at",
+            roleDuration: "duration",
+        });
+        const anchorUtcMs = Date.parse("2026-03-16T12:00:00Z");
+        const range = computeViewRange(anchorUtcMs, "day", 1, "UTC");
+        const spy = vi.spyOn(runner, "runCalendarQuery").mockResolvedValue({
+            result: {
+                columns: ["title", "start_at", "duration", "source_kind", "source_id"],
+                rows: [
+                    {
+                        title: "First joined row",
+                        start_at: "2026-03-16T09:00:00Z",
+                        duration: "PT30M",
+                        source_kind: "tasks",
+                        source_id: "shared-id",
+                    },
+                    {
+                        title: "Second joined row",
+                        start_at: "2026-03-16T11:00:00Z",
+                        duration: "PT45M",
+                        source_kind: "tasks",
+                        source_id: "shared-id",
+                    },
+                ],
+            },
+        });
+        const results: CalendarProjectionResult[] = [];
+        const view = render(CalendarView, {
+            project,
+            projectId,
+            calendarId,
+            observationContext: {
+                version: 1,
+                locale: "en-US",
+                timeZone: "UTC",
+                weekStart: 1,
+                viewType: "day",
+                anchorUtcMs,
+                rangeStartUtcMs: range.start,
+                rangeEndUtcMs: range.end,
+                monthLaneFilter: null,
+                collapsedEntryKeys: [],
+            },
+            onVisibleProjection: result => results.push(result),
+        });
+        await waitFor(() => expect(results.at(-1)?.ready).toBe(true));
+        const result = results.at(-1)!;
+        expect(result.ready && result.projection).toEqual(daysDom(view.container));
+        expect(result.ready && result.projection.content.filter(value => value.kind === "timed"))
+            .toEqual(expect.arrayContaining([
+                expect.objectContaining({ title: "First joined row", start: 9 / 24 }),
+                expect.objectContaining({ title: "Second joined row", start: 11 / 24 }),
+            ]));
+        spy.mockRestore();
+    });
+
     it("cannot publish a previous Day response after navigation invalidates its generation", async () => {
         const projectId = "proj-calendar-day-navigation-generation";
         const projectDoc = new Y.Doc({ guid: projectId });

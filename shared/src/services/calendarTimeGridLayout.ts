@@ -71,7 +71,9 @@ export function layoutCalendarLaneTimeGrid(
 }
 
 interface OverlapItem {
-    id: string;
+    /** Per-layout row identity, deliberately distinct from source identity. */
+    id: number;
+    entry: CalendarEntry;
     start: number;
     end: number;
 }
@@ -82,9 +84,11 @@ interface OverlapItem {
  * cluster with `columnCount: 1` (the day's full width); entries that do
  * overlap split the width only within their own cluster, not the whole day.
  */
-function assignOverlapColumns(items: OverlapItem[]): Map<string, { columnIndex: number; columnCount: number; }> {
-    const sorted = [...items].sort((a, b) => a.start - b.start || a.end - b.end);
-    const result = new Map<string, { columnIndex: number; columnCount: number; }>();
+function assignOverlapColumns(items: OverlapItem[]): Map<OverlapItem, { columnIndex: number; columnCount: number; }> {
+    const sorted = [...items].sort((a, b) =>
+        a.start - b.start || a.end - b.end || a.entry.title.localeCompare(b.entry.title) || a.id - b.id
+    );
+    const result = new Map<OverlapItem, { columnIndex: number; columnCount: number; }>();
 
     let cluster: OverlapItem[] = [];
     let clusterEnd = -Infinity;
@@ -92,7 +96,7 @@ function assignOverlapColumns(items: OverlapItem[]): Map<string, { columnIndex: 
     const flush = () => {
         if (cluster.length === 0) return;
         const columnEnds: number[] = [];
-        const columnOf = new Map<string, number>();
+        const columnOf = new Map<OverlapItem, number>();
         for (const item of cluster) {
             let column = columnEnds.findIndex((end) => end <= item.start);
             if (column === -1) {
@@ -101,10 +105,10 @@ function assignOverlapColumns(items: OverlapItem[]): Map<string, { columnIndex: 
             } else {
                 columnEnds[column] = item.end;
             }
-            columnOf.set(item.id, column);
+            columnOf.set(item, column);
         }
         const columnCount = columnEnds.length;
-        for (const item of cluster) result.set(item.id, { columnIndex: columnOf.get(item.id)!, columnCount });
+        for (const item of cluster) result.set(item, { columnIndex: columnOf.get(item)!, columnCount });
         cluster = [];
     };
 
@@ -131,7 +135,6 @@ function assignOverlapColumns(items: OverlapItem[]): Map<string, { columnIndex: 
 export function layoutTimeGrid(entries: CalendarEntry[], rangeStart: number, rangeEnd: number): TimeGridLayout {
     const dayCount = Math.round((rangeEnd - rangeStart) / DAY_MS);
     const timedByDay = new Map<number, OverlapItem[]>();
-    const entryById = new Map<string, CalendarEntry>();
     const allDay: AllDayPlacement[] = [];
     const milestones: MilestonePlacement[] = [];
 
@@ -168,9 +171,8 @@ export function layoutTimeGrid(entries: CalendarEntry[], rangeStart: number, ran
         const clippedStart = Math.max(start, dayStart);
         const clippedEnd = Math.min(end, dayEnd);
 
-        entryById.set(entry.key, entry);
         const list = timedByDay.get(dayIndex) ?? [];
-        list.push({ id: entry.key, start: clippedStart, end: clippedEnd });
+        list.push({ id: list.length, entry, start: clippedStart, end: clippedEnd });
         timedByDay.set(dayIndex, list);
     }
 
@@ -179,9 +181,9 @@ export function layoutTimeGrid(entries: CalendarEntry[], rangeStart: number, ran
         const dayStart = rangeStart + dayIndex * DAY_MS;
         const columns = assignOverlapColumns(items);
         for (const item of items) {
-            const column = columns.get(item.id)!;
+            const column = columns.get(item)!;
             timed.push({
-                entry: entryById.get(item.id)!,
+                entry: item.entry,
                 dayIndex,
                 startFraction: (item.start - dayStart) / DAY_MS,
                 endFraction: (item.end - dayStart) / DAY_MS,

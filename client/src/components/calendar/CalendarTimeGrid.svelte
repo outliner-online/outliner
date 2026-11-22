@@ -293,7 +293,7 @@ onMount(() => {
 
     {#if layout.allDay.length > 0 || layout.milestones.length > 0}
         <div class="band-row" data-testid="calendar-all-day-band" style={`grid-template-columns: repeat(${layout.dayCount}, 1fr)`}>
-            {#each layout.allDay as p (p.entry.key)}
+            {#each layout.allDay as p (p)}
                 <div
                     role="group"
                     aria-label={p.entry.title}
@@ -330,7 +330,7 @@ onMount(() => {
                     {/if}
                 </div>
             {/each}
-            {#each layout.milestones as m (m.entry.key)}
+            {#each layout.milestones as m (m)}
                 <div
                     role="group"
                     aria-label={m.entry.title}
@@ -390,7 +390,7 @@ onMount(() => {
                     ></div>
                 </div>
             {/each}
-            {#each layout.timed as p (p.entry.key)}
+            {#each layout.timed as p (p)}
                 <div
                     role="group"
                     aria-label={p.entry.title}

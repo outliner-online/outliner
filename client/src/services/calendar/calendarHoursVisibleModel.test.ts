@@ -60,4 +60,22 @@ describe("shared Hours accepted-evidence producer", () => {
         expect(second.ready).toBe(true);
         expect(second.ready && second.model.projection).toEqual(first.ready && first.model.projection);
     });
+
+    it("keeps equal-time title lanes stable when only source UUID ordering reverses", () => {
+        const resultFor = (firstId: string, secondId: string) => deriveCalendarHoursVisibleModel({
+            ...evidence,
+            result: {
+                columns: ["id", "title", "start", "duration", "source_kind", "source_id"],
+                rows: [
+                    { ...row, id: firstId, source_kind: "tasks", source_id: firstId, title: "Alpha" },
+                    { ...row, id: secondId, source_kind: "tasks", source_id: secondId, title: "Beta" },
+                ],
+            },
+        });
+        const before = resultFor("a-source", "z-source");
+        const after = resultFor("z-source", "a-source");
+        expect(before.ready).toBe(true);
+        expect(after.ready).toBe(true);
+        expect(after.ready && after.model.projection).toEqual(before.ready && before.model.projection);
+    });
 });

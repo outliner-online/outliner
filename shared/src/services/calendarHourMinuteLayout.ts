@@ -192,7 +192,10 @@ export function computeHourRows(rangeStart: number, rangeEnd: number, timeZone: 
 }
 
 interface LaneItem {
+    /** Per-layout occurrence identity; never a persisted/source identity. */
     key: string;
+    /** Display-semantic tie breaker so UUID churn cannot move painted lanes. */
+    orderKey?: string;
     start: number;
     end: number;
 }
@@ -207,7 +210,11 @@ interface LaneItem {
  * Deterministic: ties in start are broken by end, then by key.
  */
 export function assignOverlapLanes(items: LaneItem[]): Map<string, number> {
-    const sorted = [...items].sort((a, b) => a.start - b.start || a.end - b.end || a.key.localeCompare(b.key));
+    const sorted = [...items].sort((a, b) =>
+        a.start - b.start || a.end - b.end
+        || (a.orderKey ?? a.key).localeCompare(b.orderKey ?? b.key)
+        || a.key.localeCompare(b.key)
+    );
     const laneEnds: number[] = [];
     const lanes = new Map<string, number>();
 
@@ -284,10 +291,16 @@ export function layoutHourMinuteGrid(
         clipped.push({ entry, start: Math.max(start, rangeStart), end: Math.min(end, rangeEnd) });
     }
 
-    const lanes = assignOverlapLanes(clipped.map((c) => ({ key: c.entry.key, start: c.start, end: c.end })));
+    const laneItems = clipped.map((c, index) => ({
+        key: String(index),
+        orderKey: c.entry.title,
+        start: c.start,
+        end: c.end,
+    }));
+    const lanes = assignOverlapLanes(laneItems);
 
-    for (const { entry, start, end } of clipped) {
-        const laneIndex = lanes.get(entry.key) ?? 0;
+    for (const [index, { entry, start, end }] of clipped.entries()) {
+        const laneIndex = lanes.get(String(index)) ?? 0;
         const pieces: HourMinuteFragment[] = [];
 
         for (const row of rows) {
