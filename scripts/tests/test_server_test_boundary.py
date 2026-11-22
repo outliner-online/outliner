@@ -1,6 +1,7 @@
 """Run only tiny real Mocha fixtures to verify prepared CI/local runner parity."""
 
 from pathlib import Path
+import os
 import subprocess
 import tempfile
 import unittest
@@ -35,6 +36,49 @@ class ServerExecutionBoundaryTest(unittest.TestCase):
             self.assertNotEqual(result.returncode,0)
             self.assertIn('Server test runtime is not prepared',result.stderr)
             self.assertEqual((root/'scripts/prepared').read_text().splitlines(),['1:1'])
+
+    def test_shards_cover_unsplit_native_inventory_and_propagate_failures(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'scripts/ci').mkdir(parents=True)
+            (root / 'server/tests/loaders').mkdir(parents=True)
+            for name in ['run-server-test-command.sh']:
+                (root / 'scripts' / name).write_text((ROOT / 'scripts' / name).read_text())
+            for name in ['run-server-test-shard.sh', 'server-test-reporter.mjs', 'verify-server-test-shards.mjs']:
+                (root / 'scripts/ci' / name).write_text((ROOT / 'scripts/ci' / name).read_text())
+            (root / 'server/node_modules').symlink_to(ROOT / 'server/node_modules', target_is_directory=True)
+            (root / 'server/package.json').write_text('{"type":"module"}')
+            (root / 'server/tests/loaders/pin-server-deps.mjs').write_text('export async function resolve(s,c,n){return n(s,c);}')
+            (root / 'server/tests/a.test.js').write_text('it("first",()=>{});')
+            (root / 'server/tests/b.test.js').write_text('it("second",()=>{});')
+            env = os.environ | {'GITHUB_RUN_ID': '7', 'GITHUB_RUN_ATTEMPT': '2', 'GITHUB_SHA': 'abc'}
+            for shard in ['1/2', '2/2']:
+                result = subprocess.run(['bash', 'scripts/ci/run-server-test-shard.sh'], cwd=root,
+                                        env=env | {'SERVER_TEST_SHARD': shard}, text=True,
+                                        capture_output=True, timeout=60)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            verify = subprocess.run(['node', 'scripts/ci/verify-server-test-shards.mjs',
+                                     'server-test-results', '2'], cwd=root, env=env,
+                                    text=True, capture_output=True, timeout=30)
+            self.assertEqual(verify.returncode, 0, verify.stdout + verify.stderr)
+            self.assertIn('Verified 2 native tests', verify.stdout)
+
+            (root / 'server/tests/b.test.js').write_text('it("second",()=>{throw new Error("native failure")});')
+            subprocess.run(['bash', 'scripts/ci/run-server-test-shard.sh'], cwd=root,
+                           env=env | {'SERVER_TEST_SHARD': '2/2'}, check=True,
+                           text=True, capture_output=True, timeout=60)
+            verify = subprocess.run(['node', 'scripts/ci/verify-server-test-shards.mjs',
+                                     'server-test-results', '2'], cwd=root, env=env,
+                                    text=True, capture_output=True, timeout=30)
+            self.assertNotEqual(verify.returncode, 0)
+            self.assertIn('native Mocha exit was', verify.stderr)
+
+            (root / 'server-test-results/shard-2/outcome.json').unlink()
+            verify = subprocess.run(['node', 'scripts/ci/verify-server-test-shards.mjs',
+                                     'server-test-results', '2'], cwd=root, env=env,
+                                    text=True, capture_output=True, timeout=30)
+            self.assertNotEqual(verify.returncode, 0)
+            self.assertIn('missing or invalid outcome.json', verify.stderr)
 
 
 
