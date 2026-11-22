@@ -95,8 +95,32 @@ const dayHeightPx = 24 * ROW_HEIGHT_PX;
 let gridEl: HTMLDivElement | undefined = $state();
 let scrollEl: HTMLDivElement | undefined = $state();
 let focusedResizeRenderKey: string | undefined;
+let focusedEntryAnchor: {
+    renderKey: string
+    sourceKind?: string
+    sourceId?: string
+    title: string
+    expectedStartMs?: number
+} | undefined;
 
-const renderKey = (entry: CalendarEntry) => entry.renderKey ?? entry.key;
+const baseRenderKey = (entry: CalendarEntry) => entry.renderKey ?? entry.key;
+const renderKey = (entry: CalendarEntry) =>
+    focusedEntryAnchor
+        && entry.sourceKind === focusedEntryAnchor.sourceKind
+        && entry.sourceId === focusedEntryAnchor.sourceId
+        && entry.title === focusedEntryAnchor.title
+        && entry.startMs === focusedEntryAnchor.expectedStartMs
+        ? focusedEntryAnchor.renderKey
+        : baseRenderKey(entry);
+const focusEntry = (entry: CalendarEntry) => {
+    focusedEntryAnchor = {
+        renderKey: renderKey(entry),
+        sourceKind: entry.sourceKind,
+        sourceId: entry.sourceId,
+        title: entry.title,
+        expectedStartMs: entry.startMs,
+    };
+};
 const currentEntry = (entry: CalendarEntry) => {
     const key = renderKey(entry);
     return layout.timed.find(placement => renderKey(placement.entry) === key)?.entry
@@ -271,7 +295,10 @@ function onEntryKeydown(entry: CalendarEntry, e: KeyboardEvent) {
     const deltaMs = keyToDeltaMs(e.key);
     if (deltaMs === undefined) return;
     e.preventDefault();
-    onKeyboardMove(entry, entry.startMs + deltaMs);
+    const nextStartMs = entry.startMs + deltaMs;
+    focusEntry(entry);
+    focusedEntryAnchor!.expectedStartMs = nextStartMs;
+    onKeyboardMove(entry, nextStartMs);
 }
 
 function onResizeKeydown(entry: CalendarEntry, e: KeyboardEvent) {
@@ -339,6 +366,7 @@ onMount(() => {
                         tabindex="0"
                         class="entry-title"
                         data-testid="calendar-entry-title"
+                        onfocus={() => focusEntry(p.entry)}
                         onkeydown={(e) => onEntryKeydown(p.entry, e)}
                     >{p.entry.title}</div>
                     {#if isDeletable(p.entry)}
@@ -468,7 +496,10 @@ onMount(() => {
                             class="resize-handle"
                             data-testid={`calendar-entry-resize-${p.entry.key}`}
                             data-render-key={renderKey(p.entry)}
-                            onfocus={() => focusedResizeRenderKey = renderKey(p.entry)}
+                            onfocus={() => {
+                                focusEntry(p.entry);
+                                focusedResizeRenderKey = renderKey(p.entry);
+                            }}
                             onpointerdown={(e) => beginDrag("resize", currentEntry(p.entry), e)}
                             onkeydown={(e) => onResizeKeydown(currentEntry(p.entry), e)}
                         ></div>

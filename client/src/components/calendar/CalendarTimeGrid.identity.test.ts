@@ -15,7 +15,10 @@ function entries(rows: Record<string, unknown>[]) {
     );
 }
 
-const callbacks = (onKeyboardResize: (entry: CalendarEntry, duration: number) => void) => ({
+const callbacks = (
+    onKeyboardResize: (entry: CalendarEntry, duration: number) => void,
+    onKeyboardMove: (entry: CalendarEntry, startMs: number) => void = vi.fn(),
+) => ({
     rangeStart,
     workingHoursStartMinutes: 9 * 60,
     workingHoursEndMinutes: 17 * 60,
@@ -27,7 +30,7 @@ const callbacks = (onKeyboardResize: (entry: CalendarEntry, duration: number) =>
     onDragCancel: vi.fn(),
     onResizeMove: vi.fn(),
     onResizeEnd: vi.fn(),
-    onKeyboardMove: vi.fn(),
+    onKeyboardMove,
     onKeyboardResize,
 });
 
@@ -151,4 +154,43 @@ it("keeps focus on the same distinguishable occurrence when identical titles reo
     expect(nineHandle.parentElement?.getAttribute("style")).toContain("432px");
     await fireEvent.keyDown(nineHandle, { key: "ArrowDown" });
     expect(resized.map(entry => entry.startMs)).toEqual([Date.parse(atNine.start)]);
+});
+
+it("keeps the focused occurrence through accepted keyboard moves that change its start", async () => {
+    const original = {
+        source_kind: "tasks",
+        source_id: "moving",
+        title: "Moving",
+        start: "2026-03-10T09:00:00Z",
+        duration: "00:30:00",
+    };
+    const moves: number[] = [];
+    let view: ReturnType<typeof render>;
+    const onKeyboardMove = async (_entry: CalendarEntry, startMs: number) => {
+        moves.push(startMs);
+        await view.rerender({
+            ...props,
+            layout: layoutTimeGrid(entries([{ ...original, start: new Date(startMs).toISOString() }]), rangeStart,
+                rangeEnd),
+        });
+    };
+    const props = callbacks(vi.fn(), onKeyboardMove);
+    view = render(CalendarTimeGrid, {
+        ...props,
+        layout: layoutTimeGrid(entries([original]), rangeStart, rangeEnd),
+    });
+    const title = view.getByText("Moving") as HTMLElement;
+    title.focus();
+
+    await fireEvent.keyDown(title, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(title);
+    expect(title.parentElement?.getAttribute("style")).toContain("444px");
+    await fireEvent.keyDown(title, { key: "ArrowUp" });
+
+    expect(document.activeElement).toBe(title);
+    expect(title.parentElement?.getAttribute("style")).toContain("432px");
+    expect(moves).toEqual([
+        Date.parse("2026-03-10T09:15:00Z"),
+        Date.parse("2026-03-10T09:00:00Z"),
+    ]);
 });

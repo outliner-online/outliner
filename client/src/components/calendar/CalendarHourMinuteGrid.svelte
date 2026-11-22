@@ -83,8 +83,32 @@ let trackEls: (HTMLDivElement | undefined)[] = $state([]);
 let rowEls: (HTMLDivElement | undefined)[] = $state([]);
 let rootEl: HTMLDivElement | undefined = $state();
 let focusedResizeRenderKey: string | undefined;
+let focusedEntryAnchor: {
+    renderKey: string
+    sourceKind?: string
+    sourceId?: string
+    title: string
+    expectedStartMs?: number
+} | undefined;
 
-const renderKey = (entry: CalendarEntry) => entry.renderKey ?? entry.key;
+const baseRenderKey = (entry: CalendarEntry) => entry.renderKey ?? entry.key;
+const renderKey = (entry: CalendarEntry) =>
+    focusedEntryAnchor
+        && entry.sourceKind === focusedEntryAnchor.sourceKind
+        && entry.sourceId === focusedEntryAnchor.sourceId
+        && entry.title === focusedEntryAnchor.title
+        && entry.startMs === focusedEntryAnchor.expectedStartMs
+        ? focusedEntryAnchor.renderKey
+        : baseRenderKey(entry);
+const focusEntry = (entry: CalendarEntry) => {
+    focusedEntryAnchor = {
+        renderKey: renderKey(entry),
+        sourceKind: entry.sourceKind,
+        sourceId: entry.sourceId,
+        title: entry.title,
+        expectedStartMs: entry.startMs,
+    };
+};
 const currentEntry = (entry: CalendarEntry) => {
     const key = renderKey(entry);
     return layout.rows.flatMap(row => row.fragments).find(fragment => renderKey(fragment.entry) === key)?.entry
@@ -274,7 +298,10 @@ function onEntryKeydown(entry: CalendarEntry, e: KeyboardEvent) {
     const step = keyToStep(e.key);
     if (!step) return;
     e.preventDefault();
-    onKeyboardMove(entry, shiftInstant(layout.rows, entry.startMs, step.rows, step.minutes));
+    const nextStartMs = shiftInstant(layout.rows, entry.startMs, step.rows, step.minutes);
+    focusEntry(entry);
+    focusedEntryAnchor!.expectedStartMs = nextStartMs;
+    onKeyboardMove(entry, nextStartMs);
 }
 
 function keyToStep(key: string): { rows: number; minutes: number; } | undefined {
@@ -430,6 +457,7 @@ const hasBand = $derived(layout.allDay.length > 0 || layout.milestones.length > 
                                     class:visually-hidden={!f.showTitle}
                                     data-testid="calendar-entry-title"
                                     title={f.entry.title}
+                                    onfocus={() => focusEntry(f.entry)}
                                     onkeydown={(e) => onEntryKeydown(f.entry, e)}
                                 >{f.entry.title}</div>
                             {/if}
@@ -458,7 +486,10 @@ const hasBand = $derived(layout.allDay.length > 0 || layout.milestones.length > 
                                     class="resize-handle"
                                     data-testid={`calendar-entry-resize-${f.entry.key}`}
                                     data-render-key={renderKey(f.entry)}
-                                    onfocus={() => focusedResizeRenderKey = renderKey(f.entry)}
+                                    onfocus={() => {
+                                        focusEntry(f.entry);
+                                        focusedResizeRenderKey = renderKey(f.entry);
+                                    }}
                                     onpointerdown={(e) => beginDrag("resize", currentEntry(f.entry), row.rowIndex, e)}
                                     onkeydown={(e) => onResizeKeydown(currentEntry(f.entry), e)}
                                 ></div>
