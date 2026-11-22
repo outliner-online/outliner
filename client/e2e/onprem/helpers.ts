@@ -5,6 +5,14 @@ export async function login(page: Page, stack: OnPremProductionStack, password =
     await page.goto(stack.origin);
     await page.getByLabel("Password").fill(password);
     await page.getByRole("button", { name: "Login", exact: true }).click();
+    // The click only dispatches the async login handler. Do not let callers
+    // navigate until the UI has consumed either the session or its rejection;
+    // an immediate navigation can abort that work and leave a fresh context
+    // unauthenticated even though login() already returned.
+    await expect(
+        page.getByTestId("login-status-indicator").filter({ hasText: "Local User" })
+            .or(page.getByText("Incorrect password", { exact: true })),
+    ).toBeVisible();
 }
 
 export async function createProject(page: Page, title: string) {
