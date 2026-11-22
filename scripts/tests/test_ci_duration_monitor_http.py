@@ -12,11 +12,65 @@ import threading
 import unittest
 
 from test_ci_duration_monitor import GitHub, job
+from test_ci_duration_monitor_cancellation import CancellationGitHub, TIMEOUT, annotation
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 class MonitorHTTPTest(unittest.TestCase):
+    def test_cli_retains_separate_cancellation_report_from_actual_http_annotations(self):
+        github = CancellationGitHub()
+        now = datetime.now(timezone.utc)
+        start = (now - timedelta(minutes=35)).isoformat()
+        github.runs[0].update(created_at=start, run_started_at=start)
+        item = github.jobs[(10, 1)][0]
+        item.update(created_at=start, started_at=start, completed_at=now.isoformat())
+        item["steps"] = [{"name": "Complete job", "status": "in_progress", "conclusion": None,
+                          "started_at": (now - timedelta(minutes=29)).isoformat(), "completed_at": None}]
+        github.annotations[1] = [annotation(TIMEOUT)]
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                prefix = "/repos/example/project/"
+                route = self.path[len(prefix):] if self.path.startswith(prefix) else ""
+                result = github.request("GET", route)
+                self.send_response(result.status)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps(result.data).encode())
+
+            def log_message(self, *_):
+                pass
+
+        with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server, tempfile.TemporaryDirectory() as directory:
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                temporary = Path(directory)
+                config = temporary / "monitor.json"
+                config.write_text(json.dumps({"workflows": [{"path": ".github/workflows/ci.yml", "families": []}]}))
+                command = [sys.executable, str(ROOT / "scripts/ci_duration_monitor.py"),
+                           "--repository", "example/project", "--config", str(config),
+                           "--output-dir", str(temporary / "output")]
+                environment = {**os.environ, "GITHUB_TOKEN": "fixture-token",
+                               "GITHUB_STEP_SUMMARY": str(temporary / "step-summary.md"),
+                               "GITHUB_API_URL": f"http://127.0.0.1:{server.server_port}"}
+                result = subprocess.run(command, env=environment, capture_output=True, text=True, timeout=15)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                report = json.loads((temporary / "output/cancellation-diagnostics.json").read_text())
+                row = report["observations"][0]
+                self.assertEqual(row["termination"]["category"], "job_timeout")
+                self.assertEqual(row["finalization"]["state"], "unresolved_after_job_completion")
+                self.assertEqual((row["run_id"], row["run_attempt"], row["job_id"]), (10, 1, 1))
+                self.assertIn("unresolved_after_job_completion", (temporary / "output/cancellation-diagnostics.md").read_text())
+                self.assertIn("Cancellation and finalization evidence", (temporary / "step-summary.md").read_text())
+                self.assertIn("Monitor completed", result.stdout)
+                self.assertTrue((temporary / "output/monitor.log").is_file())
+                self.assertEqual(github.mutations, [])
+            finally:
+                server.shutdown()
+                thread.join()
+
     def test_cli_collects_read_only_then_submits_once_with_readiness_last(self):
         github = GitHub()
         now = datetime.now(timezone.utc)

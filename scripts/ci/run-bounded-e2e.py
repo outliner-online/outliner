@@ -161,7 +161,11 @@ def main():
         budgets = (args.timeout_seconds, args.job_budget_seconds, args.grace_seconds)
         if not command or not all(math.isfinite(value) and value > 0 for value in budgets):
             raise ValueError('A command and positive time budgets are required')
-        started = datetime.fromisoformat(json.loads(Path(args.context).read_text())['startedAt'].replace('Z', '+00:00'))
+        context = json.loads(Path(args.context).read_text())
+        started = datetime.fromisoformat(context['startedAt'].replace('Z', '+00:00'))
+        if not structured:
+            save(run_id=context.get('runId'), run_attempt=context.get('runAttempt'),
+                 project=context.get('ciShard'), checkout_sha=context.get('commit'))
         if started.tzinfo is None or started.timestamp() > time.time() + 1:
             raise ValueError('Execution context must contain a valid past timezone-aware startedAt')
         budget = min(args.timeout_seconds, started.timestamp() + args.job_budget_seconds - time.time())
@@ -191,8 +195,13 @@ def main():
             stopping = None
             stop_at = None
             interrupted = [None]
+            def handle_signal(signum, _frame):
+                interrupted[0] = signum
+                if not structured:
+                    record['received_signal'] = signum
+
             for sig in (signal.SIGTERM, signal.SIGINT):
-                signal.signal(sig, lambda signum, _frame: interrupted.__setitem__(0, signum))
+                signal.signal(sig, handle_signal)
 
             def pump():
                 nonlocal console_written

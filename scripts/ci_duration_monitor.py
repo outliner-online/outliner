@@ -23,8 +23,10 @@ from urllib.parse import quote, urlencode
 from loguru import logger
 
 try:
+    from .ci_cancellation_diagnostics import CancellationDiagnostics
     from .ci_duration_policy import CurrentSource
 except ImportError:
+    from ci_cancellation_diagnostics import CancellationDiagnostics
     from ci_duration_policy import CurrentSource
 
 MANAGED_LABEL = "ci-duration-monitor"
@@ -239,7 +241,7 @@ def read_config(path: Path) -> tuple[Workflow, ...]:
     return tuple(workflows)
 
 
-def collect(client: Client, workflows: tuple[Workflow, ...], cutoff: datetime, source: CurrentSource) -> tuple[list[Observation], list[dict[str, object]]]:
+def collect(client: Client, workflows: tuple[Workflow, ...], cutoff: datetime, source: CurrentSource, diagnostics: CancellationDiagnostics | None = None) -> tuple[list[Observation], list[dict[str, object]]]:
     observations = [Observation(workflow, family, []) for workflow in workflows for family in workflow.families]
     totals: list[dict[str, object]] = []
     for workflow in workflows:
@@ -251,9 +253,16 @@ def collect(client: Client, workflows: tuple[Workflow, ...], cutoff: datetime, s
                 raise ValueError("Run does not belong to the configured workflow")
             for attempt in range(1, latest + 1):
                 attempt_run = run if attempt == latest else _object(_call(client, "GET", f"actions/runs/{run_id}/attempts/{attempt}"))
+                if attempt_run.get("id") != run_id or attempt_run.get("run_attempt") != attempt:
+                    raise ValueError("Attempt response belongs to a different run or attempt")
                 if attempt_run.get("status") != "completed":
                     continue
                 jobs = _pages(client, f"actions/runs/{run_id}/attempts/{attempt}/jobs", "jobs")
+                for job in jobs:
+                    if job.get("run_id", run_id) != run_id or job.get("run_attempt", attempt) != attempt:
+                        raise ValueError("Job belongs to a different run or attempt")
+                if diagnostics is not None:
+                    diagnostics.observe(workflow.path, attempt_run, jobs, runs)
                 candidates = []
                 for job in jobs:
                     if job.get("run_attempt", attempt) != attempt:
@@ -440,9 +449,18 @@ def _prepare_labels(client: Client) -> None:
         raise RuntimeError(f"Cannot inspect monitor label: HTTP {response.status}")
 
 
-def run_monitor(client: Client, workflows: tuple[Workflow, ...], repository: str, source_ref: str, *, now: datetime, lookback_hours: int, publish: bool) -> dict[str, object]:
+def run_monitor(client: Client, workflows: tuple[Workflow, ...], repository: str, source_ref: str, *, now: datetime, lookback_hours: int, publish: bool, diagnostics_output: Path | None = None) -> dict[str, object]:
     source = CurrentSource(client, _call, repository, request=_request)
-    observations, workflow_totals = collect(client, workflows, now - timedelta(hours=lookback_hours), source)
+    cutoff = now - timedelta(hours=lookback_hours)
+    diagnostics = CancellationDiagnostics(repository, now, cutoff, lambda path: _pages(client, path))
+    try:
+        observations, workflow_totals = collect(client, workflows, cutoff, source, diagnostics)
+        diagnostics.complete = True
+    finally:
+        # Preserve independent diagnostic evidence even if later issue reads or
+        # publication fail. Incomplete scans are explicitly marked as such.
+        if diagnostics_output is not None:
+            diagnostics.write(diagnostics_output)
     source_ref = source.sha
     # Read the durable issue/comment inventory before any mutation. Unavailable pages cannot
     # silently authorize duplicate issues or readiness re-submission.
@@ -561,6 +579,7 @@ def run_monitor(client: Client, workflows: tuple[Workflow, ...], repository: str
             "diagnostic_samples": sum(item["diagnostic_samples"] for item in admission),
         },
         "workflow_totals": workflow_totals,
+        "cancellation_diagnostics": diagnostics.report(),
         "observations": [{"workflow": item.workflow.path, "family": item.family.key, "samples": [asdict(sample) for sample in item.samples]} for item in observations],
     }
 
@@ -606,7 +625,7 @@ def main(argv: list[str] | None = None, *, client_factory: Callable[[str, str], 
             from ci_duration_github import create_client
 
             client_factory = create_client
-        report = run_monitor(client_factory(token, args.repository), read_config(args.config), args.repository, args.source_ref, now=now or datetime.now(timezone.utc), lookback_hours=args.lookback_hours, publish=args.publish)
+        report = run_monitor(client_factory(token, args.repository), read_config(args.config), args.repository, args.source_ref, now=now or datetime.now(timezone.utc), lookback_hours=args.lookback_hours, publish=args.publish, diagnostics_output=args.output_dir)
         (args.output_dir / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         summary = f"# CI duration monitor\n\nMode: {'publish' if args.publish else 'dry run'}. Runs created in the last {args.lookback_hours} hours; threshold >= {THRESHOLD_SECONDS} seconds.\n\n"
         admission_summary = cast(dict[str, int], report["admission_summary"])
@@ -617,6 +636,10 @@ def main(argv: list[str] | None = None, *, client_factory: Callable[[str, str], 
         shared = cast(list[dict[str, object]], report["shared_setup_diagnostics"])
         summary += f"\n\nShared setup diagnostics: {len(shared)}. See report.json for cross-family step evidence; these never create per-family issues.\n"
         summary += f"\n\nWorkflow-total-only observations: {len(report_only)}. These do not create splitting issues; queue/dependencies/aggregation can exceed ten minutes while every job remains below it.\n"
+        diagnostics_report = cast(dict[str, object], report["cancellation_diagnostics"])
+        diagnostic_rows = cast(list[dict[str, object]], diagnostics_report["observations"])
+        unresolved = sum(cast(dict[str, object], row["finalization"])["state"] == "unresolved_after_job_completion" for row in diagnostic_rows)
+        summary += f"\n\n## Cancellation and finalization evidence\n\n{len(diagnostic_rows)} non-success or unresolved observations; {unresolved} jobs have unresolved `Complete job` metadata. See `cancellation-diagnostics.json` and `cancellation-diagnostics.md` in the retained artifact for separate job outcomes, explicit timeout/concurrency annotations, unknown causes and expected wrapper artifact names. These observations never qualify duration improvement issues.\n"
         (args.output_dir / "summary.md").write_text(summary, encoding="utf-8")
         if os.environ.get("GITHUB_STEP_SUMMARY"):
             with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as stream:
