@@ -47,6 +47,25 @@ def _identifier(value: object) -> int | None:
     return value if type(value) is int and value > 0 else None
 
 
+def _execution_provenance(run: dict[str, object], job: dict[str, object]) -> dict[str, object]:
+    """Separate executed job intervals from results copied into failed-only reruns."""
+    attempt = _identifier(run.get("run_attempt"))
+    attempt_start = _instant(run.get("run_started_at"))
+    started, ended = _instant(job.get("started_at")), _instant(job.get("completed_at"))
+    if attempt is None or attempt_start is None:
+        state, reason = "unknown", "attempt_start_or_identity_missing"
+    elif attempt > 1 and ended is not None and ended < attempt_start and (started is None or started <= ended):
+        state, reason = "carried_forward", "job_completed_before_attempt_start"
+    elif started is not None and started >= attempt_start and (ended is None or ended >= started):
+        state, reason = "current_attempt", "job_interval_starts_in_attempt"
+    else:
+        state, reason = "unknown", "job_interval_missing_or_inconsistent_with_attempt"
+    return {"state": state, "reason": reason,
+            "attempt_started_at": _timestamp(run.get("run_started_at")),
+            "source_run_attempt": attempt if state == "current_attempt" else None,
+            "source_job_id": _identifier(job.get("id")) if state == "current_attempt" else None}
+
+
 def _steps(job: dict[str, object]) -> list[dict[str, object]]:
     values = job.get("steps")
     if not isinstance(values, list):
@@ -112,7 +131,8 @@ class CancellationDiagnostics:
         self.pages = pages
         self.complete = False
         self.rows: list[dict[str, object]] = []
-        self.counts: dict[tuple[str, str], Counter] = {}
+        self.carried_rows: list[dict[str, object]] = []
+        self.counts: dict[tuple[str, str], dict[str, Counter]] = {}
 
     def _annotations(self, job: dict[str, object]) -> dict[str, object]:
         check_url = job.get("check_run_url")
@@ -139,12 +159,16 @@ class CancellationDiagnostics:
                 continue
             name = _text(job.get("name")) or "unknown"
             conclusion = _text(job.get("conclusion"))
-            self.counts.setdefault((workflow, name), Counter())[conclusion or "unknown"] += 1
+            provenance = _execution_provenance(run, job)
+            counts = self.counts.setdefault((workflow, name), {state: Counter() for state in ("api_observations", "current_attempt", "carried_forward", "unknown")})
+            counts["api_observations"][conclusion or "unknown"] += 1
+            counts[provenance["state"]][conclusion or "unknown"] += 1
             steps = _steps(job)
             finalization = _finalization(job, steps)
-            if conclusion not in {"cancelled", "failure", "timed_out"} and job.get("status") == "completed" and finalization["state"] not in {"unresolved_after_job_completion", "incomplete"}:
+            anomalous = conclusion in {"cancelled", "failure", "timed_out"} or job.get("status") != "completed" or finalization["state"] in {"unresolved_after_job_completion", "incomplete"}
+            if not anomalous and provenance["state"] != "carried_forward":
                 continue
-            annotations = self._annotations(job)
+            annotations = self._annotations(job) if anomalous else {"state": "not_requested", "reason": "successful_carried_forward_result", "items": []}
             timeout_annotations = [item for item in annotations["items"]
                                    if item["path"] == ".github" and item["annotation_level"] == "failure"
                                    and isinstance(item["message"], str) and JOB_TIMEOUT.fullmatch(item["message"])]
@@ -166,21 +190,24 @@ class CancellationDiagnostics:
                 termination = {"category": "conflicting_evidence", "confidence": "conflicting", "evidence": evidence}
             else:
                 termination = {"category": "unknown", "confidence": "unknown", "evidence": []}
-            candidates = _newer_candidates(run, job, runs) if conclusion == "cancelled" else []
+            candidates = _newer_candidates(run, job, runs) if conclusion == "cancelled" and provenance["state"] == "current_attempt" else []
             run_id, attempt, job_id = _identifier(run.get("id")), _identifier(run.get("run_attempt")), _identifier(job.get("id"))
             url = f"https://github.com/{self.repository}/actions/runs/{run_id}/job/{job_id}" if run_id and job_id else None
             shard_match = re.search(r"(?:^| / )e2e-test \(([^)]+)\)$", name)
             browser = "firefox" if shard_match and shard_match[1].startswith("firefox-") else "chromium"
-            expected_artifact = f"e2e-artifacts-{browser}-{shard_match[1]}-{run_id}-{attempt}" if shard_match and run_id and attempt else None
-            self.rows.append({
+            expected_artifact = f"e2e-artifacts-{browser}-{shard_match[1]}-{run_id}-{attempt}" if shard_match and run_id and attempt and provenance["state"] == "current_attempt" else None
+            destination = self.carried_rows if provenance["state"] == "carried_forward" else self.rows
+            destination.append({
                 "workflow": workflow, "run_id": run_id, "run_attempt": attempt,
                 "job_id": job_id, "job_name": name, "job_url": url,
                 "head_sha": _text(run.get("head_sha")), "head_branch": _text(run.get("head_branch")),
                 "event": _text(run.get("event")), "run_conclusion": _text(run.get("conclusion")),
                 "job_status": _text(job.get("status")), "job_conclusion": conclusion,
+                "job_created_at": _timestamp(job.get("created_at")),
                 "job_started_at": _timestamp(job.get("started_at")),
                 "job_completed_at": _timestamp(job.get("completed_at")),
                 "job_seconds": _interval(job.get("started_at"), job.get("completed_at")),
+                "execution_provenance": provenance,
                 "termination": termination, "finalization": finalization,
                 "concurrency": {"state": "confirmed" if concurrency_groups else "candidate" if candidates else "unconfirmed",
                                 "reported_groups": concurrency_groups,
@@ -188,7 +215,7 @@ class CancellationDiagnostics:
                                 "note": "Overlap does not prove matching concurrency groups or a cancellation initiator."},
                 "wrapper_evidence": {"state": "not_collected", "expected_artifact_name": expected_artifact,
                                      "artifact_available": None,
-                                     "note": "Inspect command-status.json with execution-context.json in this exact attempt/shard artifact; an interruption signal alone does not identify the cancellation initiator."},
+                                     "note": "An expected artifact is named only for a proven current-attempt job interval. Copied or unknown intervals do not establish the source artifact attempt. Inspect command-status.json with execution-context.json; an interruption signal alone does not identify the cancellation initiator."},
                 "annotations": annotations, "steps": steps,
             })
 
@@ -201,28 +228,31 @@ class CancellationDiagnostics:
                     "Complete job without a terminal timestamp is unresolved metadata, not proof of active runner cleanup or a runner defect.",
                     "Missing annotations, artifacts or timestamps remain unknown; elapsed duration alone never establishes a timeout.",
                     "Wrapper evidence and cancellation initiators are not fetched; inspect retained per-attempt artifacts when available.",
+                    "API observation totals can include copied rerun results. Use current_attempt outcome counts for rates; exclude carried_forward and unknown provenance. A current job interval does not prove its tests ran.",
                     "This diagnostic report never creates or qualifies duration improvement issues.",
                 ],
-                "job_outcomes": [{"workflow": workflow, "job_name": name, "total": sum(counts.values()),
-                                  "conclusions": dict(sorted(counts.items()))}
+                "job_outcomes": [{"workflow": workflow, "job_name": name,
+                                  **{state: {"total": sum(values.values()), "conclusions": dict(sorted(values.items()))}
+                                     for state, values in counts.items()}}
                                  for (workflow, name), counts in sorted(self.counts.items())],
-                "observations": self.rows}
+                "observations": self.rows, "carried_forward_observations": self.carried_rows}
 
     def markdown(self, *, limit: int | None = None) -> str:
         lines = ["## CI cancellation and finalization diagnostics", "",
-                 f"Collection: {'complete' if self.complete else 'incomplete'}. {len(self.rows)} non-success or unresolved observations; see `cancellation-diagnostics.json` for outcomes of every observed job.", "",
+                 f"Collection: {'complete' if self.complete else 'incomplete'}. {len(self.rows)} non-success or unresolved observations and {len(self.carried_rows)} carried-forward results; see `cancellation-diagnostics.json` for outcomes of every observed job.", "",
                  "Confirmed job timeouts and concurrency cancellations require explicit GitHub conclusions or annotations. Unknown causes stay unknown. `Complete job` unresolved means its terminal state was not reported; it does not establish a runner cleanup hang.", "",
-                 "| Run / attempt / job | Job | Outcome | Termination evidence | Finalization |",
-                 "| --- | --- | --- | --- | --- |"]
-        selected = self.rows if limit is None else self.rows[:limit]
+                 "| Run / attempt / job | Job | Execution provenance | Outcome | Termination evidence | Finalization |",
+                 "| --- | --- | --- | --- | --- | --- |"]
+        rows = [*self.rows, *self.carried_rows]
+        selected = rows if limit is None else rows[:limit]
         for row in selected:
             label = f"{row['run_id']} / {row['run_attempt']} / {row['job_id']}"
             link = f"[{label}]({row['job_url']})" if row["job_url"] else label
             name = str(row["job_name"]).replace("|", "\\|").replace("\n", " ").replace("\r", " ").replace("<", "&lt;").replace(">", "&gt;")
-            lines.append(f"| {link} | {name} | {row['job_conclusion'] or 'unknown'} | {row['termination']['category']} ({row['termination']['confidence']}) | {row['finalization']['state']} |")
-        if limit is not None and len(self.rows) > limit:
-            lines += ["", f"Showing {limit} observations; the retained diagnostics files contain all {len(self.rows)}."]
-        lines += ["", "Per-job outcome counts include cancellations. These diagnostics are separate from duration issue admission and never create splitting issues. Wrapper artifacts are referenced by their expected run/attempt/shard name; their availability and contents are not assumed.", ""]
+            lines.append(f"| {link} | {name} | {row['execution_provenance']['state']} | {row['job_conclusion'] or 'unknown'} | {row['termination']['category']} ({row['termination']['confidence']}) | {row['finalization']['state']} |")
+        if limit is not None and len(rows) > limit:
+            lines += ["", f"Showing {limit} observations; the retained diagnostics files contain all {len(rows)}."]
+        lines += ["", "For cancellation rates, use job_outcomes.current_attempt counts; exclude carried_forward and unknown. api_observations counts API records and can count copied results more than once. A current job interval does not establish that its tests ran. These diagnostics never qualify duration issues. Expected wrapper artifact names are omitted when the execution attempt is unproven; archive availability and contents remain unknown.", ""]
         return "\n".join(lines)
 
     def write(self, directory: Path) -> None:

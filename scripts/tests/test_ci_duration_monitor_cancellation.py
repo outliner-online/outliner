@@ -1,6 +1,7 @@
 """Cancellation evidence through the real monitor's controlled REST boundary."""
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 import tempfile
 import unittest
@@ -31,11 +32,15 @@ class CancellationGitHub(GitHub):
         self.annotations = {}
         self.annotation_status = 200
         self.issue_status = 200
-        self.runs[0].update(created_at=stamp(-2200), conclusion="cancelled")
+        self.attempts = {}
+        self.runs[0].update(created_at=stamp(-2200), run_started_at=stamp(-2200), conclusion="cancelled")
         self.jobs[(10, 1)] = [cancelled()]
 
     def request(self, method, path, payload=None):
         route = urlsplit(path).path
+        if method == "GET" and route in self.attempts:
+            self.calls.append((method, path, payload))
+            return Result(200, self.attempts[route])
         if method == "GET" and route.startswith("check-runs/"):
             self.calls.append((method, path, payload))
             page = int(parse_qs(urlsplit(path).query).get("page", ["1"])[0])
@@ -55,9 +60,9 @@ class CancellationTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.output = Path(self.temporary.name)
 
-    def report(self, *, publish=False):
+    def report(self, *, publish=False, now=NOW):
         return monitor.run_monitor(self.github, (self.workflow,), REPOSITORY, "ignored",
-                                   now=NOW, lookback_hours=48, publish=publish,
+                                   now=now, lookback_hours=48, publish=publish,
                                    diagnostics_output=self.output)
 
     def test_timeout_and_unresolved_finalization_are_independent_observations(self):
@@ -113,7 +118,7 @@ class CancellationTests(unittest.TestCase):
         report = self.report()["cancellation_diagnostics"]
         self.assertEqual([(row["job_id"], row["run_attempt"]) for row in report["observations"]], [(1, 1)])
         self.assertEqual(report["observations"][0]["termination"]["category"], "job_timeout")
-        self.assertEqual(sum(item["total"] for item in report["job_outcomes"]), 102)
+        self.assertEqual(sum(item["api_observations"]["total"] for item in report["job_outcomes"]), 102)
         paths = [call[1] for call in self.github.calls]
         self.assertIn("actions/runs/10/attempts/1/jobs?per_page=100&page=2", paths)
         self.assertIn("actions/runs/10/attempts/2/jobs?per_page=100&page=1", paths)
@@ -121,14 +126,76 @@ class CancellationTests(unittest.TestCase):
 
     def test_rerun_overlap_excludes_runs_created_before_the_selected_attempt(self):
         self.github.runs[0]["run_attempt"] = 2
+        self.github.runs[0]["run_started_at"] = stamp(-700)
         self.github.jobs[(10, 1)] = []
         self.github.jobs[(10, 2)] = [cancelled(attempt=2)]
+        self.github.jobs[(10, 2)][0]["started_at"] = stamp(-600)
         self.github.runs.append({**self.github.runs[0], "id": 11, "run_attempt": 1,
                                  "created_at": stamp(-1000)})
         self.github.jobs[(11, 1)] = []
         row = self.report()["cancellation_diagnostics"]["observations"][0]
         self.assertEqual(row["run_attempt"], 2)
         self.assertEqual(row["concurrency"]["newer_same_branch_run_ids"], [])
+
+    def test_failed_only_rerun_copied_success_is_not_a_second_execution(self):
+        # GitHub minted a new attempt-2 ID while preserving the real attempt-1
+        # tables-2 interval. The later created_at must not override that evidence.
+        run_id = 45003144106
+        run = {**self.github.runs[0], "id": run_id, "run_attempt": 2,
+               "created_at": "2026-11-22T09:09:21Z", "run_started_at": "2026-11-22T09:09:20Z"}
+        original = {**job(137149385501, 877, name="e2e-test / e2e-test (tables-2)"),
+                    "created_at": "2026-11-22T08:34:20Z", "started_at": "2026-11-22T08:34:29Z",
+                    "completed_at": "2026-11-22T08:49:06Z", "steps": []}
+        copied = {**original, "id": 137158082007, "run_attempt": 2, "created_at": "2026-11-22T09:09:23Z"}
+        # Preserve the observed retry identity/start; its later terminal time is
+        # controlled here so the completed-run collection boundary is exercised.
+        retry = {**job(137158080928, 34, name="e2e-test / e2e-test (new-4-2)", conclusion="failure", attempt=2),
+                 "created_at": "2026-11-22T09:09:23Z", "started_at": "2026-11-22T09:09:26Z",
+                 "completed_at": "2026-11-22T09:10:00Z", "steps": []}
+        self.github.runs = [run]
+        self.github.attempts[f"actions/runs/{run_id}/attempts/1"] = {
+            **run, "run_attempt": 1, "run_started_at": "2026-11-22T08:30:00Z"}
+        self.github.jobs = {(run_id, 1): [original], (run_id, 2): [copied, retry]}
+        report = self.report(now=datetime(2026, 11, 22, 10, tzinfo=timezone.utc))["cancellation_diagnostics"]
+        tables = next(row for row in report["job_outcomes"] if row["job_name"].endswith("(tables-2)"))
+        self.assertEqual(tables["api_observations"], {"total": 2, "conclusions": {"success": 2}})
+        self.assertEqual(tables["current_attempt"], {"total": 1, "conclusions": {"success": 1}})
+        self.assertEqual(tables["carried_forward"], {"total": 1, "conclusions": {"success": 1}})
+        self.assertEqual(tables["unknown"]["total"], 0)
+        carried = report["carried_forward_observations"][0]
+        self.assertEqual((carried["run_attempt"], carried["job_id"]), (2, 137158082007))
+        self.assertEqual(carried["execution_provenance"]["state"], "carried_forward")
+        self.assertIsNone(carried["execution_provenance"]["source_run_attempt"])
+        self.assertIsNone(carried["execution_provenance"]["source_job_id"])
+        self.assertIsNone(carried["wrapper_evidence"]["expected_artifact_name"])
+        self.assertEqual([row["job_id"] for row in report["observations"]], [137158080928])
+        self.assertEqual(report["observations"][0]["execution_provenance"]["state"], "current_attempt")
+        self.assertEqual(self.github.mutations, [])
+
+    def test_missing_attempt_start_keeps_provenance_and_artifact_identity_unknown(self):
+        self.github.runs[0]["run_started_at"] = None
+        self.github.annotations[1] = [annotation(TIMEOUT)]
+        report = self.report()["cancellation_diagnostics"]
+        row = report["observations"][0]
+        self.assertEqual(row["execution_provenance"]["state"], "unknown")
+        self.assertIsNone(row["wrapper_evidence"]["expected_artifact_name"])
+        self.assertEqual(row["termination"]["category"], "job_timeout")
+        self.assertEqual(report["job_outcomes"][0]["current_attempt"]["total"], 0)
+        self.assertEqual(report["job_outcomes"][0]["unknown"]["total"], 1)
+
+    def test_carried_failure_retains_explicit_cause_and_unresolved_finalization(self):
+        self.github.runs[0].update(run_attempt=2, run_started_at=stamp(10))
+        item = cancelled(attempt=2)
+        item["steps"] = [{"name": "Complete job", "status": "in_progress", "conclusion": None,
+                          "started_at": stamp(-1800), "completed_at": None}]
+        self.github.jobs = {(10, 1): [], (10, 2): [item]}
+        self.github.annotations[1] = [annotation(TIMEOUT)]
+        report = self.report()["cancellation_diagnostics"]
+        self.assertEqual(report["observations"], [])
+        row = report["carried_forward_observations"][0]
+        self.assertEqual(row["termination"]["category"], "job_timeout")
+        self.assertEqual(row["finalization"]["state"], "unresolved_after_job_completion")
+        self.assertEqual(report["job_outcomes"][0]["carried_forward"]["conclusions"], {"cancelled": 1})
 
     def test_firefox_artifact_reference_uses_the_existing_browser_contract(self):
         self.github.jobs[(10, 1)][0]["name"] = "e2e-test / e2e-test (firefox-selection-new)"

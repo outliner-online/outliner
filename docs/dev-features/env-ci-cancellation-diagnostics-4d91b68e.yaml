@@ -1,7 +1,7 @@
 id: ENV-4d91b68e
 title: Independent CI cancellation and finalization evidence
 title-ja: CIキャンセル原因と終了状態を独立した証拠として記録する
-description: The existing duration monitor retains a separate report of cancelled, failed, timed-out and unresolved jobs from each exact run attempt. Explicit GitHub timeout or concurrency annotations can confirm a cause; duration, actor, newer-run overlap and interruption signals cannot. Complete job without a terminal timestamp remains unresolved metadata. Missing evidence stays unknown. Diagnostic files and per-job outcome counts survive later issue-reconciliation errors and never qualify duration improvement issues. Wrapper artifact names identify the expected run, attempt and shard without claiming those artifacts are available or interpreting their contents.
+description: The existing duration monitor retains a separate report of cancelled, failed, timed-out and unresolved jobs from each exact run attempt. Explicit GitHub timeout or concurrency annotations can confirm a cause; duration, actor, newer-run overlap and interruption signals cannot. Complete job without a terminal timestamp remains unresolved metadata. Outcome counts distinguish API observations, current-attempt intervals, carried-forward rerun results and unknown execution provenance. Copied results retain their evidence separately and never establish a source artifact attempt. Missing evidence stays unknown. Diagnostic files survive later issue-reconciliation errors and never qualify duration improvement issues. Wrapper artifact names are supplied only for known current-attempt intervals, without claiming archive availability or interpreting contents.
 category: environment
 status: implemented
 components:

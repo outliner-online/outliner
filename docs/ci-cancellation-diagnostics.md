@@ -41,12 +41,29 @@ included in `report.json`; the step summary shows aggregate counts. Monitor
 artifacts are retained for 14 days.
 
 Each diagnostic uses `(run_id, run_attempt, job_id)` and the exact attempt's job
-metadata. `job_outcomes` retains per-job denominators, including successful,
-failed and cancelled attempts. `observations` contains failed, cancelled,
-timed-out and unresolved cases. `collection_complete=false` means collection
-stopped early: those counts are partial, not a complete cancellation rate. The
-normal discovery window includes runs **created** in the last 48 hours, not every
-run that happened to finish during that interval.
+metadata. Failed-only reruns can copy a successful result into a later attempt
+under a new job ID while keeping the original execution timestamps. The new ID
+and `created_at` do not establish a new execution.
+
+`job_outcomes` therefore separates `api_observations`, `current_attempt`,
+`carried_forward` and `unknown`, each with its own `total` and `conclusions`.
+Use **`current_attempt` counts** for cancellation rates and exclude carried or
+unknown provenance. These counts identify job-result intervals, including early
+cancellations and skipped results when their timestamps permit attribution; they
+do not prove that the test command ran. `api_observations` is an API-record count
+and can include the same result more than once.
+
+A result completed before a rerun's `run_started_at` is retained separately in
+`carried_forward_observations`. Its original attempt and job ID remain unknown;
+the monitor does not guess an artifact's source attempt. Missing or inconsistent
+intervals have unknown execution provenance. `observations` contains non-carried
+failed, cancelled, timed-out and unresolved cases, preserving their cause and
+finalization evidence independently of execution provenance.
+
+`collection_complete=false` means collection stopped early: those counts are
+partial, not a complete cancellation rate. The normal discovery window includes
+runs **created** in the last 48 hours, not every run that happened to finish during
+that interval.
 
 | Field / evidence                                     | Interpretation                                                                                                                               |
 | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -62,7 +79,8 @@ run that happened to finish during that interval.
 
 The monitor does not download wrapper archives. `wrapper_evidence.state` remains
 `not_collected`, artifact availability remains unknown, and the expected artifact
-name is a lookup aid rather than proof that an archive exists. Inspect the actual
+name is a lookup aid rather than proof that an archive exists. No expected name
+is supplied for carried-forward or unknown execution provenance. Inspect the actual
 archive before using its contents, and match run, attempt, shard and checked-out
 SHA against `execution-context.json`. Run `actor` and `triggering_actor` identify
 who triggered an execution, not who cancelled it. Missing timestamps remain null;
@@ -104,9 +122,11 @@ command log, that does not establish an assertion failure or its root cause.
 2. Inspect a CI attempt at the exact proposed commit. Record the real `tables-2`
    job URL, run attempt and job ID, command result, artifact-upload result,
    post-action states and `Complete job` timestamps.
-3. Download that attempt's archive and match its execution identity before using
-   its command/process evidence. Do not combine the latest job metadata with an
-   earlier attempt's archive.
+3. Confirm that the job interval belongs to that attempt before downloading its
+   archive, then match the archive's execution identity. A successful result
+   copied into a failed-only rerun is evidence from its original execution, not
+   proof that the shard reran. Do not combine copied job metadata with an assumed
+   artifact from the later attempt.
 4. If finalization is unresolved again, preserve the nullable step metadata and
    retrieve that job's annotations and logs. Investigate remaining owned processes
    only when the retained evidence supports it; do not introduce global process
