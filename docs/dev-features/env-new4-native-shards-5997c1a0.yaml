@@ -1,9 +1,8 @@
 id: ENV-5997c1a0
 title: Complete native new-4 E2E sharding
 title-ja: new-4 E2E の完全なネイティブシャーディング
-description: >-
-  Runs the Chromium new-4 Playwright selection as two native shards while an
-  exact collection guard and aggregate check preserve coverage and failures.
+description: Runs the Chromium new-4 Playwright selection as two native shards while an exact collection guard and aggregate check preserve coverage and failures.
 tests:
-  - scripts/tests/env-new4-native-shards-5997c1a0.spec.ts
-  - scripts/tests/env-new4-rerun-provenance-5997c1a0.spec.ts
+- scripts/tests/env-new4-native-shards-5997c1a0.spec.ts
+- scripts/tests/env-new4-required-check-failure-5997c1a0.spec.ts
+- scripts/tests/env-new4-rerun-provenance-5997c1a0.spec.ts
