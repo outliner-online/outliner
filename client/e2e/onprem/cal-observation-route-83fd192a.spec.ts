@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type WebSocket } from "@playwright/test";
 import { calendarProject, savedContext, savedPath } from "./calendarRouteFixture";
 import { login, stackFor } from "./helpers";
 
@@ -39,7 +39,37 @@ test("saved Calendar URL resolves IDs after renames/title reuse with real room a
                 if (new URL(request.url()).origin !== stack.origin) remoteRequests.push(request.url());
             });
             await login(page, stack);
-            await page.goto(`${stack.origin}${saved}`);
+            const openedRooms: string[] = [];
+            let recurrentOpen!: () => void;
+            const recurrence = new Promise<"recurrent-project-open">((resolve) => {
+                recurrentOpen = () => resolve("recurrent-project-open");
+            });
+            const observeOpen = (socket: WebSocket) => {
+                const room = new URL(socket.url()).pathname;
+                if (!room.endsWith("/projects/route-target")) return;
+                openedRooms.push(room);
+                if (openedRooms.length >= 4) recurrentOpen();
+            };
+            page.on("websocket", observeOpen);
+            let initialOutcome: string | undefined;
+            try {
+                await page.goto(`${stack.origin}${saved}`);
+                initialOutcome = await Promise.race([
+                    recurrence,
+                    page.getByTestId(`calendar-entry-item:${target.itemId}`).waitFor({ state: "visible" })
+                        .then(() => "rendered-entry"),
+                ]);
+            } finally {
+                page.off("websocket", observeOpen);
+                await info.attach("initial-project-open-observation", {
+                    contentType: "application/json",
+                    body: JSON.stringify({ initialOutcome, openedRooms }),
+                });
+            }
+            expect(initialOutcome, "Initial route must render before recurrent project acquisition").toBe(
+                "rendered-entry",
+            );
+            expect(openedRooms).toEqual(["/projects/route-target"]);
             await expect(page.getByRole("heading", { name: "Renamed Calendar", exact: true })).toBeVisible();
             await expect(page.getByTestId(`calendar-entry-item:${target.itemId}`)).toContainText(
                 "Original Calendar entry @ America/New_York [2026-03-02T05:00:00.000Z,2026-03-09T04:00:00.000Z]",

@@ -16,12 +16,20 @@ status: implemented
 tests:
 - client/e2e/onprem/cal-observation-route-83fd192a.spec.ts
 - client/e2e/onprem/cal-observation-navigation-83fd192a.spec.ts
+- client/e2e/onprem/cal-observation-context-navigation-83fd192a.spec.ts
 - client/src/components/management/CalendarDetailView.navigation.test.ts
 notes: >-
   Run the browser specs individually with scripts/test-onprem-client.sh and the
   filename. They use isolated private SQLite data, real local password sessions,
   room admission, ID acquisition, SQL and the production Calendar renderer.
   The race test forwards real authentication and holds real sync messages only.
+  Same-Calendar context-only navigation changes saved date and mode through the
+  real client router; Calendar observers also cover reloaded room documents and
+  require zero settings writes. Initial acquisition records a bounded recurrence
+  outcome for comparison with a disposable copy lacking the untrack fix.
+  The disposable control observed four project-room opens and failed with
+  recurrent-project-open; restoring the exact fixed component produced one
+  open and passed the same canonical route spec.
   This establishes the bounded route portion of issue 5980 REQ-008/009/010;
   it does not establish cloud Firebase authorization or projection/render parity
   across all Calendar modes, month filters or Gantt collapse state.

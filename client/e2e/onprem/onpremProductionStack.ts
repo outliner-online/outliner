@@ -79,6 +79,8 @@ interface Tunnel {
 }
 
 export class OnPremProductionStack {
+    // Fixture-only links exercise the real router's delegated anchor handling.
+    fixtureNavigationLinks: { label: string; href: string; }[] = [];
     readonly password = "correct horse battery staple";
     readonly dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "outliner-client-onprem-"));
     readonly backendPort: number;
@@ -274,6 +276,39 @@ export class OnPremProductionStack {
             ?? await createDocumentLoader(this.backend.persistence)(`projects/${projectId}`);
     }
 
+    watchCalendarWrites(projectId: string) {
+        if (!this.backend) throw new Error("Stack is not running");
+        const config = this.backend.hocuspocus.configuration;
+        const observed = new Set<Y.Map<unknown>>();
+        let count = 0;
+        const changed = () => {
+            count++;
+        };
+        const observe = (doc: Y.Doc) => {
+            const calendars = doc.getMap("calendars");
+            if (observed.has(calendars)) return;
+            observed.add(calendars);
+            calendars.observeDeep(changed);
+        };
+        const existing = this.backend.hocuspocus.documents.get(`projects/${projectId}`);
+        if (existing) observe(existing);
+        const extension: (typeof config.extensions)[number] = {
+            async afterLoadDocument({ documentName, document }) {
+                if (documentName === `projects/${projectId}`) observe(document);
+            },
+        };
+        config.extensions.push(extension);
+        return {
+            get count() {
+                return count;
+            },
+            dispose() {
+                for (const calendars of observed) calendars.unobserveDeep(changed);
+                config.extensions.splice(config.extensions.indexOf(extension), 1);
+            },
+        };
+    }
+
     async start() {
         this.stopping = false;
         await this.startBackend();
@@ -430,6 +465,19 @@ export class OnPremProductionStack {
             ? candidate
             : path.join(build, "index.html");
         response.setHeader("Content-Type", MIME[path.extname(file)] ?? "application/octet-stream");
+        if (file === path.join(build, "index.html") && this.fixtureNavigationLinks.length) {
+            const escapeHtml = (value: string) =>
+                value.replaceAll("&", "&amp;").replaceAll('"', "&quot;")
+                    .replaceAll("<", "&lt;");
+            const links = this.fixtureNavigationLinks.map(({ href, label }) =>
+                `<a href="${escapeHtml(href)}">${escapeHtml(label)}</a>`
+            ).join(" ");
+            response.end(
+                fs.readFileSync(file, "utf8").replace("</body>",
+                    `<nav aria-label="Fixture observation links">${links}</nav></body>`),
+            );
+            return;
+        }
         this.pipeFile(fs.createReadStream(file), response);
     }
     private pipeFile(source: Readable, response: http.ServerResponse) {
