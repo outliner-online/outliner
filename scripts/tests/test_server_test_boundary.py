@@ -97,6 +97,22 @@ class ServerExecutionBoundaryTest(unittest.TestCase):
                                         capture_output=True, timeout=60)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+            executed_path = root / 'server-test-results/shard-1/executed.json'
+            executed_path.write_text('null')
+            verify = subprocess.run(['node', 'scripts/ci/verify-server-test-shards.mjs',
+                                     'server-test-results', '2'], cwd=root, env=env,
+                                    text=True, capture_output=True, timeout=30)
+            self.assertNotEqual(verify.returncode, 0)
+            self.assertIn('shard 1 has invalid executed test evidence', verify.stderr)
+
+            for shard in ['1/2', '2/2']:
+                index = shard.split('/')[0]
+                result = subprocess.run(['bash', 'scripts/ci/run-server-test-shard.sh'], cwd=root,
+                                        env=env | {'SERVER_TEST_SHARD': shard,
+                                                   'SERVER_TEST_RESULT_DIR': f'server-test-results/shard-{index}'}, text=True,
+                                        capture_output=True, timeout=60)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
             outcome_path.write_text('{"runId":"stale","runAttempt":"2","commit":"abc","shard":"1/2","status":0}')
             verify = subprocess.run(['node', 'scripts/ci/verify-server-test-shards.mjs',
                                      'server-test-results', '2'], cwd=root, env=env,
