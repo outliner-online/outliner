@@ -109,6 +109,24 @@ describe("Grid table projection", () => {
         });
     });
 
+    it("requires result type metadata for automatic fallback rendering", () => {
+        const missingType: GridProjectionInput = {
+            ...base(),
+            columns: ["active"],
+            rows: [{ active: "true" }],
+            rowTargets: [{ logicalRowId: "one" }],
+            resultColumns: [{ name: "active" }],
+        };
+        expect(projectGridTable(missingType)).toEqual({
+            status: "unavailable",
+            reason: "Grid result column metadata is incomplete",
+        });
+        expect(projectGridTable({ ...missingType, resultColumns: [{ name: "active", typeId: 16 }] })).toMatchObject({
+            status: "ready",
+            projection: { rows: [[{ checked: true }]] },
+        });
+    });
+
     it("uses typed fallback for a computed occurrence from a known accepted source", () => {
         const input: GridProjectionInput = {
             ...base(),

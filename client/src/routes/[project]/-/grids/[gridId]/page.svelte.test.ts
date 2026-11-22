@@ -30,6 +30,7 @@ import { createGrid, getGridRegistry, removeGrid } from "../../../../../services
 import { resetPgliteForTests } from "../../../../../services/yjstable/pgliteService";
 import { resetTableEngineForTests } from "../../../../../services/yjstable/tableEngine";
 import { setPage } from "../../../../../tests/mocks/appState.svelte";
+import DemoGridStandalonePage from "../../../../[demoProject=demoProject]/-/grids/[gridId]/+page.svelte";
 import GridStandalonePage from "./+page.svelte";
 
 beforeEach(() => {
@@ -108,6 +109,42 @@ describe("current-format standalone Grid route", { timeout: 60000 }, () => {
         setPage({ params: { project: "private-project", gridId: "grid-a" } });
         render(GridStandalonePage);
         await waitFor(() => expect(screen.getByText("Login required")).toBeTruthy());
+        expect(screen.queryByTestId("yjs-table-view")).toBeNull();
+    });
+});
+
+describe("public demo standalone Grid observation context", { timeout: 60000 }, () => {
+    const demoUrl = (observation?: Record<string, unknown>) => {
+        const url = new URL("http://localhost/demo/-/grids/grid-a");
+        if (observation) url.searchParams.set("observation", JSON.stringify(observation));
+        return url;
+    };
+    const tableContext = { version: 1, surface: "table", locale: "en-US", timeZone: "UTC" };
+
+    beforeEach(() => setPage({ params: { demoProject: "demo", gridId: "grid-a" }, url: demoUrl() }));
+
+    it("opens without an observation context", async () => {
+        seed();
+        render(DemoGridStandalonePage);
+        await waitFor(() => expect(cell()?.textContent).toBe("42"), { timeout: 30000 });
+    });
+
+    it("forwards a supported table observation context", async () => {
+        seed();
+        setPage({ url: demoUrl(tableContext) });
+        render(DemoGridStandalonePage);
+        await waitFor(() => expect(cell()?.textContent).toBe("42"), { timeout: 30000 });
+        expect(screen.queryByTestId("grid-observation-context-error")).toBeNull();
+    });
+
+    it.each([
+        ["chart surface", { ...tableContext, surface: "chart" }],
+        ["extra SQL", { ...tableContext, sql: "SELECT secret FROM hidden" }],
+    ])("rejects an unsupported %s context", async (_label, observation) => {
+        seed();
+        setPage({ url: demoUrl(observation) });
+        render(DemoGridStandalonePage);
+        await waitFor(() => expect(screen.getByTestId("grid-observation-context-error")).toBeTruthy());
         expect(screen.queryByTestId("yjs-table-view")).toBeNull();
     });
 });

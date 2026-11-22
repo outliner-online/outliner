@@ -156,18 +156,27 @@ function samePhysicalField(left: GridProjectionPhysicalColumn, right: GridProjec
         && right.physicalColumn === left.physicalColumn;
 }
 
+function physicalFieldFor(
+    column: string,
+    rowTarget: GridProjectionRowTarget,
+    physicalColumns: readonly GridProjectionPhysicalColumn[],
+): GridProjectionField | undefined {
+    const candidates = physicalColumns.filter(candidate =>
+        candidate.outputColumn === column
+        && (!rowTarget.source || candidate.source.sqlName === rowTarget.source.sourceKind)
+    );
+    const first = candidates[0];
+    return first?.field && candidates.every(candidate => samePhysicalField(first, candidate)) ? first.field : undefined;
+}
+
 export function gridFieldFor(
     column: string,
     rowTarget: GridProjectionRowTarget,
     physicalColumns: readonly GridProjectionPhysicalColumn[],
     resultColumns: readonly { readonly name: string; readonly typeId?: number; }[],
 ): GridProjectionField {
-    const candidates = physicalColumns.filter(candidate =>
-        candidate.outputColumn === column
-        && (!rowTarget.source || candidate.source.sqlName === rowTarget.source.sourceKind)
-    );
-    const first = candidates[0];
-    if (first?.field && candidates.every(candidate => samePhysicalField(first, candidate))) return first.field;
+    const field = physicalFieldFor(column, rowTarget, physicalColumns);
+    if (field) return field;
     return fallbackField(column, resultColumns.find(candidate => candidate.name === column)?.typeId);
 }
 
@@ -188,10 +197,17 @@ export function projectGridTable(input: GridProjectionInput): GridProjectionResu
     if (input.metadataStatus === "resolved" && input.physicalColumns.some(candidate => !candidate.field)) {
         return { status: "unavailable", reason: "Grid source schema evidence is incoherent" };
     }
-    if (input.columns.some((column) => !input.resultColumns.some((metadata) => metadata.name === column))) {
+    const columns = gridVisibleColumns(input.columns, input.columnOrder, input.hiddenColumns);
+    if (
+        columns.some((column) => {
+            const metadata = input.resultColumns.find(candidate => candidate.name === column);
+            const needsFallback = !isGridCellType(input.componentTypes[column])
+                && input.rowTargets.some(target => !physicalFieldFor(column, target, input.physicalColumns));
+            return !metadata || (metadata.typeId === undefined && needsFallback);
+        })
+    ) {
         return { status: "unavailable", reason: "Grid result column metadata is incomplete" };
     }
-    const columns = gridVisibleColumns(input.columns, input.columnOrder, input.hiddenColumns);
     // A proven branch may legitimately compute one output, so that occurrence
     // has no physical candidate for that column and uses the result OID just
     // like TableGrid. Refuse only sources absent from the complete accepted

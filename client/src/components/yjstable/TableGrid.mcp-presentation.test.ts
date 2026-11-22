@@ -14,6 +14,7 @@ import { resetPgliteForTests } from "../../services/yjstable/pgliteService";
 import {
     addRecord,
     createTable,
+    deleteRecord,
     getTableHandles,
     setRecordValue,
     setSchemaText,
@@ -282,6 +283,15 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
                     },
                 })
             );
+            const changedProjection = getGridProjection(grid.gridId);
+            deleteRecord(notes, "same");
+            addRecord(notes, { observed_at: "2026-11-26 04:05:06" }, "replacement");
+            await waitFor(() =>
+                expect(
+                    view.container.querySelector("tr[data-record-id='notes:replacement'] td[data-col='value'] button"),
+                ).toHaveTextContent("2026-11-26T04:05:06.000Z")
+            );
+            await waitFor(() => expect(getGridProjection(grid.gridId)).toEqual(changedProjection));
         } finally {
             view.unmount();
             projectDoc.destroy();
@@ -311,6 +321,24 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
             )
                 .toEqual(["done", "due_date", "title"]);
         }
+    });
+
+    it("keeps the remaining placement registered when the newest placement unmounts", async () => {
+        const first = await mount();
+        const second = await mount();
+        await waitFor(() => expect(getGridProjection(fixture.grid.gridId).status).toBe("ready"));
+        second.unmount();
+        await waitFor(() => expect(getGridProjection(fixture.grid.gridId).status).toBe("ready"));
+        setRecordValue(fixture.handles, "r1", "title", "Write revised report");
+        await waitFor(() => expect(cell(first.container, "r1", "title")).toHaveTextContent("Write revised report"));
+        await waitFor(() =>
+            expect(getGridProjection(fixture.grid.gridId)).toMatchObject({
+                status: "ready",
+                projection: {
+                    rows: expect.arrayContaining([expect.arrayContaining([{ value: "Write revised report" }])]),
+                },
+            })
+        );
     });
 
     it("shows saved settings in the real definition editor under result names", async () => {
