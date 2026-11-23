@@ -228,19 +228,35 @@ function kanbanOpener(
         let observed = await service.openObservation(uid, target.projectId, target.objectId);
         let documents = observationDocuments(observed);
         let closed = false;
+        let terminalReason: "incarnation_lost" | "not_found" | undefined;
         return {
             get documents() {
                 return documents;
             },
             async read() {
                 if (closed) return { status: "stale", reason: "closed" };
+                if (terminalReason === "incarnation_lost") return { status: "stale", reason: terminalReason };
+                if (terminalReason === "not_found") return { status: "not_found", reason: terminalReason };
                 // Ordinary source/config edits make a completed capture
                 // non-current, but do not end observation continuity. Release
                 // that immutable capture and reopen against the current live
                 // registry before producing the next snapshot.
                 if (!observed.isCurrent()) {
+                    if (!documentsRetainIncarnation(host, documents)) {
+                        terminalReason = "incarnation_lost";
+                        await observed.release();
+                        return { status: "stale", reason: terminalReason };
+                    }
                     await observed.release();
-                    observed = await service.openObservation(uid, target.projectId, target.objectId);
+                    try {
+                        observed = await service.openObservation(uid, target.projectId, target.objectId);
+                    } catch (error) {
+                        if (error instanceof McpReadError && error.code === "not_found") {
+                            terminalReason = "not_found";
+                            return { status: "not_found", reason: terminalReason };
+                        }
+                        throw error;
+                    }
                     documents = observationDocuments(observed);
                 }
                 if (observed.status !== "success" || !observed.settings) {
@@ -276,6 +292,19 @@ function kanbanOpener(
 function observationDocuments(observed: Awaited<ReturnType<OutlinerKanbanQueryService["openObservation"]>>): Y.Doc[] {
     return [observed.handles.project, ...observed.handles.sources.values()]
         .map(connection => connection.document as unknown as Y.Doc);
+}
+
+function documentsRetainIncarnation(
+    host: Partial<Pick<Hocuspocus, "documents">>,
+    documents: readonly Y.Doc[],
+): boolean {
+    // A host without an exposed registry cannot prove continuity and must not
+    // silently rebind a retained handle to a replacement room incarnation.
+    if (!host.documents) return false;
+    return documents.every(document =>
+        host.documents!.get(document.guid) === document
+        || host.documents!.get((document as Y.Doc & { name?: string; }).name ?? "") === document
+    );
 }
 
 function observationRevision(documents: readonly Y.Doc[]): string {
