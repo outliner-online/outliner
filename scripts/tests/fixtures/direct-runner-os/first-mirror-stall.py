@@ -2,6 +2,7 @@
 
 import http.server
 import select
+import time
 import urllib.error
 import urllib.request
 
@@ -13,10 +14,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.endswith('.deb'):
             print('OBSERVED_FIRST_MIRROR_PACKAGE_STALL ' + self.path.rsplit('/', 1)[-1], flush=True)
-            while select.select([self.connection], [], [], 30)[0]:
-                if not self.connection.recv(1):
+            deadline = time.monotonic() + 300
+            while time.monotonic() < deadline:
+                if select.select([self.connection], [], [], .2)[0] and not self.connection.recv(1):
                     print('OBSERVED_FIRST_MIRROR_CLIENT_CLOSED', flush=True)
                     return
+            print('OBSERVED_FIRST_MIRROR_STILL_CONNECTED', flush=True)
             return
         upstream = 'http://security.ubuntu.com' if 'resolute-security' in self.path else 'http://archive.ubuntu.com'
         try:
