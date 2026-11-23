@@ -3,6 +3,11 @@ import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import crypto from "crypto";
 import express from "express";
 import * as z from "zod/v4";
+import {
+    type NotificationSettingsService,
+    NotificationSettingsValidationError,
+} from "../notifications/settings-service.js";
+import { NotificationSettingsStoreError } from "../notifications/settings-store.js";
 import { getOAuthIssuer } from "../oauth/config.js";
 import { verifyAccessToken } from "../oauth/tokens.js";
 import { mcpLogger as logger } from "../utils/log-manager.js";
@@ -108,6 +113,7 @@ export function createMcpRouter(
     kanbanMutations?: OutlinerKanbanCardMutationService,
     kanbanDefinitionTools?: KanbanDefinitionTools,
     kanbanLifecycle?: KanbanLifecycleTools,
+    notificationSettings?: NotificationSettingsService,
 ) {
     const router = express.Router();
     const issuer = () => configuredIssuer ?? getOAuthIssuer();
@@ -381,6 +387,37 @@ export function createMcpRouter(
                 callback as never,
             );
         };
+        if (notificationSettings) {
+            const settingsCall = async <T>(operation: () => T | Promise<T>): Promise<T> => {
+                try {
+                    return await operation();
+                } catch (error) {
+                    if (error instanceof NotificationSettingsStoreError) {
+                        throw new McpReadError(error.code, error.message);
+                    }
+                    if (error instanceof McpReadError) throw error;
+                    if (error instanceof NotificationSettingsValidationError) {
+                        throw new McpReadError("invalid_argument", error.message);
+                    }
+                    throw new McpReadError("internal_failure", "Notification settings operation failed");
+                }
+            };
+            tool("get_notification_settings", "Read the authenticated owner's notification settings.", {},
+                () => settingsCall(() => notificationSettings.get(uid)), { strict: true });
+            tool("update_notification_settings", "Atomically change the authenticated owner's notification settings.", {
+                expectedRevision: z.number().int().nonnegative(),
+                upsert: z.array(z.unknown()),
+                removeRuleIds: z.array(z.string()),
+            }, args => settingsCall(() => notificationSettings.update(uid, args as never)), {
+                strict: true,
+                mutating: true,
+            });
+            tool("list_notification_targets", "List supported notification targets in one authorized project.", {
+                projectId: z.string(),
+                limit: z.number().int().min(1).max(100),
+                cursor: z.string().optional(),
+            }, args => settingsCall(() => notificationSettings.listTargets(uid, args)), { strict: true });
+        }
         tool(
             "resolve_url",
             "Resolve a supported Outliner URL into stable IDs.",
