@@ -19,7 +19,7 @@ import sys
 import tempfile
 import time
 from urllib.parse import urlsplit
-from ubuntu_mirror_candidate import fallback_plan, source_fields
+from ubuntu_mirror_candidate import COMPONENTS, fallback_plan, source_fields
 
 ROOT = Path(__file__).resolve().parents[2]
 FIRST_SECONDS = 150
