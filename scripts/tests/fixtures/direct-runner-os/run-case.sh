@@ -18,6 +18,10 @@ if proxy:
 PY
 case "$1" in
   observed-layout-failover)
+    # Warm only the unrelated prerequisites and locked browser. The control
+    # below then removes lsof and every cached package byte before exercising
+    # the observed source layout through the real setup entry point.
+    E2E_BROWSER=firefox bash /fixture/scripts/setup-direct-runner-os.sh
     dpkg --remove --force-depends lsof >/dev/null 2>&1 || true
     ! dpkg-query -W -f='${Status}' lsof 2>/dev/null | grep -q 'install ok installed'
     rm -f /etc/apt/sources.list /etc/apt/sources.list.d/* /var/cache/apt/archives/*.deb
@@ -44,9 +48,17 @@ EOF
       https://security.ubuntu.com/ubuntu/ > /etc/apt/apt-mirrors.txt
     echo '127.0.0.1 us-east-2.ec2.archive.ubuntu.com' >> /etc/hosts
     echo 'Acquire::http::Proxy::us-east-2.ec2.archive.ubuntu.com "DIRECT";' >> /etc/apt/apt.conf.d/80fixture-proxy
+    cat > /etc/apt/apt.conf.d/99observed-layout-paths <<'EOF'
+Dir "/";
+Dir::Etc "etc/apt";
+Dir::Etc::sourcelist "sources.list";
+Dir::Etc::sourceparts "sources.list.d";
+Dir::Etc::trusted "trusted.gpg";
+Dir::Etc::trustedparts "trusted.gpg.d";
+EOF
     python3 -u /fixture/scripts/tests/fixtures/direct-runner-os/first-mirror-stall.py > /tmp/first-mirror.log 2>&1 &
     proxy_pid=$!
-    trap 'kill "$proxy_pid" 2>/dev/null || true' EXIT
+    trap 'cat /tmp/first-mirror.log; kill "$proxy_pid" 2>/dev/null || true' EXIT
     for _ in {1..100}; do grep -q OBSERVED_FIRST_MIRROR_LISTENING /tmp/first-mirror.log && break; sleep .05; done
     grep -q OBSERVED_FIRST_MIRROR_LISTENING /tmp/first-mirror.log
     E2E_BROWSER=firefox bash /fixture/scripts/setup-direct-runner-os.sh 2>&1 | tee /tmp/observed-setup.log
