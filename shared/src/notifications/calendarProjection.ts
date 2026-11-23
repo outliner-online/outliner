@@ -60,6 +60,7 @@ export function validateCalendarObservationContext(value: unknown): CalendarCont
         if (
             typeof input[field] !== "number"
             || !Number.isFinite(input[field])
+            || !Number.isSafeInteger(input[field])
             || !Number.isFinite(new Date(input[field]).getTime())
         ) {
             return invalid(`${field} must be a representable finite epoch.`);

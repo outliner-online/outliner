@@ -32,6 +32,8 @@ import { OutlinerScheduleService } from "./mcp/schedule-service.js";
 import { OutlinerTableCreationService } from "./mcp/table-creation.js";
 import { UpdateGridPresentationTool } from "./mcp/update-grid-presentation-tool.js";
 import { getMetrics, recordMessage } from "./metrics.js";
+import { NotificationSettingsService } from "./notifications/settings-service.js";
+import { NotificationSettingsStore } from "./notifications/settings-store.js";
 import { getOAuthFirebaseWebConfig } from "./oauth/authorize-page.js";
 import { createOAuthRouter } from "./oauth/oauth-api.js";
 import { createDocumentStore, createPersistence } from "./persistence.js";
@@ -507,22 +509,35 @@ export async function startServer(
         kanbanObservations,
         kanbanStore,
     );
+    const mcpReads = new OutlinerReadService(
+        hocuspocus,
+        checkContainerAccess,
+        uid =>
+            directory.listDescriptors(uid, error => {
+                logger.warn(
+                    {
+                        event: "project_directory_descriptor_quarantined",
+                        directoryErrorCode: error.code,
+                        ...error.debug,
+                    },
+                    "Quarantined malformed accessible project descriptor",
+                );
+            }),
+    );
+    const kanbanReads = new OutlinerKanbanReadService(hocuspocus, checkContainerAccess, kanbanObservations);
+    const notificationSettings = new NotificationSettingsService(
+        new NotificationSettingsStore(() => persistence?.db),
+        {
+            assertTarget: async (uid, target) => {
+                if (target.kind === "grid") await mcpReads.getGrid(uid, target.projectId, target.objectId);
+                else if (target.kind === "calendar") await mcpReads.getCalendar(uid, target.projectId, target.objectId);
+                else await kanbanReads.get(uid, target.projectId, target.objectId, 0, 1);
+            },
+            listTargets: (uid, projectId) => mcpReads.listNotificationTargets(uid, projectId),
+        },
+    );
     app.use(createMcpRouter(
-        new OutlinerReadService(
-            hocuspocus,
-            checkContainerAccess,
-            uid =>
-                directory.listDescriptors(uid, error => {
-                    logger.warn(
-                        {
-                            event: "project_directory_descriptor_quarantined",
-                            directoryErrorCode: error.code,
-                            ...error.debug,
-                        },
-                        "Quarantined malformed accessible project descriptor",
-                    );
-                }),
-        ),
+        mcpReads,
         undefined,
         undefined,
         mcpRelations,
@@ -551,7 +566,7 @@ export async function startServer(
         new CreateTableTool(tableCreation, checkContainerAccess),
         // One long-lived instance: its replay window spans MCP requests.
         new UpdateGridPresentationTool(gridPresentation, checkContainerAccess),
-        new OutlinerKanbanReadService(hocuspocus, checkContainerAccess, kanbanObservations),
+        kanbanReads,
         kanbanMutations,
         new KanbanDefinitionTools(
             hocuspocus,
@@ -566,6 +581,7 @@ export async function startServer(
                 persistence ? createDocumentStore(persistence) : undefined,
             ),
         ),
+        notificationSettings,
     ));
 
     // Log rotation endpoint

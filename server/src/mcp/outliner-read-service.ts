@@ -467,6 +467,28 @@ export class OutlinerReadService {
             };
         });
     }
+
+    listNotificationTargets(uid: string, projectId: string): Promise<
+        { objectId: string; kind: "grid" | "calendar" | "kanban"; name: string; contextShape: string; }[]
+    > {
+        return this.withProject(uid, projectId, project => {
+            const collect = (mapName: string, kind: "grid" | "kanban", contextShape: string) =>
+                [...project.ydoc.getMap<Y.Map<unknown>>(mapName).entries()].map(([objectId, value]) => ({
+                    objectId,
+                    kind,
+                    name: String(value.get("name") ?? ""),
+                    contextShape,
+                }));
+            return [...collect("yjsGrids", "grid", "v1/table"),
+                ...[...project.calendars.entries()].map(([objectId, value]) => ({
+                    objectId,
+                    kind: "calendar" as const,
+                    name: String(value.get("name") ?? ""),
+                    contextShape: "v1/calendar-range",
+                })), ...collect("yjsKanbans", "kanban", "v1/board")]
+                .sort((a, b) => a.kind.localeCompare(b.kind) || a.objectId.localeCompare(b.objectId));
+        });
+    }
 }
 
 function yValueToPlain(value: unknown): unknown {
