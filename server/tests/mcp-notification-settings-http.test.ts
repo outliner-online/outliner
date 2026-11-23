@@ -1,6 +1,9 @@
 import Database from "better-sqlite3";
 import { expect } from "chai";
 import express from "express";
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import request from "supertest";
 import { createMcpRouter } from "../src/mcp/mcp-api.js";
 import type { OutlinerReadService } from "../src/mcp/outliner-read-service.js";
@@ -83,5 +86,53 @@ describe("notification settings mounted MCP tools", () => {
         db.close();
         const unavailable = bodyOf(await post(app, "owner-read", "get_notification_settings", {})).result;
         expect(JSON.parse(unavailable.content[0].text).code).to.equal("unavailable");
+    });
+
+    it("sanitizes transaction failures and leaves the reopened disk snapshot atomic", async () => {
+        const directory = mkdtempSync(join(tmpdir(), "notification-mcp-"));
+        const path = join(directory, "settings.sqlite");
+        let db = new Database(path);
+        const service = new NotificationSettingsService(new NotificationSettingsStore(() => db), {
+            assertTarget: async () => {},
+            listTargets: async () => [],
+        });
+        const app = express();
+        app.use(express.json());
+        app.use(
+            createMcpRouter(reads, () => ({ uid: "owner", scope: "outliner.read outliner.write" }), "http://localhost",
+                undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, service),
+        );
+        await post(app, "write", "update_notification_settings", {
+            expectedRevision: 0,
+            upsert: [rule],
+            removeRuleIds: [],
+        });
+        db.exec(`CREATE TRIGGER refuse_notification_rule BEFORE INSERT ON notification_rules
+            WHEN NEW.rule_id = 'refused' BEGIN SELECT RAISE(ABORT, 'private sqlite detail'); END`);
+        const refusedRule = { ...rule, ruleId: "refused", target: { ...rule.target, objectId: "other" } };
+
+        const failed = bodyOf(
+            await post(app, "write", "update_notification_settings", {
+                expectedRevision: 1,
+                upsert: [refusedRule],
+                removeRuleIds: [rule.ruleId],
+            }),
+        ).result;
+        const failure = JSON.parse(failed.content[0].text);
+        expect(failure).to.include({ code: "unavailable", error: "notification settings storage is unavailable" });
+        expect(failed.content[0].text).not.to.include("private sqlite detail");
+
+        db.close();
+        db = new Database(path);
+        const reopened = new NotificationSettingsStore(() => db).get("owner");
+        expect(reopened).to.deep.equal({ revision: 1, rules: [rule] });
+        db.prepare("UPDATE notification_rules SET rule_json='not-json' WHERE uid=?").run("owner");
+        const unreadable = bodyOf(await post(app, "write", "get_notification_settings", {})).result;
+        expect(JSON.parse(unreadable.content[0].text)).to.include({
+            code: "unavailable",
+            error: "notification settings storage is unavailable",
+        });
+        db.close();
+        rmSync(directory, { recursive: true, force: true });
     });
 });

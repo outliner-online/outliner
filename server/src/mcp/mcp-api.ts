@@ -3,7 +3,10 @@ import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import crypto from "crypto";
 import express from "express";
 import * as z from "zod/v4";
-import type { NotificationSettingsService } from "../notifications/settings-service.js";
+import {
+    type NotificationSettingsService,
+    NotificationSettingsValidationError,
+} from "../notifications/settings-service.js";
 import { NotificationSettingsStoreError } from "../notifications/settings-store.js";
 import { getOAuthIssuer } from "../oauth/config.js";
 import { verifyAccessToken } from "../oauth/tokens.js";
@@ -393,8 +396,10 @@ export function createMcpRouter(
                         throw new McpReadError(error.code, error.message);
                     }
                     if (error instanceof McpReadError) throw error;
-                    throw new McpReadError("invalid_argument",
-                        error instanceof Error ? error.message : "Invalid settings");
+                    if (error instanceof NotificationSettingsValidationError) {
+                        throw new McpReadError("invalid_argument", error.message);
+                    }
+                    throw new McpReadError("internal_failure", "Notification settings operation failed");
                 }
             };
             tool("get_notification_settings", "Read the authenticated owner's notification settings.", {},
