@@ -1,4 +1,7 @@
 import { expect } from "chai";
+import https from "node:https";
+import tls from "node:tls";
+import sinon from "sinon";
 import request from "supertest";
 import * as Y from "yjs";
 import { computeViewRange } from "../../shared/src/services/calendarGridRange.js";
@@ -58,8 +61,10 @@ describe("notification settings production startup", () => {
             channels: { mcp: true, mobile: false },
             context: { version: 1, locale: "en-US", timeZone: "Etc/UTC", surface: "table" },
         };
-        const anchor = Date.parse("2026-03-09T16:00:00Z");
+        // This Monday-start week crosses New York's 2026 spring DST transition.
+        const anchor = Date.parse("2026-03-06T16:00:00Z");
         const range = computeViewRange(anchor, "week", 1, "America/New_York");
+        expect(range.end - range.start).to.equal(167 * 60 * 60 * 1_000);
         const calendarRule = {
             ruleId: "calendar",
             target: { projectId: "project-live", kind: "calendar", objectId: "calendar-live" },
@@ -93,7 +98,8 @@ describe("notification settings production startup", () => {
         expect(events).to.deep.equal([]);
         const badRange = {
             ...calendarRule,
-            context: { ...calendarRule.context, rangeStartUtcMs: range.start + 3_600_000 },
+            // A fixed seven-day UTC interval is an hour too long across spring DST.
+            context: { ...calendarRule.context, rangeEndUtcMs: range.start + 7 * 24 * 60 * 60 * 1_000 },
         };
         expect(
             (await call(server, token, "update_notification_settings", {
@@ -102,14 +108,32 @@ describe("notification settings production startup", () => {
                 removeRuleIds: [],
             })).isError,
         ).to.equal(true);
-        const applied = await call(server, token, "update_notification_settings", {
-            expectedRevision: 0,
-            upsert: [grid, calendarRule],
-            removeRuleIds: [],
-        });
+        // These are the concrete network boundaries used by the available MCP
+        // callback and web-push transports. Settings changes must not reach any
+        // of them, regardless of which channel flags are enabled.
+        const sandbox = sinon.createSandbox();
+        const tlsSpy = sandbox.spy(tls, "connect");
+        const httpsSpy = sandbox.spy(https, "request");
+        let applied: Awaited<ReturnType<typeof call>>;
+        let transportCalls: { tls: number; https: number; };
+        try {
+            applied = await call(server, token, "update_notification_settings", {
+                expectedRevision: 0,
+                upsert: [grid, calendarRule],
+                removeRuleIds: [],
+            });
+            transportCalls = { tls: tlsSpy.callCount, https: httpsSpy.callCount };
+        } finally {
+            sandbox.restore();
+        }
         expect(applied.structuredContent.settings.rules.map((rule: { channels: unknown; }) => rule.channels))
             .to.deep.equal([{ mcp: false, mobile: true }, { mcp: true, mobile: false }]);
         expect(events).to.deep.equal([{ uid: "owner", revision: 1 }]);
+        expect(transportCalls!).to.deep.equal({ tls: 0, https: 0 });
+        const notificationTables = server.persistence!.db!.prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'notification_%' ORDER BY name",
+        ).all().map((row: unknown) => (row as { name: string; }).name);
+        expect(notificationTables).to.deep.equal(["notification_rules", "notification_settings_heads"]);
         await stopTestServer(server);
         server = await startTestServer(directory, acl);
         const reopened = await call(server, token, "get_notification_settings", {});
