@@ -81,9 +81,10 @@ export class ViewObservationService {
         kanbanHost: Pick<Hocuspocus, "openDirectConnection"> & Partial<Pick<Hocuspocus, "documents">>,
         private readonly canAccess: (uid: string, projectId: string) => Promise<boolean>,
         openers: Partial<Record<ViewKind, ViewProducerOpener>> = {},
+        kanbanOptions: ConstructorParameters<typeof OutlinerKanbanQueryService>[2] = {},
     ) {
         this.openers = {
-            kanban: kanbanOpener(kanbanHost, canAccess),
+            kanban: kanbanOpener(kanbanHost, canAccess, kanbanOptions),
             ...openers,
         };
     }
@@ -222,12 +223,14 @@ function deepLink(target: TargetRef, context: ObservationContext): string {
 function kanbanOpener(
     host: Pick<Hocuspocus, "openDirectConnection"> & Partial<Pick<Hocuspocus, "documents">>,
     canAccess: (uid: string, projectId: string) => Promise<boolean>,
+    options: ConstructorParameters<typeof OutlinerKanbanQueryService>[2],
 ): ViewProducerOpener {
     return async ({ uid, target, context }) => {
-        const service = new OutlinerKanbanQueryService(host, canAccess);
+        const service = new OutlinerKanbanQueryService(host, canAccess, options);
         let observed = await service.openObservation(uid, target.projectId, target.objectId);
         let documents = observationDocuments(observed);
         let closed = false;
+        let lifecycleGeneration = 0;
         let terminalReason: "incarnation_lost" | "not_found" | undefined;
         return {
             get documents() {
@@ -247,17 +250,46 @@ function kanbanOpener(
                         await observed.release();
                         return { status: "stale", reason: terminalReason };
                     }
-                    await observed.release();
+                    const retained = observed;
+                    const retainedDocuments = documents;
+                    const refreshGeneration = lifecycleGeneration;
+                    let candidate: typeof observed;
                     try {
-                        observed = await service.openObservation(uid, target.projectId, target.objectId);
+                        // Keep the retained leases alive while opening. This
+                        // makes same-room identity comparable across every
+                        // await instead of causing our own disconnect/reopen.
+                        candidate = await service.openObservation(uid, target.projectId, target.objectId);
                     } catch (error) {
                         if (error instanceof McpReadError && error.code === "not_found") {
                             terminalReason = "not_found";
+                            await retained.release();
                             return { status: "not_found", reason: terminalReason };
                         }
                         throw error;
                     }
-                    documents = observationDocuments(observed);
+                    if (
+                        closed || lifecycleGeneration !== refreshGeneration
+                        || !documentsRetainIncarnation(host, retainedDocuments)
+                    ) {
+                        terminalReason = closed ? undefined : "incarnation_lost";
+                        await candidate.release();
+                        await retained.release();
+                        return { status: "stale", reason: closed ? "closed" : "incarnation_lost" };
+                    }
+                    const candidateDocuments = observationDocuments(candidate);
+                    if (
+                        closed || lifecycleGeneration !== refreshGeneration
+                        || !authoritiesPreserveContinuity(retainedDocuments, candidateDocuments)
+                        || !documentsRetainIncarnation(host, candidateDocuments)
+                    ) {
+                        terminalReason = closed ? undefined : "incarnation_lost";
+                        await candidate.release();
+                        await retained.release();
+                        return { status: "stale", reason: closed ? "closed" : "incarnation_lost" };
+                    }
+                    observed = candidate;
+                    documents = candidateDocuments;
+                    await retained.release();
                 }
                 if (observed.status !== "success" || !observed.settings) {
                     return {
@@ -283,10 +315,25 @@ function kanbanOpener(
             async close() {
                 if (closed) return;
                 closed = true;
+                lifecycleGeneration++;
                 await observed.release();
             },
         };
     };
+}
+
+function authoritiesPreserveContinuity(retained: readonly Y.Doc[], candidate: readonly Y.Doc[]): boolean {
+    const candidateByRoom = new Map(candidate.map(document => [documentRoom(document), document]));
+    // Newly relevant Tables may be added. Every authority retained across the
+    // refresh must, however, still be the exact same serving-room document.
+    return retained.every(document => {
+        const replacement = candidateByRoom.get(documentRoom(document));
+        return replacement === undefined || replacement === document;
+    });
+}
+
+function documentRoom(document: Y.Doc): string {
+    return (document as Y.Doc & { name?: string; }).name ?? document.guid;
 }
 
 function observationDocuments(observed: Awaited<ReturnType<OutlinerKanbanQueryService["openObservation"]>>): Y.Doc[] {
@@ -301,10 +348,7 @@ function documentsRetainIncarnation(
     // A host without an exposed registry cannot prove continuity and must not
     // silently rebind a retained handle to a replacement room incarnation.
     if (!host.documents) return false;
-    return documents.every(document =>
-        host.documents!.get(document.guid) === document
-        || host.documents!.get((document as Y.Doc & { name?: string; }).name ?? "") === document
-    );
+    return documents.every(document => host.documents!.get(documentRoom(document)) === document);
 }
 
 function observationRevision(documents: readonly Y.Doc[]): string {
