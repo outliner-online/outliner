@@ -50,7 +50,10 @@ const exact = (value: Record<string, unknown>, keys: readonly string[]) =>
 const canonicalLocale = (value: unknown): string => {
     if (typeof value !== "string") throw new Error("locale is required");
     const canonical = Intl.getCanonicalLocales(value)[0];
-    if (!canonical || new Intl.DateTimeFormat(canonical).resolvedOptions().locale !== canonical) {
+    if (
+        !canonical
+        || Intl.getCanonicalLocales(new Intl.DateTimeFormat(canonical).resolvedOptions().locale)[0] !== canonical
+    ) {
         throw new Error("unsupported locale");
     }
     return canonical;
@@ -58,7 +61,6 @@ const canonicalLocale = (value: unknown): string => {
 const canonicalZone = (value: unknown): string => {
     if (typeof value !== "string") throw new Error("timeZone is required");
     const canonical = new Intl.DateTimeFormat("en-US", { timeZone: value }).resolvedOptions().timeZone;
-    if (canonical !== value) throw new Error("timeZone must be canonical");
     return canonical;
 };
 const object = (value: unknown, message: string): Record<string, unknown> => {

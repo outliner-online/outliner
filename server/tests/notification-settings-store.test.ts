@@ -69,4 +69,18 @@ describe("notification settings store", () => {
         expect(events).to.deep.equal([]);
         db.close();
     });
+
+    it("treats an alias update as an identical canonical no-op", async () => {
+        const db = new Database(":memory:");
+        const service = new NotificationSettingsService(new NotificationSettingsStore(() => db), {
+            assertTarget: async () => {},
+            listTargets: async () => [],
+        });
+        await service.update("owner", { expectedRevision: 0, upsert: [rule], removeRuleIds: [] });
+        const alias = { ...rule, context: { ...rule.context, timeZone: "Etc/UTC" } };
+        const result = await service.update("owner", { expectedRevision: 1, upsert: [alias], removeRuleIds: [] });
+        expect(result.applied).to.equal(false);
+        expect(result.settings).to.deep.equal({ revision: 1, rules: [rule] });
+        db.close();
+    });
 });

@@ -3,6 +3,7 @@ import type {
     NotificationRule,
     NotificationSettings,
 } from "../../../shared/src/notifications/notification-settings.js";
+import { normalizeNotificationRule } from "../../../shared/src/notifications/notification-settings.js";
 
 export class NotificationSettingsStoreError extends Error {
     constructor(readonly code: "stale_revision" | "unavailable", message: string) {
@@ -24,7 +25,10 @@ export class NotificationSettingsStore {
             const rows = db.prepare("SELECT rule_json FROM notification_rules WHERE uid=?").all(uid) as {
                 rule_json: string;
             }[];
-            const rules = rows.map(row => JSON.parse(row.rule_json) as NotificationRule)
+            if (!Number.isSafeInteger(head?.revision ?? 0) || (head?.revision ?? 0) < 0) {
+                throw new Error("invalid persisted revision");
+            }
+            const rules = rows.map(row => normalizeNotificationRule(JSON.parse(row.rule_json)))
                 .sort((a, b) => compareRuleIds(a.ruleId, b.ruleId));
             return { revision: head?.revision ?? 0, rules };
         } catch (error) {

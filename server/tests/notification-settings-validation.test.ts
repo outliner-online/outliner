@@ -14,4 +14,11 @@ describe("notification settings validation", () => {
         expect(() => normalizeNotificationRule({ ...base, owner: "someone-else" })).to.throw("unknown");
         expect(() => normalizeNotificationRule({ ...base, context: { ...base.context, surface: "board" } })).to.throw();
     });
+    it("canonicalizes runtime-supported time-zone aliases", () => {
+        const normalized = normalizeNotificationRule({
+            ...base,
+            context: { ...base.context, timeZone: "Etc/UTC" },
+        });
+        expect(normalized.context.timeZone).to.equal("UTC");
+    });
 });

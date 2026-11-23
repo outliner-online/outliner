@@ -33,7 +33,7 @@ export function validateCalendarObservationContext(value: unknown): CalendarCont
     let locale: string;
     try {
         locale = Intl.getCanonicalLocales(input.locale)[0];
-        if (!locale || locale !== input.locale) return invalid("Locale must be canonical.");
+        if (!locale) return invalid("Locale is unsupported.");
         const resolvedLocale = new Intl.DateTimeFormat(locale).resolvedOptions().locale;
         // Intl accepts structurally valid but unavailable locales by silently
         // falling back to the host default. That fallback is not authoritative
@@ -46,7 +46,6 @@ export function validateCalendarObservationContext(value: unknown): CalendarCont
     let timeZone: string;
     try {
         timeZone = new Intl.DateTimeFormat("en-US", { timeZone: input.timeZone }).resolvedOptions().timeZone;
-        if (timeZone !== input.timeZone) return invalid("Time zone must be a canonical IANA identifier.");
     } catch {
         return invalid("Time zone is unsupported.");
     }
