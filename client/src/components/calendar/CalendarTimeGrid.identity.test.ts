@@ -165,20 +165,21 @@ it("keeps the focused occurrence through accepted keyboard moves that change its
         duration: "00:30:00",
     };
     const moves: number[] = [];
-    let view: ReturnType<typeof render>;
+    const state: { view?: ReturnType<typeof render>; } = {};
     const onKeyboardMove = async (_entry: CalendarEntry, startMs: number) => {
         moves.push(startMs);
-        await view.rerender({
+        await state.view!.rerender({
             ...props,
             layout: layoutTimeGrid(entries([{ ...original, start: new Date(startMs).toISOString() }]), rangeStart,
                 rangeEnd),
         });
     };
     const props = callbacks(vi.fn(), onKeyboardMove);
-    view = render(CalendarTimeGrid, {
+    const view = render(CalendarTimeGrid, {
         ...props,
         layout: layoutTimeGrid(entries([original]), rangeStart, rangeEnd),
     });
+    state.view = view;
     const title = view.getByText("Moving") as HTMLElement;
     title.focus();
 
