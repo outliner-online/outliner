@@ -113,9 +113,12 @@ export function normalizeNotificationRule(value: unknown): NotificationRule {
             surface: kind === "grid" ? "table" : "board",
         };
     }
+    const ruleId = id(rule.ruleId, "ruleId");
+    const objectId = id(target.objectId, "objectId");
+    if (ruleId === objectId) throw new Error("ruleId must be distinct from objectId");
     return {
-        ruleId: id(rule.ruleId, "ruleId"),
-        target: { projectId: id(target.projectId, "projectId"), kind, objectId: id(target.objectId, "objectId") },
+        ruleId,
+        target: { projectId: id(target.projectId, "projectId"), kind, objectId },
         enabled: rule.enabled,
         channels: { mcp: channels.mcp, mobile: channels.mobile },
         context,

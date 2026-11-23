@@ -72,6 +72,33 @@ describe("notification target discovery production startup", () => {
             });
             expect([...first.structuredContent.targets, ...second.structuredContent.targets].map(target => target.kind))
                 .to.deep.equal(["calendar", "grid", "kanban"]);
+
+            const beforeInsert = await call({ projectId: "catalog", limit: 1 });
+            expect(beforeInsert.structuredContent.targets[0].objectId).to.equal("calendar-existing");
+            const insertConnection = await server.hocuspocus.openDirectConnection("projects/catalog", {});
+            const inserted = new Y.Map<unknown>();
+            inserted.set("name", "Earlier calendar");
+            Project.fromDoc(insertConnection.document as unknown as Y.Doc).calendars.set("calendar-before", inserted);
+            await insertConnection.disconnect();
+            const afterInsert = await call({
+                projectId: "catalog",
+                limit: 1,
+                cursor: beforeInsert.structuredContent.cursor,
+            });
+            expect(afterInsert.structuredContent.targets[0].objectId).to.equal("grid-existing");
+
+            const beforeDelete = await call({ projectId: "catalog", limit: 1 });
+            expect(beforeDelete.structuredContent.targets[0].objectId).to.equal("calendar-before");
+            const deleteConnection = await server.hocuspocus.openDirectConnection("projects/catalog", {});
+            Project.fromDoc(deleteConnection.document as unknown as Y.Doc).calendars.delete("calendar-before");
+            await deleteConnection.disconnect();
+            const afterDelete = await call({
+                projectId: "catalog",
+                limit: 1,
+                cursor: beforeDelete.structuredContent.cursor,
+            });
+            expect(afterDelete.structuredContent.targets[0].objectId).to.equal("calendar-existing");
+
             for (const args of [{ projectId: "catalog", limit: 0 }, { projectId: "catalog", limit: 101 }]) {
                 const invalid = await call(args);
                 expect(invalid.isError).to.equal(true);

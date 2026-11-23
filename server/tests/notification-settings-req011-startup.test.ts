@@ -129,4 +129,34 @@ describe("notification settings REQ-011 production startup", () => {
             await stopTestServer(server);
         }
     });
+
+    it("atomically rejects malformed removal IDs and rule IDs equal to target IDs", async () => {
+        const { server, call } = await start(["validation-project"]);
+        try {
+            const events: unknown[] = [];
+            server.notificationSettings.onCommittedChange(event => events.push(event));
+            const valid = rule("valid-rule", "validation-project");
+            const invalidChanges = [
+                { upsert: [valid], removeRuleIds: [""] },
+                { upsert: [valid], removeRuleIds: ["x".repeat(201)] },
+                {
+                    upsert: [valid, rule("grid-existing", "validation-project")],
+                    removeRuleIds: [],
+                },
+            ];
+            for (const change of invalidChanges) {
+                const refused = await call("update_notification_settings", { expectedRevision: 0, ...change });
+                expect(refused.isError).to.equal(true);
+                expect(JSON.parse(refused.content[0].text).code).to.equal("invalid_argument");
+                expect(server.notificationSettings.store.get("owner")).to.deep.equal({ revision: 0, rules: [] });
+                expect(events).to.deep.equal([]);
+            }
+            expect(
+                server.persistence!.db!.prepare("SELECT revision FROM notification_settings_heads WHERE uid=?")
+                    .get("owner"),
+            ).to.equal(undefined);
+        } finally {
+            await stopTestServer(server);
+        }
+    });
 });

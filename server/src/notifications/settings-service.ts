@@ -28,27 +28,46 @@ export class NotificationSettingsService {
         return this.store.enabled(uid);
     }
     async listTargets(uid: string, input: { projectId: string; limit: number; cursor?: string; }) {
-        let offset = 0;
+        let after: { kind: NotificationTargetSummary["kind"]; objectId: string; } | undefined;
         if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 100) {
             throw new NotificationSettingsValidationError("limit must be 1..100");
         }
         if (input.cursor !== undefined) {
             try {
-                offset = JSON.parse(Buffer.from(input.cursor, "base64url").toString()) as number;
+                const decoded: unknown = JSON.parse(Buffer.from(input.cursor, "base64url").toString());
+                if (
+                    !decoded || typeof decoded !== "object" || Array.isArray(decoded)
+                    || Object.keys(decoded).sort().join(",") !== "kind,objectId,projectId"
+                ) throw new Error("invalid cursor shape");
+                const value = decoded as { projectId?: unknown; kind?: unknown; objectId?: unknown; };
+                if (
+                    value.projectId !== input.projectId
+                    || (value.kind !== "grid" && value.kind !== "calendar" && value.kind !== "kanban")
+                    || typeof value.objectId !== "string" || value.objectId.length < 1 || value.objectId.length > 200
+                ) throw new Error("invalid cursor value");
+                after = { kind: value.kind, objectId: value.objectId };
             } catch {
-                throw new NotificationSettingsValidationError("cursor is invalid");
-            }
-            if (!Number.isInteger(offset) || offset < 0) {
                 throw new NotificationSettingsValidationError("cursor is invalid");
             }
         }
         const targets = await this.authority.listTargets(uid, input.projectId);
-        const page = targets.slice(offset, offset + input.limit);
-        const next = offset + page.length;
+        const compare = (target: Pick<NotificationTargetSummary, "kind" | "objectId">, cursor: typeof after) =>
+            target.kind.localeCompare(cursor!.kind) || target.objectId.localeCompare(cursor!.objectId);
+        const remaining = after ? targets.filter(target => compare(target, after) > 0) : targets;
+        const page = remaining.slice(0, input.limit);
+        const last = page.at(-1);
         return {
             projectId: input.projectId,
             targets: page,
-            ...(next < targets.length ? { cursor: Buffer.from(JSON.stringify(next)).toString("base64url") } : {}),
+            ...(last && page.length < remaining.length
+                ? {
+                    cursor: Buffer.from(JSON.stringify({
+                        projectId: input.projectId,
+                        kind: last.kind,
+                        objectId: last.objectId,
+                    })).toString("base64url"),
+                }
+                : {}),
         };
     }
     async update(uid: string, change: NotificationSettingsChange) {
@@ -67,7 +86,9 @@ export class NotificationSettingsService {
         const removes = new Set(change.removeRuleIds);
         if (
             upsertIds.size !== upsert.length || removes.size !== change.removeRuleIds.length
-            || change.removeRuleIds.some(id => typeof id !== "string" || upsertIds.has(id))
+            || change.removeRuleIds.some(id =>
+                typeof id !== "string" || id.length < 1 || id.length > 200 || upsertIds.has(id)
+            )
         ) throw new NotificationSettingsValidationError("duplicate or conflicting rule operations");
         for (const rule of upsert) await this.authority.assertTarget(uid, rule.target);
         const byId = new Map(this.get(uid).rules.map(rule => [rule.ruleId, rule]));
