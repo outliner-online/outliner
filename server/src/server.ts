@@ -848,6 +848,7 @@ export async function startServer(
         gridPresentation,
         mcpRelations,
         kanbanObservations,
+        notificationSettings,
         shutdown,
     };
 }
