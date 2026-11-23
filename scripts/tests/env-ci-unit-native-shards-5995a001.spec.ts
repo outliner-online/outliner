@@ -42,29 +42,32 @@ printf '{"/source.ts":{"path":"/source.ts","statementMap":{"0":{}},"fnMap":{},"b
     return file;
 }
 function realVitestFailureRunner(directory: string) {
+    const sourceFile = path.join(directory, "covered-source.js");
     const testFile = path.join(directory, "deliberate-failure.test.js");
     const config = path.join(directory, "vitest.config.js");
+    fs.writeFileSync(sourceFile, "export const coveredValue = 1;\n");
     fs.writeFileSync(testFile,
-        'import { test, expect } from "vitest"; test("deliberate native failure", () => expect(1).toBe(2));\n');
+        'import { test, expect } from "vitest"; import { coveredValue } from "./covered-source.js"; test("deliberate native failure", () => expect(coveredValue).toBe(2));\n');
     fs.writeFileSync(config,
-        `export default { test: { root: ${JSON.stringify(directory)}, include: ["*.test.js"], globals: true } };\n`);
-    const wrapper = path.join(directory, "real-vitest-wrapper");
-    const vitest = path.join(root, "scripts/tests/node_modules/.bin/vitest");
-    executable(wrapper, `#!/bin/bash
-args=()
-skip=false
-for arg in "$@"; do
-  if [[ "$skip" == true ]]; then skip=false; continue; fi
-  case "$arg" in
-    --project) skip=true ;;
-    --coverage|--coverage.reportsDirectory=*|--shard=*) ;;
-    --reporter=github-actions|--reporter=dot) ;;
-    *) args+=("$arg") ;;
-  esac
-done
-exec ${JSON.stringify(vitest)} "\${args[@]}" --config=${JSON.stringify(config)}
-`);
-    return { wrapper, config, vitest };
+        `export default { test: { projects: [{ test: { name: "unit", root: ${
+            JSON.stringify(directory)
+        }, include: ["*.test.js"], globals: true, coverage: { enabled: true, provider: "v8", reporter: ["json"], include: [${
+            JSON.stringify(sourceFile)
+        }] } } }] } };\n`);
+    return { config, vitest: path.join(root, "client/node_modules/.bin/vitest") };
+}
+function failingBasePackage(directory: string) {
+    const baseDirectory = path.join(directory, "base-package");
+    fs.mkdirSync(baseDirectory);
+    fs.symlinkSync(path.join(root, "client/node_modules"), path.join(baseDirectory, "node_modules"), "dir");
+    fs.writeFileSync(path.join(baseDirectory, "package.json"), JSON.stringify({
+        scripts: { "test:base": "vitest run --config vitest.base.config.ts" },
+    }));
+    fs.writeFileSync(path.join(baseDirectory, "deliberate-base-failure.test.js"),
+        'import { test, expect } from "vitest"; test("deliberate base-path failure", () => expect(1).toBe(2));\n');
+    fs.writeFileSync(path.join(baseDirectory, "vitest.base.config.ts"),
+        `export default { test: { root: ${JSON.stringify(baseDirectory)}, include: ["*.test.js"] } };\n`);
+    return baseDirectory;
 }
 
 function artifactFixture(directory: string, run = "100", attempt = "2") {
@@ -142,13 +145,15 @@ describe("unit CI native shard orchestration", () => {
         const failed = spawnSync(path.join(root, "scripts/ci/run-unit-tests.sh"), [], {
             cwd: root,
             env: env({
-                UNIT_SHARD: "1/2",
-                UNIT_VITEST_BIN: realFailure.wrapper,
+                UNIT_SHARD: "1/1",
+                UNIT_VITEST_BIN: realFailure.vitest,
+                UNIT_VITEST_CONFIG: realFailure.config,
                 UNIT_EVIDENCE_DIR: directory,
                 UNIT_COVERAGE_DIR: path.join(directory, "real-coverage"),
             }),
         });
         expect(failed.status).toBe(1);
+        expect(`${failed.stdout}\n${failed.stderr}`).toContain("deliberate native failure");
         expect(
             JSON.parse(fs.readFileSync(path.join(directory, "shard-1.json"), "utf8")).testResults[0].assertionResults[0]
                 .status,
@@ -185,11 +190,7 @@ describe("unit CI native shard orchestration", () => {
         const directory = temporaryDirectory();
         artifactFixture(directory);
         const vitest = fakeVitest(directory);
-        const realBaseFailure = realVitestFailureRunner(directory);
-        const failingBase = path.join(directory, "base-fails");
-        executable(failingBase, `#!/bin/sh
-exec ${JSON.stringify(realBaseFailure.vitest)} run --config=${JSON.stringify(realBaseFailure.config)}
-`);
+        const failingBase = failingBasePackage(directory);
         const run = (artifacts: string, extra: Record<string, string> = {}) =>
             spawnSync(
                 path.join(root, "scripts/ci/finalize-unit-tests.sh"),
@@ -199,16 +200,18 @@ exec ${JSON.stringify(realBaseFailure.vitest)} run --config=${JSON.stringify(rea
                     env: env({
                         UNIT_ARTIFACT_DIR: artifacts,
                         UNIT_VITEST_BIN: vitest,
-                        UNIT_BASE_RUNNER: failingBase,
+                        UNIT_BASE_RUNNER: "",
+                        UNIT_BASE_DIR: failingBase,
                         UNIT_COVERAGE_MANIFEST: path.join(directory, "coverage-manifest.json"),
                         UNIT_COVERAGE_BASELINE: path.join(directory, "coverage-baseline.json"),
                         ...extra,
                     }),
                 },
             );
-        expect(run(directory).status).toBe(1);
+        const baseFailure = run(directory);
+        expect(baseFailure.status).toBe(1);
         expect(fs.readFileSync(path.join(root, "job_logs/base-test.log"), "utf8")).toContain(
-            "deliberate native failure",
+            "deliberate base-path failure",
         );
         fs.rmSync(path.join(directory, "unit-shard-2-100-2/unit-evidence/shard-2.json"));
         expect(run(directory).stderr.toString()).toContain("missing current-attempt execution report");
