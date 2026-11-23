@@ -102,6 +102,22 @@ export class OutlinerKanbanReadService {
         await this.authorize(uid, projectId);
     }
 
+    /** Validate registry existence without creating or transferring an observation lease. */
+    async assertTargetExists(uid: string, projectId: string, kanbanId: string): Promise<void> {
+        this.validate(projectId, kanbanId);
+        await this.authorize(uid, projectId);
+        const connection = await openLiveRoom(this.host, `projects/${projectId}`, uid, { effect: "none" });
+        try {
+            await this.authorize(uid, projectId);
+            if (!getKanbanRegistry(connection.document as never).has(kanbanId)) {
+                throw new McpReadError("not_found", "Kanban not found");
+            }
+            await this.authorize(uid, projectId);
+        } finally {
+            await closeLiveRoom(this.host, connection);
+        }
+    }
+
     async list(uid: string, projectId: string, limitValue?: number, cursor?: string) {
         this.validate(projectId);
         const limit = bounded(limitValue, 100, "limit", 1, 500);

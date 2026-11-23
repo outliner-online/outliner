@@ -31,6 +31,7 @@ export type McpErrorCode =
     | "validation_failed"
     | "destructive_confirmation_required"
     | "size_limit"
+    | "unavailable"
     | "internal_failure";
 
 export class McpReadError extends Error {

@@ -27,10 +27,12 @@ export class NotificationSettingsStore {
         const head = db.prepare("SELECT revision FROM notification_settings_heads WHERE uid=?").get(uid) as {
             revision: number;
         } | undefined;
-        const rows = db.prepare("SELECT rule_json FROM notification_rules WHERE uid=? ORDER BY rule_id").all(uid) as {
+        const rows = db.prepare("SELECT rule_json FROM notification_rules WHERE uid=?").all(uid) as {
             rule_json: string;
         }[];
-        return { revision: head?.revision ?? 0, rules: rows.map(row => JSON.parse(row.rule_json) as NotificationRule) };
+        const rules = rows.map(row => JSON.parse(row.rule_json) as NotificationRule)
+            .sort((a, b) => compareRuleIds(a.ruleId, b.ruleId));
+        return { revision: head?.revision ?? 0, rules };
     }
     apply(
         uid: string,
@@ -78,4 +80,9 @@ export class NotificationSettingsStore {
         }
         return db;
     }
+}
+
+/** SQLite and service comparisons must share one locale-independent canonical order. */
+export function compareRuleIds(left: string, right: string): number {
+    return left < right ? -1 : left > right ? 1 : 0;
 }

@@ -5,7 +5,7 @@ import type {
     NotificationTarget,
 } from "../../../shared/src/notifications/notification-settings.js";
 import { normalizeNotificationRule } from "../../../shared/src/notifications/notification-settings.js";
-import { NotificationSettingsStore } from "./settings-store.js";
+import { compareRuleIds, NotificationSettingsStore } from "./settings-store.js";
 
 export interface NotificationTargetAuthority {
     assertTarget(uid: string, target: NotificationTarget): Promise<void>;
@@ -65,7 +65,7 @@ export class NotificationSettingsService {
         const byId = new Map(this.get(uid).rules.map(rule => [rule.ruleId, rule]));
         for (const id of removes) byId.delete(id);
         for (const rule of upsert) byId.set(rule.ruleId, rule);
-        const rules = [...byId.values()].sort((a, b) => a.ruleId.localeCompare(b.ruleId));
+        const rules = [...byId.values()].sort((a, b) => compareRuleIds(a.ruleId, b.ruleId));
         if (
             rules.length > 128
             || Buffer.byteLength(JSON.stringify({ revision: change.expectedRevision + 1, rules })) > 65536

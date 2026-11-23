@@ -531,7 +531,7 @@ export async function startServer(
             assertTarget: async (uid, target) => {
                 if (target.kind === "grid") await mcpReads.getGrid(uid, target.projectId, target.objectId);
                 else if (target.kind === "calendar") await mcpReads.getCalendar(uid, target.projectId, target.objectId);
-                else await kanbanReads.get(uid, target.projectId, target.objectId, 0, 1);
+                else await kanbanReads.assertTargetExists(uid, target.projectId, target.objectId);
             },
             listTargets: (uid, projectId) => mcpReads.listNotificationTargets(uid, projectId),
         },

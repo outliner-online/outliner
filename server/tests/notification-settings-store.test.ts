@@ -41,4 +41,32 @@ describe("notification settings store", () => {
         expect(store.get("owner-a").revision).to.equal(1);
         db.close();
     });
+
+    it("keeps mixed-case identical updates and absent removals as signal-free no-ops", async () => {
+        const db = new Database(":memory:");
+        const store = new NotificationSettingsStore(() => db);
+        const service = new NotificationSettingsService(store, {
+            assertTarget: async () => {},
+            listTargets: async () => [],
+        });
+        const upper = { ...rule, ruleId: "B", target: { ...rule.target, objectId: "upper" } };
+        const lower = { ...rule, ruleId: "a", target: { ...rule.target, objectId: "lower" } };
+        await service.update("owner", { expectedRevision: 0, upsert: [lower, upper], removeRuleIds: [] });
+        const events: unknown[] = [];
+        service.onCommittedChange(event => events.push(event));
+
+        const identical = await service.update("owner", {
+            expectedRevision: 1,
+            upsert: [lower, upper],
+            removeRuleIds: ["absent"],
+        });
+
+        expect(identical).to.deep.equal({
+            applied: false,
+            priorRevision: 1,
+            settings: { revision: 1, rules: [upper, lower] },
+        });
+        expect(events).to.deep.equal([]);
+        db.close();
+    });
 });
