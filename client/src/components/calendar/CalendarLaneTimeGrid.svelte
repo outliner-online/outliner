@@ -16,14 +16,13 @@
 import type { DayHeader } from "../../services/calendar/calendarDayHeaders";
 import type { CalendarEntry } from "../../services/calendar/calendarEntries";
 import type { CalendarLane } from "../../services/calendar/calendarGrouping";
-import { collapseLanePath } from "../../services/calendar/calendarGrouping";
-import { layoutTimeGrid } from "../../services/calendar/calendarTimeGridLayout";
+import { type CalendarLaneTimeGridBand, layoutCalendarLaneTimeGrid } from "../../services/calendar/calendarTimeGridLayout";
 import CalendarTimeGrid from "./CalendarTimeGrid.svelte";
 
-const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 interface Props {
     lanes: CalendarLane[];
+    acceptedBands?: CalendarLaneTimeGridBand[];
     rangeStart: number;
     rangeEnd: number;
     workingHoursStartMinutes: number;
@@ -54,6 +53,7 @@ interface Props {
 
 let {
     lanes,
+    acceptedBands,
     rangeStart,
     rangeEnd,
     workingHoursStartMinutes,
@@ -79,7 +79,7 @@ let {
     onEntryContextMenu,
 }: Props = $props();
 
-const bands = $derived(lanes.map((lane) => ({ lane, layout: layoutTimeGrid(lane.entries, rangeStart, rangeEnd) })));
+const bands = $derived(acceptedBands ?? layoutCalendarLaneTimeGrid(lanes, rangeStart, rangeEnd));
 
 function laneTestId(value: string | undefined): string {
     return value ?? "none";
@@ -135,14 +135,14 @@ function onBandDrop(lane: CalendarLane, e: DragEvent) {
                         data-testid={`calendar-day-header-${header.dayIndex}`}
                         data-date={header.isoDate}
                     >
-                        {WEEKDAY_LABELS[header.weekday]} {header.dayOfMonth}
+                        {header.label}
                     </div>
                 {/each}
             </div>
         </div>
     {/if}
 
-    {#each bands as { lane, layout } (laneTestId(lane.value))}
+    {#each bands as { lane, label, layout } (laneTestId(lane.value))}
         <div
             role="group"
             class="lane-band"
@@ -166,7 +166,7 @@ function onBandDrop(lane: CalendarLane, e: DragEvent) {
                     onBandDrop(lane, e);
                 }}
             >
-                {collapseLanePath(lane.path)}
+                {label}
                 {#if hoveredLane === laneTestId(lane.value)}
                     <span class="lane-drop-hint">{hoveredMode === "add" ? "add" : "move here"}</span>
                 {/if}

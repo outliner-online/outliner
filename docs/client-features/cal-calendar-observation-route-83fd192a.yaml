@@ -1,0 +1,12 @@
+id: FTR-83fd192a
+title: Calendar observation routes preserve authorized identity and viewing context
+title-ja: Calendar 観測リンクの認可済み ID と表示コンテキストの保持
+description: Saved observation URLs enter the actual production Calendar page, acquire the project by ID through room authorization, and resolve the exact Calendar ID. Project/Calendar renames and reused titles or names cannot redirect the saved target. Invalid context, inaccessible project IDs and absent Calendar IDs remain explicit. Opening preserves committed settings while the saved locale, timezone, week start and DST-spanning range override viewer defaults. Route loading tracks route inputs without subscribing to its own reactive client-registry changes. A late authorized old room sync cannot replace the newer Calendar or the current project's sidebar data.
+category: client
+status: implemented
+tests:
+- client/e2e/onprem/cal-observation-context-navigation-83fd192a.spec.ts
+- client/e2e/onprem/cal-observation-navigation-83fd192a.spec.ts
+- client/e2e/onprem/cal-observation-route-83fd192a.spec.ts
+- client/src/components/management/CalendarDetailView.navigation.test.ts
+notes: Run the browser specs individually with scripts/test-onprem-client.sh and the filename. They use isolated private SQLite data, real local password sessions, room admission, ID acquisition, SQL and the production Calendar renderer. The race test forwards real authentication and holds real sync messages only. Same-Calendar context-only navigation changes saved date and mode through the real client router; Calendar observers also cover reloaded room documents and require zero settings writes. Initial acquisition records a bounded recurrence outcome for comparison with a disposable copy lacking the untrack fix. The disposable control observed four project-room opens and failed with recurrent-project-open; restoring the exact fixed component produced one open and passed the same canonical route spec. This establishes the bounded route portion of issue 5980 REQ-008/009/010; it does not establish cloud Firebase authorization or projection/render parity across all Calendar modes, month filters or Gantt collapse state.

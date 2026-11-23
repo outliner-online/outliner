@@ -1,6 +1,6 @@
 <script lang="ts">
     import Loader from "../Loader.svelte";
-    import { onMount } from "svelte";
+    import { onMount, untrack } from "svelte";
     import { goto } from "$app/navigation";
     import { userManager } from "../../auth/UserManager";
     import AuthComponent from "../AuthComponent.svelte";
@@ -14,17 +14,19 @@
     import { isPublicProject, projectRoute } from "../../lib/publicProject";
     import { projectCalendarsRoute, projectObjectsSelectedRoute } from "../../lib/managementPaths";
     import { DemoInitAborted } from "../../lib/demoInit";
-    import { openRouteProject, type RouteProjectHandle } from "../../lib/routeProject";
+    import { openRouteProject, openRouteProjectById, type RouteProjectHandle } from "../../lib/routeProject";
     import { Project } from "$shared/app-schema";
+    import type { CalendarObservationContextV1 } from "$shared/notifications/calendarProjection";
 
     const logger = getLogger("CalendarStandalonePage");
 
     interface Props {
         projectName: string;
         calendarName: string;
+        observationContext?: CalendarObservationContextV1;
     }
 
-    let { projectName, calendarName }: Props = $props();
+    let { projectName, calendarName, observationContext }: Props = $props();
 
     // Page state
     let error: string | undefined = $state(undefined);
@@ -43,6 +45,7 @@
     let calendarDisplayName: string | undefined = $state(undefined);
     let isDestroyed = false;
     let projectHandle: RouteProjectHandle | undefined = undefined;
+    let loadGeneration = 0;
 
     // Public projects stay readable for anonymous visitors. Deriving the gate
     // instead of folding the demo case into `isAuthenticated` keeps the auth
@@ -74,7 +77,13 @@
     async function loadCalendar() {
         if (!projectName || !calendarName || !canAccess) return;
 
-        logger.info(`Loading standalone calendar: project="${projectName}", calendar="${calendarName}"`);
+        const generation = ++loadGeneration;
+        const requestedProjectName = projectName;
+        const requestedCalendarName = calendarName;
+        const requestedContext = observationContext;
+        const isStale = () => isDestroyed || generation !== loadGeneration;
+
+        logger.info(`Loading standalone calendar: project="${requestedProjectName}", calendar="${requestedCalendarName}"`);
         isLoading = true;
         error = undefined;
         notFound = false;
@@ -85,12 +94,18 @@
             // parameter change cannot leak a demo client reference.
             projectHandle?.release();
             projectHandle = undefined;
-            projectHandle = await openRouteProject(projectName, () => isDestroyed);
-            if (!projectHandle) {
+            const openedHandle = requestedContext
+                ? await openRouteProjectById(requestedProjectName, isStale)
+                : await openRouteProject(requestedProjectName, isStale);
+            if (isStale()) {
+                openedHandle?.release();
+                return;
+            }
+            projectHandle = openedHandle;
+            if (!openedHandle) {
                 notFound = true;
                 return;
             }
-            if (isDestroyed) return;
 
             if (!store.project?.ydoc) {
                 error = "Failed to load project document.";
@@ -100,10 +115,12 @@
             const project = Project.fromDoc(store.project.ydoc);
             // The route carries the display name; falling back to the id
             // keeps links written against the identifier working too.
-            const entry = listCalendars(project).find((e) => e.settings.name === calendarName)
-                ?? listCalendars(project).find((e) => e.id === calendarName);
+            const entry = requestedContext
+                ? listCalendars(project).find((e) => e.id === requestedCalendarName)
+                : listCalendars(project).find((e) => e.settings.name === requestedCalendarName)
+                    ?? listCalendars(project).find((e) => e.id === requestedCalendarName);
             if (!entry) {
-                logger.warn(`Calendar "${calendarName}" not found in project "${projectName}"`);
+                logger.warn(`Calendar "${requestedCalendarName}" not found in project "${requestedProjectName}"`);
                 notFound = true;
                 return;
             }
@@ -113,17 +130,21 @@
             calendarProjectId = yjsStore.currentProjectId ?? undefined;
             calendarDisplayName = entry.settings.name;
         } catch (err) {
+            if (isStale()) return;
             if (err instanceof DemoInitAborted) return;
             logger.error({ error: err }, "Failed to load calendar page:");
             error = err instanceof Error ? err.message : "An error occurred while loading the calendar.";
         } finally {
-            isLoading = false;
+            if (!isStale()) isLoading = false;
         }
     }
 
     $effect(() => {
+        void observationContext;
         if (canAccess && projectName && calendarName) {
-            loadCalendar();
+            // Acquire/release reads the reactive client registry. Those reads
+            // must not subscribe this route to its own connection changes.
+            untrack(() => loadCalendar());
         } else {
             isLoading = false;
         }
@@ -134,6 +155,7 @@
 
         return () => {
             isDestroyed = true;
+            loadGeneration++;
             projectHandle?.release();
             projectHandle = undefined;
         };
@@ -242,7 +264,7 @@
     {:else if calendarId && calendarProject}
         <div class="flex-grow min-h-0 relative border border-gray-200 rounded-md overflow-hidden bg-white p-2">
             {#key calendarId}
-                <CalendarView project={calendarProject} projectId={calendarProjectId} {calendarId} />
+                <CalendarView project={calendarProject} projectId={calendarProjectId} {calendarId} {observationContext} />
             {/key}
         </div>
     {/if}

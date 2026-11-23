@@ -211,6 +211,17 @@ describe("computeGanttTicks", () => {
         expect(ticks.map((t) => t.label)).toEqual(["3/15", "3/16", "3/17"]);
     });
 
+    it("uses the explicit observation locale for Gantt labels", () => {
+        const ticks = computeGanttTicks(
+            Date.parse("2026-03-15T00:00:00Z"),
+            Date.parse("2026-03-17T00:00:00Z"),
+            "day",
+            "UTC",
+            "ja-JP",
+        );
+        expect(ticks.map((tick) => tick.label)).toEqual(["3月15日", "3月16日"]);
+    });
+
     it("month scale snaps ticks to real calendar-month starts", () => {
         const ticks = computeGanttTicks(
             Date.parse("2026-01-15T00:00:00Z"),
