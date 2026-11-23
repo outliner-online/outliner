@@ -24,7 +24,7 @@ class SourceSummary(unittest.TestCase):
             {'components': 'ubuntu-four', 'enabled': 'default', 'signed_by': 'ubuntu-archive-keyring', 'suites': 'security-only', 'types': 'deb', 'uri': 'security-http'}], 'unknown_count': 0})
         combined = SOURCES.split('\n\n')[0].replace('resolute-backports', 'resolute-backports resolute-security')
         self.assertEqual(m.source_shape_summary(combined)['paragraphs'], [
-            {'suites': 'archive-and-security', 'uri': 'image-mirrorlist'}])
+            {'components': 'ubuntu-four', 'enabled': 'default', 'signed_by': 'ubuntu-archive-keyring', 'suites': 'archive-and-security', 'types': 'deb', 'uri': 'image-mirrorlist'}])
         from test_ubuntu_mirror_candidate import MIRRORS, FAILED
         with self.assertRaisesRegex(ValueError, '^unsupported-suite-source-layout$'):
             m.fallback_plan(combined, MIRRORS, FAILED, 100, 200000, 'a' * 32, 'transport-error')
