@@ -10,6 +10,7 @@ const routeState = vi.hoisted(() => ({
 }));
 
 vi.mock("$app/navigation", () => ({ goto: vi.fn() }));
+vi.mock("../AuthComponent.svelte", () => import("../../tests/fixtures/AuthComponentProbe.svelte"));
 vi.mock("../../auth/UserManager", () => ({
     userManager: {
         getCurrentUser: () => ({ uid: "authorized-user" }),
@@ -22,6 +23,10 @@ vi.mock("../../lib/routeProject", async () => {
     const open =
         (docs: Map<string, unknown>, tracker: ReturnType<typeof vi.fn>) =>
         async (key: string, isStale: () => boolean) => {
+            // Match the real network-backed opener's asynchronous boundary so
+            // store publication is not captured as a dependency of the view's
+            // route-loading effect.
+            await Promise.resolve();
             tracker(key);
             if (isStale()) return undefined;
             const ydoc = docs.get(key) as Y.Doc | undefined;
