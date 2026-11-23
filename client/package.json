@@ -127,7 +127,7 @@
         "jsdom": "^31.0.1",
         "knip": "^6.47.0",
         "mcp-playwright": "^0.0.1",
-        "mdsvex": "^0.12.8",
+        "mdsvex": "^1.0.1",
         "monocart-coverage-reports": "^3.2.1",
         "patch-package": "^8.0.1",
         "picomatch": "4.0.7",
