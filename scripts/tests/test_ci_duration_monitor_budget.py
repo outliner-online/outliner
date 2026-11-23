@@ -9,13 +9,15 @@ import tempfile
 import threading
 import time
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 from urllib.parse import urlsplit
 
 from scripts import ci_duration_monitor as monitor
 from scripts.ci_duration_github import GitHubClient
 from scripts.ci_duration_github import ReadBudgetExceeded, ScanClient
 from scripts.ci_cancellation_diagnostics import CancellationDiagnostics
-from test_ci_duration_monitor import NOW, REPOSITORY, job
+from test_ci_duration_monitor import NOW, REPOSITORY, Result, job
 from test_ci_duration_monitor_cancellation import CancellationGitHub, cancelled, annotation, TIMEOUT
 
 
@@ -30,6 +32,7 @@ class ScanBudgetTests(unittest.TestCase):
         self.delay = 0.15
         self.trickle = False
         self.received = []
+        self.after_request = lambda method, route: None
         fixture = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -44,6 +47,7 @@ class ScanBudgetTests(unittest.TestCase):
                 fixture.received.append((self.command, urlsplit(route).path))
                 body = self.rfile.read(int(self.headers.get('Content-Length', 0)))
                 result = fixture.github.request(self.command, route, json.loads(body) if body else None)
+                fixture.after_request(self.command, urlsplit(route).path)
                 encoded = json.dumps(result.data).encode()
                 slow = route.startswith(fixture.slow_route)
                 try:
@@ -150,6 +154,114 @@ class ScanBudgetTests(unittest.TestCase):
         self.assertNotIn('signature', text)
         self.assertNotIn('storage.invalid', text)
         self.assertIn('RuntimeError', text)
+
+    def test_expired_at_publication_boundary_sends_zero_posts(self):
+        self.github.jobs[(10, 1)] = [job(1, 700)]
+        clock = [0.0]
+        original_save = ScanClient.save
+
+        def save(scan):
+            original_save(scan)
+            if scan.last_request and scan.last_request['method'] == 'POST':
+                clock[0] = 10.0
+
+        with patch('scripts.ci_duration_github.time', SimpleNamespace(monotonic=lambda: clock[0])), \
+                patch.object(ScanClient, 'save', save):
+            with self.assertRaisesRegex(ReadBudgetExceeded, 'mutation admission cutoff'):
+                self.run_scan(required=10, optional=0)
+        self.assertEqual(self.github.mutations, [])
+        self.assertFalse(any(method == 'POST' for method, _ in self.received))
+        self.assertFalse((self.output / 'report.json').exists())
+
+    def test_expiry_after_one_confirmed_mutation_sends_no_further_post(self):
+        self.github.jobs[(10, 1)] = [job(1, 700)]
+        clock = [0.0]
+
+        def expire(method, route):
+            if method == 'POST' and route == 'issues':
+                clock[0] = 10.0
+
+        self.after_request = expire
+        with patch('scripts.ci_duration_github.time', SimpleNamespace(monotonic=lambda: clock[0])):
+            with self.assertRaisesRegex(ReadBudgetExceeded, 'mutation admission cutoff'):
+                self.run_scan(required=10, optional=0)
+        self.assertEqual([path for method, path in self.received if method == 'POST'], ['issues'])
+        self.assertEqual([path for _, path, _ in self.github.mutations], ['issues'])
+        self.assertEqual(len(self.github.issues), 1)
+        self.assertEqual(self.github.comments, {})
+        self.assertFalse((self.output / 'report.json').exists())
+
+    def test_optional_timeout_cannot_admit_mutations_after_overall_cutoff(self):
+        clock = [0.0]
+
+        def expire(method, route):
+            if route.startswith('check-runs/'):
+                clock[0] = 10.0
+
+        self.after_request = expire
+        fake_time = SimpleNamespace(monotonic=lambda: clock[0], sleep=time.sleep)
+        with patch('scripts.ci_duration_github.time', fake_time), patch.object(monitor, 'time', fake_time):
+            with self.assertRaises(ReadBudgetExceeded):
+                self.run_scan(required=10, optional=5)
+        self.assertEqual(self.github.mutations, [])
+        self.assertFalse(any(method == 'POST' for method, _ in self.received))
+        diagnostic = json.loads((self.output / 'cancellation-diagnostics.json').read_text())
+        self.assertTrue(diagnostic['collection_complete'])  # Required metadata finished.
+        self.assertEqual(diagnostic['observations'][0]['annotations']['state'], 'unavailable')
+        self.assertEqual(diagnostic['observations'][-1]['annotations']['reason'], 'optional_budget_exhausted')
+
+    def test_optional_disk_and_render_failures_do_not_abort_valid_report(self):
+        with patch('scripts.ci_duration_github.write_json', side_effect=OSError('disk failed')), \
+                patch.object(CancellationDiagnostics, 'markdown', side_effect=ValueError('render failed')):
+            report = self.run_scan(optional=0)
+        self.assertEqual(report['admission_summary']['qualifying_candidates'], 1)
+        self.assertTrue(report['cancellation_diagnostics']['collection_complete'])
+        self.assertEqual(len(self.github.issues), 1)
+
+    def test_diagnostic_disk_and_render_failures_preserve_primary_http_failure(self):
+        original_request = self.github.request
+
+        def unavailable(method, path, payload=None):
+            if urlsplit(path).path == 'actions/runs/10/attempts/1/jobs':
+                return Result(403, {})
+            return original_request(method, path, payload)
+
+        self.github.request = unavailable
+        for target, error in [('pathlib.Path.write_text', OSError('disk unavailable')),
+                              ('scripts.ci_cancellation_diagnostics.CancellationDiagnostics.markdown', ValueError('render failed'))]:
+            with self.subTest(target=target), patch(target, side_effect=error):
+                with self.assertRaisesRegex(RuntimeError, 'returned 403; expected 200'):
+                    self.run_scan()
+            self.assertEqual(self.github.mutations, [])
+
+    def test_optional_collector_and_report_failures_leave_admission_intact(self):
+        for target in ['_observe', '_report', 'enrich']:
+            with self.subTest(target=target):
+                with patch.object(CancellationDiagnostics, target, side_effect=ValueError('optional failure')):
+                    report = self.run_scan(optional=0)
+                self.assertEqual(report['admission_summary']['qualifying_candidates'], 1)
+                self.assertFalse(report['cancellation_diagnostics']['collection_complete'])
+        self.assertEqual(len(self.github.issues), 1)  # Existing duplicate handling retained.
+
+    def test_many_attempts_write_full_snapshots_only_at_phase_boundaries(self):
+        self.delay = 0
+        self.github.runs[0]['run_attempt'] = 40
+        for attempt in range(1, 41):
+            self.github.jobs[(10, attempt)] = [cancelled(attempt, attempt=attempt)]
+        original_write = CancellationDiagnostics.write
+        sizes = []
+
+        def write(diagnostics, directory):
+            sizes.append(len(diagnostics.rows) + len(diagnostics.carried_rows))
+            return original_write(diagnostics, directory)
+
+        with patch.object(CancellationDiagnostics, 'write', write):
+            report = self.run_scan(required=10, optional=0)
+        self.assertEqual(sum('/jobs' in route for _, route in self.received), 40)
+        self.assertEqual(sizes, [0, 40, 40])
+        self.assertEqual(len(report['cancellation_diagnostics']['observations']) +
+                         len(report['cancellation_diagnostics']['carried_forward_observations']), 40)
+        self.assertEqual(self.github.mutations, [])
 
     def test_fast_optional_annotations_still_establish_native_cause(self):
         self.delay = 0

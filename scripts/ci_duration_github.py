@@ -28,7 +28,8 @@ class ScanClient:
         self.client = client
         self.directory = directory
         self.started = time.monotonic()
-        self.deadline = self.started + required_seconds
+        self.admission_deadline = self.started + required_seconds
+        self.deadline = self.admission_deadline
         self.optional_seconds = optional_seconds
         self.stage = 'source-verification'
         self.phase_started = self.started
@@ -41,6 +42,12 @@ class ScanClient:
         self.save()
 
     def save(self):
+        try:
+            self._save()
+        except Exception as error:
+            logger.warning('Scan progress unavailable ({}); continuing', type(error).__name__)
+
+    def _save(self):
         if self.directory is not None:
             self.directory.mkdir(parents=True, exist_ok=True)
             write_json(self.directory / 'scan-progress.json', {
@@ -74,6 +81,11 @@ class ScanClient:
         counters = self.counts.setdefault(self.stage, {'attempts': 0, 'seconds': 0, 'errors': 0, 'statuses': {}})
         counters['attempts'] += 1
         try:
+            # The optional read deadline can change; admission's cutoff cannot.
+            # Check every mutation immediately before sending it, including
+            # follow-up comments/labels after an earlier confirmed mutation.
+            if method != 'GET' and time.monotonic() >= self.admission_deadline:
+                raise ReadBudgetExceeded('Issue mutation admission cutoff expired')
             response = self.client.request(method, path, payload)
             status = str(response.status)
             counters['statuses'][status] = counters['statuses'].get(status, 0) + 1

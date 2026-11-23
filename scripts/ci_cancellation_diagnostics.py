@@ -155,6 +155,7 @@ class CancellationDiagnostics:
         self.cutoff = cutoff
         self.pages = pages
         self.complete = False
+        self.failed = False
         self.defer_annotations = defer_annotations
         self.pending: list[tuple[dict[str, object], dict[str, object]]] = []
         self.rows: list[dict[str, object]] = []
@@ -179,6 +180,15 @@ class CancellationDiagnostics:
         ]}
 
     def observe(self, workflow: str, run: dict[str, object], jobs: list[dict[str, object]],
+                runs: list[dict[str, object]]) -> None:
+        try:
+            self._observe(workflow, run, jobs, runs)
+        except Exception as error:
+            self.failed = True
+            self.complete = False
+            logger.warning("Optional job diagnostics unavailable ({}); continuing", type(error).__name__)
+
+    def _observe(self, workflow: str, run: dict[str, object], jobs: list[dict[str, object]],
                 runs: list[dict[str, object]]) -> None:
         for job in jobs:
             ended = _instant(job.get("completed_at"))
@@ -244,8 +254,19 @@ class CancellationDiagnostics:
         self.pending.clear()
 
     def report(self) -> dict[str, object]:
+        try:
+            return self._report()
+        except Exception as error:
+            self.failed = True
+            self.complete = False
+            logger.warning("Optional diagnostic report unavailable ({}); continuing", type(error).__name__)
+            return {"schema_version": 1, "repository": self.repository,
+                    "collection_complete": False, "diagnostic_error_type": type(error).__name__,
+                    "job_outcomes": [], "observations": [], "carried_forward_observations": []}
+
+    def _report(self) -> dict[str, object]:
         return {"schema_version": 1, "repository": self.repository,
-                "observed_at": self.observed_at, "collection_complete": self.complete,
+                "observed_at": self.observed_at, "collection_complete": self.complete and not self.failed,
                 "run_discovery": "created_at", "cutoff": self.cutoff.isoformat(),
                 "limitations": [
                     "Job outcomes, observed termination evidence and finalization state are separate facts.",
@@ -281,6 +302,12 @@ class CancellationDiagnostics:
         return "\n".join(lines)
 
     def write(self, directory: Path) -> None:
+        try:
+            self._write(directory)
+        except Exception as error:
+            logger.warning("Optional diagnostic snapshot unavailable ({}); continuing", type(error).__name__)
+
+    def _write(self, directory: Path) -> None:
         directory.mkdir(parents=True, exist_ok=True)
         temporary = directory / "cancellation-diagnostics.json.tmp"
         temporary.write_text(json.dumps(self.report(), indent=2) + "\n", encoding="utf-8")

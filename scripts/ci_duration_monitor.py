@@ -268,9 +268,6 @@ def collect(client: Client, workflows: tuple[Workflow, ...], cutoff: datetime, s
                         raise ValueError("Job belongs to a different run or attempt")
                 if diagnostics is not None:
                     diagnostics.observe(workflow.path, attempt_run, jobs, runs)
-                    checkpoint = getattr(client, "checkpoint", None)
-                    if checkpoint is not None:
-                        checkpoint()
                 candidates = []
                 for job in jobs:
                     if job.get("run_attempt", attempt) != attempt:
@@ -484,7 +481,7 @@ def _run_monitor(client: ScanClient, workflows: tuple[Workflow, ...], repository
     client.phase("required-collection")
     try:
         observations, workflow_totals = collect(client, workflows, cutoff, source, diagnostics)
-        diagnostics.complete = True
+        diagnostics.complete = not diagnostics.failed
     finally:
         # Preserve independent diagnostic evidence even if later issue reads or
         # publication fail. Incomplete scans are explicitly marked as such.
@@ -502,6 +499,10 @@ def _run_monitor(client: ScanClient, workflows: tuple[Workflow, ...], repository
     client.phase("optional-annotations")
     try:
         diagnostics.enrich(lambda: client.remaining() > 0)
+    except Exception as error:
+        diagnostics.failed = True
+        diagnostics.complete = False
+        logger.warning("Optional annotation enrichment unavailable ({}); continuing", type(error).__name__)
     finally:
         client.checkpoint()
         client.deadline = required_deadline
