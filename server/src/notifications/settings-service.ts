@@ -55,7 +55,7 @@ export class NotificationSettingsService {
             target.kind.localeCompare(cursor!.kind) || target.objectId.localeCompare(cursor!.objectId);
         const remaining = after ? targets.filter(target => compare(target, after) > 0) : targets;
         const page = remaining.slice(0, input.limit);
-        const last = page.at(-1);
+        const last = page[page.length - 1];
         return {
             projectId: input.projectId,
             targets: page,
