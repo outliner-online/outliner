@@ -14,7 +14,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.path.endswith('.deb'):
             print('OBSERVED_FIRST_MIRROR_PACKAGE_STALL ' + self.path.rsplit('/', 1)[-1], flush=True)
             try:
-                with urllib.request.urlopen('http://archive.ubuntu.com' + self.path, timeout=60) as response:
+                with urllib.request.urlopen('https://archive.ubuntu.com' + self.path, timeout=60) as response:
                     self.send_response(response.status)
                     self.send_header('Content-Length', response.headers['Content-Length'])
                     self.end_headers()
