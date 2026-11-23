@@ -81,8 +81,9 @@ def fallback_plan(sources, mirrors, failed_uri, native_exit, remaining_ms, nonce
             if count != 1:
                 raise ValueError('ambiguous-source-uri')
             replaced += 1
-        elif suites == {'resolute-security'} and fields.get('URIs') in ('http://security.ubuntu.com/ubuntu', 'http://security.ubuntu.com/ubuntu/',
-                                                                               'https://security.ubuntu.com/ubuntu', 'https://security.ubuntu.com/ubuntu/'):
+        elif suites == {'resolute-security'} and fields.get('URIs') in (MIRROR_URI,
+                'http://security.ubuntu.com/ubuntu', 'http://security.ubuntu.com/ubuntu/',
+                'https://security.ubuntu.com/ubuntu', 'https://security.ubuntu.com/ubuntu/'):
             security += 1  # Entire original security paragraph remains byte-identical.
         else:
             raise ValueError('unsupported-suite-source-layout')

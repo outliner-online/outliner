@@ -20,6 +20,22 @@ Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
 '''
 MIRRORS=m.FIRST+'\tpriority:1\nhttps://archive.ubuntu.com/ubuntu/\tpriority:2\nhttps://security.ubuntu.com/ubuntu/\tpriority:3\n'
 FAILED=m.FIRST+'pool/main/x/x_1_amd64.deb'
+OBSERVED_SOURCES='''# Redacted runner image source guidance; comments are not semantic APT fields.
+
+# A second redacted comment paragraph precedes the configured sources.
+
+Types: deb
+URIs: mirror+file:/etc/apt/apt-mirrors.txt
+Suites: resolute resolute-updates resolute-backports
+Components: main universe restricted multiverse
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+Types: deb
+URIs: mirror+file:/etc/apt/apt-mirrors.txt
+Suites: resolute-security
+Components: main universe restricted multiverse
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+'''
 
 class Plan(unittest.TestCase):
     def plan(self,**kw):
@@ -30,6 +46,11 @@ class Plan(unittest.TestCase):
         self.assertEqual(p['ubuntu_sources'].split('\n\n')[1],SOURCES.split('\n\n')[1])
         self.assertEqual(p['ubuntu_sources'].replace('mirror+file:/tmp/outliner-apt-'+'a'*32+'/mirrors.txt',m.MIRROR_URI),SOURCES)
         self.assertFalse(p['ready_for_real_runner']);self.assertFalse(p['host_files_changed'])
+    def test_observed_runner_comment_and_shared_mirrorlist_layout(self):
+        plan=self.plan(sources=OBSERVED_SOURCES)
+        self.assertIn('Suites: resolute-security\n', plan['ubuntu_sources'])
+        self.assertEqual(plan['ubuntu_sources'].count('mirror+file:/etc/apt/apt-mirrors.txt'), 1)
+        self.assertEqual(plan['ubuntu_sources'].count('/tmp/outliner-apt-'), 1)
     def test_security_fixed_origin_slash_variants_preserve_original_bytes(self):
         for uri in ('http://security.ubuntu.com/ubuntu','http://security.ubuntu.com/ubuntu/',
                     'https://security.ubuntu.com/ubuntu','https://security.ubuntu.com/ubuntu/'):

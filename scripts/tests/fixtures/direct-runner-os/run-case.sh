@@ -17,6 +17,57 @@ if proxy:
         'Acquire::http::Proxy::127.0.0.1 "DIRECT";\n')
 PY
 case "$1" in
+  observed-layout-failover)
+    dpkg --remove --force-depends lsof >/dev/null 2>&1 || true
+    ! dpkg-query -W -f='${Status}' lsof 2>/dev/null | grep -q 'install ok installed'
+    rm -f /etc/apt/sources.list /etc/apt/sources.list.d/* /var/cache/apt/archives/*.deb
+    cat > /etc/apt/sources.list.d/ubuntu.sources <<'EOF'
+# Redacted runner image source guidance; comments are preserved.
+
+# A second non-semantic comment paragraph matches the observed source shape.
+
+Types: deb
+URIs: mirror+file:/etc/apt/apt-mirrors.txt
+Suites: resolute resolute-updates resolute-backports
+Components: main universe restricted multiverse
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+Types: deb
+URIs: mirror+file:/etc/apt/apt-mirrors.txt
+Suites: resolute-security
+Components: main universe restricted multiverse
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+EOF
+    printf '%s\tpriority:1\n%s\tpriority:2\n%s\tpriority:3\n' \
+      http://us-east-2.ec2.archive.ubuntu.com/ubuntu/ \
+      https://archive.ubuntu.com/ubuntu/ \
+      https://security.ubuntu.com/ubuntu/ > /etc/apt/apt-mirrors.txt
+    echo '127.0.0.1 us-east-2.ec2.archive.ubuntu.com' >> /etc/hosts
+    echo 'Acquire::http::Proxy::us-east-2.ec2.archive.ubuntu.com "DIRECT";' >> /etc/apt/apt.conf.d/80fixture-proxy
+    python3 -u /fixture/scripts/tests/fixtures/direct-runner-os/first-mirror-stall.py > /tmp/first-mirror.log 2>&1 &
+    proxy_pid=$!
+    trap 'kill "$proxy_pid" 2>/dev/null || true' EXIT
+    for _ in {1..100}; do grep -q OBSERVED_FIRST_MIRROR_LISTENING /tmp/first-mirror.log && break; sleep .05; done
+    grep -q OBSERVED_FIRST_MIRROR_LISTENING /tmp/first-mirror.log
+    E2E_BROWSER=firefox bash /fixture/scripts/setup-direct-runner-os.sh 2>&1 | tee /tmp/observed-setup.log
+    grep -q 'APT-MIRROR retry-evidence=' /tmp/observed-setup.log
+    grep -q 'APT-MIRROR stage=download-retry exit=0' /tmp/observed-setup.log
+    grep -q OBSERVED_FIRST_MIRROR_PACKAGE_STALL /tmp/first-mirror.log
+    grep -E -q 'https://archive.ubuntu.com/ubuntu.*lsof|lsof.*https://archive.ubuntu.com/ubuntu' /tmp/observed-setup.log
+    test "$(dpkg-query -W -f='${Status}' lsof)" = 'install ok installed'
+    cd /fixture/client
+    node - <<'NODE'
+const { firefox } = require('playwright');
+(async () => {
+  const browser = await firefox.launch({headless: true});
+  const page = await browser.newPage();
+  await page.setContent('<title>observed failover</title>');
+  if (await page.title() !== 'observed failover') throw new Error('browser assertion failed');
+  await browser.close();
+  console.log('OBSERVED_FAILOVER_FIREFOX_EXECUTED');
+})().catch(error => { console.error(error); process.exitCode = 1; });
+NODE
+    ;;
   nonroot-success)
     runuser -u runner -- env E2E_BROWSER=firefox bash /fixture/scripts/setup-direct-runner-os.sh
     test "$(stat -c %u /home/runner/.cache/ms-playwright)" = "$(id -u runner)"

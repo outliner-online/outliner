@@ -13,7 +13,8 @@ import { afterAll, beforeAll, expect, test } from "vitest";
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const image = process.env.DIRECT_RUNNER_OS_PREBUILT_IMAGE ?? `outliner-direct-os-regression:${process.pid}`;
 const owner = randomUUID().slice(0, 8);
-const scenarios = ["success", "unavailable", "slow", "missing", "nonroot-success", "nonroot-playwright-slow"];
+const scenarios = ["success", "observed-layout-failover", "unavailable", "slow", "missing", "nonroot-success",
+    "nonroot-playwright-slow"];
 const preparedContainers = new Set<string>();
 const containerName = (scenario: string) => `outliner-direct-os-${process.pid}-${owner}-${scenario}`;
 let buildContext: string | undefined;
@@ -159,6 +160,14 @@ test("required packages are acquired and an independent browser actually execute
     expect(elapsed).toBeLessThan(610000);
     expect(log).toContain("stage=ready exit=0");
     expect(log).toContain("INDEPENDENT_BROWSER_EXECUTED");
+}, 660000);
+
+test("observed runner layout uses authenticated failover and executes Firefox", () => {
+    const { result, elapsed, log } = run("observed-layout-failover", 650000);
+    expect(result.status).toBe(0);
+    expect(elapsed).toBeLessThan(610000);
+    expect(log).toContain("APT-MIRROR stage=download-retry exit=0");
+    expect(log).toContain("OBSERVED_FAILOVER_FIREFOX_EXECUTED");
 }, 660000);
 
 for (const scenario of ["unavailable", "slow"]) {
