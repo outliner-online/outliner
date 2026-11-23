@@ -82,6 +82,89 @@ describe("ViewObservationService retained lifecycle", () => {
         await handle.close();
     });
 
+    it("does not reattach listeners when close wins a held producer read", async () => {
+        const original = new Y.Doc();
+        const arriving = new Y.Doc();
+        let documents: readonly Y.Doc[] = [original];
+        const held = deferred<Awaited<ReturnType<CapturedViewProducer["read"]>>>();
+        const producer: CapturedViewProducer = {
+            get documents() {
+                return documents;
+            },
+            read: () => held.promise,
+            isCurrent: () => true,
+            async close() {},
+        };
+        const originalBaseline = updateListenerCount(original);
+        const arrivingBaseline = updateListenerCount(arriving);
+        const service = new ViewObservationService({} as never, async () => true, { grid: async () => producer });
+        const handle = await service.openViewObservation({
+            uid: "reader",
+            target: { projectId: "project", kind: "grid", objectId: "tasks" },
+            context,
+        });
+        expect(updateListenerCount(original)).to.equal(originalBaseline + 1);
+        const pending = handle.readSnapshot({ observedAtUtcMs: 123 });
+        await Promise.resolve();
+        documents = [arriving];
+        await handle.close();
+        held.resolve({
+            status: "ready",
+            projection: { kind: "grid", title: "Late", columns: [], rows: [] },
+            revision: "late",
+        });
+        expect(await pending).to.deep.equal({ status: "stale", reason: "closed" });
+        expect(updateListenerCount(original)).to.equal(originalBaseline);
+        expect(updateListenerCount(arriving)).to.equal(arrivingBaseline);
+    });
+
+    it("serializes concurrent reads so captures cannot commit out of order", async () => {
+        const doc = new Y.Doc();
+        const reads = [
+            deferred<Awaited<ReturnType<CapturedViewProducer["read"]>>>(),
+            deferred<Awaited<ReturnType<CapturedViewProducer["read"]>>>(),
+        ];
+        const readStarted = [deferred<void>(), deferred<void>()];
+        let started = 0;
+        const producer: CapturedViewProducer = {
+            documents: [doc],
+            read() {
+                const index = started++;
+                readStarted[index].resolve(undefined);
+                return reads[index].promise;
+            },
+            isCurrent: () => true,
+            async close() {},
+        };
+        const service = new ViewObservationService({} as never, async () => true, { grid: async () => producer });
+        const handle = await service.openViewObservation({
+            uid: "reader",
+            target: { projectId: "project", kind: "grid", objectId: "tasks" },
+            context,
+        });
+        const first = handle.readSnapshot({ observedAtUtcMs: 1 });
+        const second = handle.readSnapshot({ observedAtUtcMs: 2 });
+        await readStarted[0].promise;
+        expect(started).to.equal(1);
+        reads[0].resolve({
+            status: "ready",
+            projection: { kind: "grid", title: "First", columns: [], rows: [] },
+            revision: "first",
+        });
+        expect((await first).status).to.equal("ready");
+        await readStarted[1].promise;
+        expect(started).to.equal(2);
+        reads[1].resolve({
+            status: "ready",
+            projection: { kind: "grid", title: "Second", columns: [], rows: [] },
+            revision: "second",
+        });
+        const result = await second;
+        expect(result.status).to.equal("ready");
+        if (result.status === "ready") expect((result.projection as { title: string; }).title).to.equal("Second");
+        await handle.close();
+    });
+
     it("round-trips Kanban context through the production route parser", async () => {
         const doc = new Y.Doc();
         const producer: CapturedViewProducer = {
@@ -116,4 +199,14 @@ describe("ViewObservationService retained lifecycle", () => {
 
 function revision(doc: Y.Doc): string {
     return Buffer.from(Y.encodeStateAsUpdate(doc)).toString("base64url");
+}
+
+function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>(done => resolve = done);
+    return { promise, resolve };
+}
+
+function updateListenerCount(doc: Y.Doc): number {
+    return ((doc as unknown as { _observers: Map<string, Set<unknown>>; })._observers.get("update")?.size) ?? 0;
 }

@@ -112,6 +112,7 @@ class RetainedViewObservation implements ViewObservationHandle {
     private readonly listeners: { doc: Y.Doc; listener: () => void; }[] = [];
     private generation = 0;
     private closed = false;
+    private readTail: Promise<void> = Promise.resolve();
 
     constructor(
         private readonly input: { uid: string; target: TargetRef; context: ObservationContext; },
@@ -136,7 +137,17 @@ class RetainedViewObservation implements ViewObservationHandle {
         }
     }
 
-    async readSnapshot({ observedAtUtcMs }: { observedAtUtcMs: number; }): Promise<ReadSnapshotResult> {
+    readSnapshot(input: { observedAtUtcMs: number; }): Promise<ReadSnapshotResult> {
+        const read = this.readTail.then(() => this.readSnapshotExclusive(input));
+        // Serialize captures so an older concurrent refresh can never install
+        // after a newer one or leave its candidate lease unowned.
+        this.readTail = read.then(() => undefined, () => undefined);
+        return read;
+    }
+
+    private async readSnapshotExclusive(
+        { observedAtUtcMs }: { observedAtUtcMs: number; },
+    ): Promise<ReadSnapshotResult> {
         if (this.closed) return { status: "stale", reason: "closed" };
         if (!Number.isFinite(observedAtUtcMs)) return { status: "unavailable", reason: "invalid_observation_time" };
         if (!await this.canAccess(this.input.uid, this.input.target.projectId)) {
@@ -144,6 +155,9 @@ class RetainedViewObservation implements ViewObservationHandle {
         }
         const generation = this.generation;
         const result = await this.producer.read(observedAtUtcMs);
+        // close() removes every listener while producer.read() may still be
+        // awaited. Never rediscover producer documents after that boundary.
+        if (this.closed) return { status: "stale", reason: "closed" };
         this.synchronizeListeners();
         if (result.status !== "ready") return result;
         if (this.closed || generation !== this.generation || !this.producer.isCurrent(result.revision)) {
