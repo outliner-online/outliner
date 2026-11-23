@@ -11,7 +11,10 @@ const routeState = vi.hoisted(() => ({
 
 vi.mock("$app/navigation", () => ({ goto: vi.fn() }));
 vi.mock("../../auth/UserManager", () => ({
-    userManager: { getCurrentUser: () => ({ uid: "authorized-user" }) },
+    userManager: {
+        getCurrentUser: () => ({ uid: "authorized-user" }),
+        addEventListener: () => () => {},
+    },
 }));
 vi.mock("../../lib/routeProject", async () => {
     const { store } = await import("../../stores/store.svelte");
