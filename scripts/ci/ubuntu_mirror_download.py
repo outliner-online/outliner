@@ -113,15 +113,22 @@ def source_shape_summary(sources):
         public_uris['http://us-east-2.ec2.archive.ubuntu.com' + suffix] = 'ec2-http'
     blocks = [block for block in re.split(r'\n[ \t]*\n', sources) if block.strip()]
     rows = []
-    unknown = max(0, len(blocks) - 3)
-    for block in blocks[:3]:
+    unknown = max(0, len(blocks) - 8)
+    for block in blocks[:8]:
         try:
             fields = source_fields(block)
         except ValueError:
             fields = {}
         suite = suite_sets.get(frozenset(fields.get('Suites', '').split()), 'other')
         uri = public_uris.get(fields.get('URIs'), 'other')
-        rows.append({'suites': suite, 'uri': uri})
+        rows.append({
+            'components': 'ubuntu-four' if set(fields.get('Components', '').split()) == COMPONENTS else 'other',
+            'enabled': {'': 'default', 'yes': 'yes', 'no': 'no'}.get(fields.get('Enabled', '').lower(), 'other'),
+            'signed_by': 'ubuntu-archive-keyring' if fields.get('Signed-By') == '/usr/share/keyrings/ubuntu-archive-keyring.gpg' else 'other',
+            'suites': suite,
+            'types': 'deb' if fields.get('Types') == 'deb' else 'other',
+            'uri': uri,
+        })
         unknown += suite == 'other' or uri == 'other'
     return {'paragraphs': rows, 'unknown_count': unknown}
 
