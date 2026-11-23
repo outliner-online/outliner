@@ -119,7 +119,12 @@ class RetainedViewObservation implements ViewObservationHandle {
     ) {
         // Subscribe before the first capture. A generation check below closes
         // the gap across every asynchronous producer/access step.
-        for (const doc of producer.documents) {
+        this.synchronizeListeners();
+    }
+
+    private synchronizeListeners(): void {
+        for (const doc of this.producer.documents) {
+            if (this.listeners.some(candidate => candidate.doc === doc)) continue;
             const listener = () => {
                 if (this.closed) return;
                 this.generation++;
@@ -138,6 +143,7 @@ class RetainedViewObservation implements ViewObservationHandle {
         }
         const generation = this.generation;
         const result = await this.producer.read(observedAtUtcMs);
+        this.synchronizeListeners();
         if (result.status !== "ready") return result;
         if (this.closed || generation !== this.generation || !this.producer.isCurrent(result.revision)) {
             return { status: "stale", reason: "inputs_changed" };
@@ -202,9 +208,15 @@ function invalidContext(): never {
 
 function deepLink(target: TargetRef, context: ObservationContext): string {
     const plural = target.kind === "kanban" ? "kanbans" : `${target.kind}s`;
-    return `/${encodeURIComponent(target.projectId)}/-/${plural}/${
-        encodeURIComponent(target.objectId)
-    }?observationContext=${encodeURIComponent(JSON.stringify(context))}`;
+    const parameters = new URLSearchParams();
+    if (target.kind === "kanban") {
+        const kanban = context as KanbanObservationContextV1;
+        parameters.set("surface", kanban.surface);
+        parameters.set("version", String(kanban.version));
+        parameters.set("locale", kanban.locale);
+        parameters.set("timeZone", kanban.timeZone);
+    } else parameters.set("observationContext", JSON.stringify(context));
+    return `/${encodeURIComponent(target.projectId)}/-/${plural}/${encodeURIComponent(target.objectId)}?${parameters}`;
 }
 
 function kanbanOpener(
@@ -212,16 +224,25 @@ function kanbanOpener(
     canAccess: (uid: string, projectId: string) => Promise<boolean>,
 ): ViewProducerOpener {
     return async ({ uid, target, context }) => {
-        const observed = await new OutlinerKanbanQueryService(host, canAccess).openObservation(
-            uid,
-            target.projectId,
-            target.objectId,
-        );
-        const documents = [observed.handles.project, ...observed.handles.sources.values()]
-            .map(connection => connection.document as unknown as Y.Doc);
+        const service = new OutlinerKanbanQueryService(host, canAccess);
+        let observed = await service.openObservation(uid, target.projectId, target.objectId);
+        let documents = observationDocuments(observed);
+        let closed = false;
         return {
-            documents,
+            get documents() {
+                return documents;
+            },
             async read() {
+                if (closed) return { status: "stale", reason: "closed" };
+                // Ordinary source/config edits make a completed capture
+                // non-current, but do not end observation continuity. Release
+                // that immutable capture and reopen against the current live
+                // registry before producing the next snapshot.
+                if (!observed.isCurrent()) {
+                    await observed.release();
+                    observed = await service.openObservation(uid, target.projectId, target.objectId);
+                    documents = observationDocuments(observed);
+                }
                 if (observed.status !== "success" || !observed.settings) {
                     return {
                         status: observed.status === "incomplete" ? "incomplete" : "unavailable",
@@ -241,11 +262,20 @@ function kanbanOpener(
                 return { status: "ready", projection: projected.content, revision: observationRevision(documents) };
             },
             isCurrent(revision) {
-                return observed.isCurrent() && revision === observationRevision(documents);
+                return !closed && observed.isCurrent() && revision === observationRevision(documents);
             },
-            close: () => observed.release(),
+            async close() {
+                if (closed) return;
+                closed = true;
+                await observed.release();
+            },
         };
     };
+}
+
+function observationDocuments(observed: Awaited<ReturnType<OutlinerKanbanQueryService["openObservation"]>>): Y.Doc[] {
+    return [observed.handles.project, ...observed.handles.sources.values()]
+        .map(connection => connection.document as unknown as Y.Doc);
 }
 
 function observationRevision(documents: readonly Y.Doc[]): string {

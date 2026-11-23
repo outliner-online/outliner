@@ -1,6 +1,7 @@
 import { expect } from "chai";
 import * as Y from "yjs";
 import type { GridObservationContextV1 } from "../../shared/src/notifications/gridProjection.js";
+import { parseKanbanObservationContext } from "../../shared/src/notifications/kanbanProjection.js";
 import { type CapturedViewProducer, ViewObservationService } from "../src/notifications/view-observation.js";
 
 describe("ViewObservationService retained lifecycle", () => {
@@ -78,6 +79,37 @@ describe("ViewObservationService retained lifecycle", () => {
             context,
         });
         expect((await handle.readSnapshot({ observedAtUtcMs: 123 })).status).to.equal("forbidden");
+        await handle.close();
+    });
+
+    it("round-trips Kanban context through the production route parser", async () => {
+        const doc = new Y.Doc();
+        const producer: CapturedViewProducer = {
+            documents: [doc],
+            async read() {
+                return {
+                    status: "ready",
+                    projection: { kind: "kanban", title: "Board", lanes: [] },
+                    revision: revision(doc),
+                };
+            },
+            isCurrent: candidate => candidate === revision(doc),
+            async close() {},
+        };
+        const service = new ViewObservationService({} as never, async () => true, {
+            kanban: async () => producer,
+        });
+        const context = { version: 1, surface: "board", locale: "ja-JP", timeZone: "Asia/Tokyo" } as const;
+        const handle = await service.openViewObservation({
+            uid: "reader",
+            target: { projectId: "project", kind: "kanban", objectId: "board" },
+            context,
+        });
+        const result = await handle.readSnapshot({ observedAtUtcMs: 123 });
+        expect(result.status).to.equal("ready");
+        if (result.status !== "ready") throw new Error("expected ready");
+        const parsed = parseKanbanObservationContext(new URL(result.deepLink, "https://outliner.example").searchParams);
+        expect(parsed).to.deep.equal({ status: "valid", context });
         await handle.close();
     });
 });
