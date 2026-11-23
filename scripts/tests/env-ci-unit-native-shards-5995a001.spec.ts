@@ -68,7 +68,19 @@ exec ${JSON.stringify(vitest)} "\${args[@]}" --config=${JSON.stringify(config)}
 }
 
 function artifactFixture(directory: string, run = "100", attempt = "2") {
-    fs.writeFileSync(path.join(directory, "coverage-manifest.json"), JSON.stringify(["/source.ts"]));
+    fs.writeFileSync(path.join(directory, "coverage-manifest.json"), JSON.stringify(["/source.ts", "/types.d.ts"]));
+    fs.writeFileSync(path.join(directory, "coverage-baseline.json"), JSON.stringify({
+        "/source.ts": {
+            path: "/source.ts",
+            statementMap: { 0: { start: { line: 1, column: 0 }, end: { line: 1, column: 1 } } },
+            fnMap: {},
+            branchMap: {},
+            s: { 0: 0 },
+            f: {},
+            b: {},
+        },
+        "/types.d.ts": { path: "/types.d.ts", statementMap: {}, fnMap: {}, branchMap: {}, s: {}, f: {}, b: {} },
+    }));
     for (const shard of [1, 2]) {
         const base = path.join(directory, `unit-shard-${shard}-${run}-${attempt}`);
         fs.mkdirSync(path.join(base, "unit-evidence"), { recursive: true });
@@ -90,6 +102,15 @@ function artifactFixture(directory: string, run = "100", attempt = "2") {
                 fnMap: {},
                 branchMap: {},
                 s: { [shard === 1 ? 0 : 5]: 1 },
+                f: {},
+                b: {},
+            },
+            "/types.d.ts": {
+                path: "/types.d.ts",
+                statementMap: {},
+                fnMap: {},
+                branchMap: {},
+                s: {},
                 f: {},
                 b: {},
             },
@@ -148,6 +169,7 @@ describe("unit CI native shard orchestration", () => {
                 UNIT_VITEST_BIN: vitest,
                 UNIT_BASE_RUNNER: base,
                 UNIT_COVERAGE_MANIFEST: path.join(directory, "coverage-manifest.json"),
+                UNIT_COVERAGE_BASELINE: path.join(directory, "coverage-baseline.json"),
             }),
         });
         expect(fs.readFileSync(marker, "utf8")).toBe("ran");
@@ -179,6 +201,7 @@ exec ${JSON.stringify(realBaseFailure.vitest)} run --config=${JSON.stringify(rea
                         UNIT_VITEST_BIN: vitest,
                         UNIT_BASE_RUNNER: failingBase,
                         UNIT_COVERAGE_MANIFEST: path.join(directory, "coverage-manifest.json"),
+                        UNIT_COVERAGE_BASELINE: path.join(directory, "coverage-baseline.json"),
                         ...extra,
                     }),
                 },
@@ -204,6 +227,25 @@ exec ${JSON.stringify(realBaseFailure.vitest)} run --config=${JSON.stringify(rea
         artifactFixture(directory);
         fs.writeFileSync(path.join(directory, "coverage-manifest.json"), JSON.stringify(["/source.ts", "/omitted.ts"]));
         expect(run(directory).stderr.toString()).toContain("coverage differs from repository inventory");
+        artifactFixture(directory);
+        for (const shard of [1, 2]) {
+            const shardCoverage = path.join(
+                directory,
+                `unit-shard-${shard}-100-2/coverage/unit-shard-${shard}/coverage-final.json`,
+            );
+            const data = JSON.parse(fs.readFileSync(shardCoverage, "utf8"));
+            data["/source.ts"] = {
+                path: "/source.ts",
+                statementMap: {},
+                fnMap: {},
+                branchMap: {},
+                s: {},
+                f: {},
+                b: {},
+            };
+            fs.writeFileSync(shardCoverage, JSON.stringify(data));
+        }
+        expect(run(directory).stderr.toString()).toContain("coverage maps are empty for executable file");
         artifactFixture(directory);
         const first = path.join(directory, "unit-shard-1-100-2/unit-evidence/shard-1.json");
         fs.copyFileSync(first, path.join(directory, "unit-shard-2-100-2/unit-evidence/shard-2.json"));

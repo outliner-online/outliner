@@ -93,6 +93,26 @@ function validateCoverageMaps(coverage) {
         }
     }
 }
+function coverageEntryCount(data) {
+    return Object.keys(data.statementMap).length + Object.keys(data.fnMap).length + Object.keys(data.branchMap).length;
+}
+function nativeCoverageBaseline() {
+    if (process.env.UNIT_COVERAGE_BASELINE) {
+        return JSON.parse(fs.readFileSync(process.env.UNIT_COVERAGE_BASELINE, "utf8"));
+    }
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), `unit-coverage-baseline-${runId}-${runAttempt}-`));
+    execFileSync(vitestBin, ["run", "__unit_coverage_baseline_no_tests__", ...configArgs, "--project", "unit",
+        "--coverage", "--passWithNoTests", "--coverage.reporter=json", `--coverage.reportsDirectory=${directory}`], {
+        cwd: clientDir,
+        stdio: "inherit",
+        env: { ...process.env, NODE_ENV: "test" },
+    });
+    const baselinePath = path.join(directory, "coverage-final.json");
+    if (!fs.existsSync(baselinePath)) throw new Error("native coverage baseline was not produced");
+    const baseline = JSON.parse(fs.readFileSync(baselinePath, "utf8"));
+    fs.rmSync(directory, { recursive: true });
+    return baseline;
+}
 
 const nativeSelectionPath = path.join(os.tmpdir(), `unit-native-selection-${runId}-${runAttempt}.json`);
 execFileSync(vitestBin, ["list", ...configArgs, "--project", "unit", "--no-static-parse",
@@ -107,6 +127,8 @@ if (!expected.length) throw new Error("native unit selection is empty");
 const executed = [];
 const mergedCoverage = createCoverageMap({});
 const expectedCoverageFiles = repositoryCoverageInventory();
+const coverageBaseline = nativeCoverageBaseline();
+validateCoverageMaps(coverageBaseline);
 let nativeCoverageFiles;
 for (let shard = 1; shard <= shardCount; shard++) {
     const shardDir = path.join(artifactDir, `unit-shard-${shard}-${runId}-${runAttempt}`);
@@ -135,6 +157,11 @@ for (let shard = 1; shard <= shardCount; shard++) {
         throw new Error(`native coverage file set differs for shard ${shard}`);
     }
     validateCoverageMaps(coverage);
+    for (const [file, baseline] of Object.entries(coverageBaseline)) {
+        if (coverageEntryCount(baseline) > 0 && (!coverage[file] || coverageEntryCount(coverage[file]) === 0)) {
+            throw new Error(`coverage maps are empty for executable file in shard ${shard}: ${file}`);
+        }
+    }
     mergedCoverage.merge(coverage);
 }
 compareIdentities(executed, expected);
