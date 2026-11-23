@@ -26,9 +26,11 @@ from loguru import logger
 try:
     from .ci_cancellation_diagnostics import CancellationDiagnostics
     from .ci_duration_policy import CurrentSource
+    from .ci_duration_github import ReadBudgetExceeded, ScanClient
 except ImportError:
     from ci_cancellation_diagnostics import CancellationDiagnostics
     from ci_duration_policy import CurrentSource
+    from ci_duration_github import ReadBudgetExceeded, ScanClient
 
 MANAGED_LABEL = "ci-duration-monitor"
 READY_LABEL = "review-ready"
@@ -166,6 +168,8 @@ def _request(client: Client, method: str, path: str, payload: dict[str, object] 
             if method != "GET" or response.status not in {502, 503, 504} or attempt + 1 == attempts:
                 return response
             logger.warning("GitHub GET {} returned {}; retrying read ({}/3)", path.split("?")[0], response.status, attempt + 2)
+        if isinstance(client, ScanClient) and client.remaining() <= attempt + 1:
+            raise ReadBudgetExceeded("GitHub read budget cannot accommodate another retry")
         time.sleep(attempt + 1)
     raise AssertionError("Request retry loop has no terminal outcome")
 
@@ -450,13 +454,34 @@ def _prepare_labels(client: Client) -> None:
         raise RuntimeError(f"Cannot inspect monitor label: HTTP {response.status}")
 
 
-def run_monitor(client: Client, workflows: tuple[Workflow, ...], repository: str, source_ref: str, *, now: datetime, lookback_hours: int, publish: bool, diagnostics_output: Path | None = None) -> dict[str, object]:
+def run_monitor(client: Client, workflows: tuple[Workflow, ...], repository: str, source_ref: str, *, now: datetime, lookback_hours: int, publish: bool, diagnostics_output: Path | None = None, required_read_seconds: float = 720, optional_read_seconds: float = 30) -> dict[str, object]:
+    # Twelve minutes for required reads leaves a reserve inside the existing
+    # fifteen-minute job for diagnostics, normal reconciliation and teardown.
+    scan = ScanClient(client, diagnostics_output, required_read_seconds, optional_read_seconds)
+    try:
+        report = _run_monitor(scan, workflows, repository, source_ref, now=now,
+                              lookback_hours=lookback_hours, publish=publish,
+                              diagnostics_output=diagnostics_output)
+        scan.state = 'complete'
+        return report
+    except Exception as error:
+        scan.state, scan.error = 'failed', type(error).__name__
+        raise
+    finally:
+        scan.save()
+
+
+def _run_monitor(client: ScanClient, workflows: tuple[Workflow, ...], repository: str, source_ref: str, *, now: datetime, lookback_hours: int, publish: bool, diagnostics_output: Path | None = None) -> dict[str, object]:
     source = CurrentSource(client, _call, repository, request=_request)
     cutoff = now - timedelta(hours=lookback_hours)
-    diagnostics = CancellationDiagnostics(repository, now, cutoff, lambda path: _pages(client, path))
+    diagnostics = CancellationDiagnostics(repository, now, cutoff, lambda path: _pages(client, path), defer_annotations=True)
+    if diagnostics_output is not None:
+        client.checkpoint = lambda: diagnostics.write(diagnostics_output)
+        client.checkpoint()
+    client.phase("required-collection")
     try:
         observations, workflow_totals = collect(client, workflows, cutoff, source, diagnostics)
-        diagnostics.complete = True
+        diagnostics.complete = not diagnostics.failed
     finally:
         # Preserve independent diagnostic evidence even if later issue reads or
         # publication fail. Incomplete scans are explicitly marked as such.
@@ -465,7 +490,23 @@ def run_monitor(client: Client, workflows: tuple[Workflow, ...], repository: str
     source_ref = source.sha
     # Read the durable issue/comment inventory before any mutation. Unavailable pages cannot
     # silently authorize duplicate issues or readiness re-submission.
+    client.phase("issue-inventory")
     managed = _issues(client)
+    # Annotation absence never affects duration admission. Finish required reads
+    # first, then bound this optional service enrichment independently.
+    required_deadline = client.deadline
+    client.deadline = min(required_deadline, time.monotonic() + client.optional_seconds)
+    client.phase("optional-annotations")
+    try:
+        diagnostics.enrich(lambda: client.remaining() > 0)
+    except Exception as error:
+        diagnostics.failed = True
+        diagnostics.complete = False
+        logger.warning("Optional annotation enrichment unavailable ({}); continuing", type(error).__name__)
+    finally:
+        client.checkpoint()
+        client.deadline = required_deadline
+    client.phase("reconciliation")
     actions: list[dict[str, object]] = []
     prepared = False
     processed: set[int] = set()

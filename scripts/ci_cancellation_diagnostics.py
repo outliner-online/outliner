@@ -120,16 +120,44 @@ def _newer_candidates(run: dict[str, object], job: dict[str, object], runs: list
     return sorted(set(result))
 
 
+def _termination(conclusion: str | None, annotations: dict[str, object]):
+    timeout_annotations = [item for item in annotations["items"]
+                           if item["path"] == ".github" and item["annotation_level"] == "failure"
+                           and isinstance(item["message"], str) and JOB_TIMEOUT.fullmatch(item["message"])]
+    concurrency_groups = sorted({match[1] for item in annotations["items"]
+                                 if item["path"] == ".github" and item["annotation_level"] == "failure"
+                                 and isinstance(item["message"], str)
+                                 and (match := CONCURRENCY_CANCEL.fullmatch(item["message"]))})
+    evidence = []
+    if conclusion == "timed_out":
+        evidence.append({"category": "job_timeout", "source": "job.conclusion"})
+    if timeout_annotations:
+        evidence.append({"category": "job_timeout", "source": "check_run.annotation"})
+    if concurrency_groups:
+        evidence.append({"category": "concurrency_cancelled", "source": "check_run.annotation"})
+    categories = {item["category"] for item in evidence}
+    if len(categories) == 1:
+        termination = {"category": next(iter(categories)), "confidence": "confirmed", "evidence": evidence}
+    elif categories:
+        termination = {"category": "conflicting_evidence", "confidence": "conflicting", "evidence": evidence}
+    else:
+        termination = {"category": "unknown", "confidence": "unknown", "evidence": []}
+    return termination, concurrency_groups
+
+
 class CancellationDiagnostics:
     """Observe every fetched job, enriching anomalies without influencing issues."""
 
     def __init__(self, repository: str, observed_at: datetime, cutoff: datetime,
-                 pages: Callable[[str], list[dict[str, object]]]):
+                 pages: Callable[[str], list[dict[str, object]]], *, defer_annotations: bool = False):
         self.repository = repository
         self.observed_at = observed_at.isoformat()
         self.cutoff = cutoff
         self.pages = pages
         self.complete = False
+        self.failed = False
+        self.defer_annotations = defer_annotations
+        self.pending: list[tuple[dict[str, object], dict[str, object]]] = []
         self.rows: list[dict[str, object]] = []
         self.carried_rows: list[dict[str, object]] = []
         self.counts: dict[tuple[str, str], dict[str, Counter]] = {}
@@ -153,6 +181,15 @@ class CancellationDiagnostics:
 
     def observe(self, workflow: str, run: dict[str, object], jobs: list[dict[str, object]],
                 runs: list[dict[str, object]]) -> None:
+        try:
+            self._observe(workflow, run, jobs, runs)
+        except Exception as error:
+            self.failed = True
+            self.complete = False
+            logger.warning("Optional job diagnostics unavailable ({}); continuing", type(error).__name__)
+
+    def _observe(self, workflow: str, run: dict[str, object], jobs: list[dict[str, object]],
+                runs: list[dict[str, object]]) -> None:
         for job in jobs:
             ended = _instant(job.get("completed_at"))
             if ended and ended < self.cutoff:
@@ -168,28 +205,9 @@ class CancellationDiagnostics:
             anomalous = conclusion in {"cancelled", "failure", "timed_out"} or job.get("status") != "completed" or finalization["state"] in {"unresolved_after_job_completion", "incomplete"}
             if not anomalous and provenance["state"] != "carried_forward":
                 continue
-            annotations = self._annotations(job) if anomalous else {"state": "not_requested", "reason": "successful_carried_forward_result", "items": []}
-            timeout_annotations = [item for item in annotations["items"]
-                                   if item["path"] == ".github" and item["annotation_level"] == "failure"
-                                   and isinstance(item["message"], str) and JOB_TIMEOUT.fullmatch(item["message"])]
-            concurrency_groups = sorted({match[1] for item in annotations["items"]
-                                         if item["path"] == ".github" and item["annotation_level"] == "failure"
-                                         and isinstance(item["message"], str)
-                                         and (match := CONCURRENCY_CANCEL.fullmatch(item["message"]))})
-            evidence = []
-            if conclusion == "timed_out":
-                evidence.append({"category": "job_timeout", "source": "job.conclusion"})
-            if timeout_annotations:
-                evidence.append({"category": "job_timeout", "source": "check_run.annotation"})
-            if concurrency_groups:
-                evidence.append({"category": "concurrency_cancelled", "source": "check_run.annotation"})
-            categories = {item["category"] for item in evidence}
-            if len(categories) == 1:
-                termination = {"category": next(iter(categories)), "confidence": "confirmed", "evidence": evidence}
-            elif categories:
-                termination = {"category": "conflicting_evidence", "confidence": "conflicting", "evidence": evidence}
-            else:
-                termination = {"category": "unknown", "confidence": "unknown", "evidence": []}
+            annotations = ({"state": "deferred", "reason": "optional_enrichment_pending", "items": []}
+                           if self.defer_annotations else self._annotations(job)) if anomalous else {"state": "not_requested", "reason": "successful_carried_forward_result", "items": []}
+            termination, concurrency_groups = _termination(conclusion, annotations)
             candidates = _newer_candidates(run, job, runs) if conclusion == "cancelled" and provenance["state"] == "current_attempt" else []
             run_id, attempt, job_id = _identifier(run.get("id")), _identifier(run.get("run_attempt")), _identifier(job.get("id"))
             url = f"https://github.com/{self.repository}/actions/runs/{run_id}/job/{job_id}" if run_id and job_id else None
@@ -218,15 +236,43 @@ class CancellationDiagnostics:
                                      "note": "An expected artifact is named only for a proven current-attempt job interval. Copied or unknown intervals do not establish the source artifact attempt. Inspect command-status.json with execution-context.json; an interruption signal alone does not identify the cancellation initiator."},
                 "annotations": annotations, "steps": steps,
             })
+            if anomalous and self.defer_annotations:
+                self.pending.append((destination[-1], job))
+
+    def enrich(self, allowed: Callable[[], bool]) -> None:
+        """Optional service annotations cannot consume the required scan budget."""
+        for row, job in self.pending:
+            if not allowed():
+                row["annotations"]["reason"] = "optional_budget_exhausted"
+                continue
+            annotations = self._annotations(job)
+            row["annotations"] = annotations
+            termination, groups = _termination(row["job_conclusion"], annotations)
+            row["termination"] = termination
+            row["concurrency"]["reported_groups"] = groups
+            row["concurrency"]["state"] = "confirmed" if groups else "candidate" if row["concurrency"]["newer_same_branch_run_ids"] else "unconfirmed"
+        self.pending.clear()
 
     def report(self) -> dict[str, object]:
+        try:
+            return self._report()
+        except Exception as error:
+            self.failed = True
+            self.complete = False
+            logger.warning("Optional diagnostic report unavailable ({}); continuing", type(error).__name__)
+            return {"schema_version": 1, "repository": self.repository,
+                    "collection_complete": False, "diagnostic_error_type": type(error).__name__,
+                    "job_outcomes": [], "observations": [], "carried_forward_observations": []}
+
+    def _report(self) -> dict[str, object]:
         return {"schema_version": 1, "repository": self.repository,
-                "observed_at": self.observed_at, "collection_complete": self.complete,
+                "observed_at": self.observed_at, "collection_complete": self.complete and not self.failed,
                 "run_discovery": "created_at", "cutoff": self.cutoff.isoformat(),
                 "limitations": [
                     "Job outcomes, observed termination evidence and finalization state are separate facts.",
                     "Complete job without a terminal timestamp is unresolved metadata, not proof of active runner cleanup or a runner defect.",
                     "Missing annotations, artifacts or timestamps remain unknown; elapsed duration alone never establishes a timeout.",
+                    "Optional annotations are enriched after required collection and issue inventory within a separate bounded window. Deferred or unavailable annotations leave the cause unknown.",
                     "Wrapper evidence and cancellation initiators are not fetched; inspect retained per-attempt artifacts when available.",
                     "API observation totals can include copied rerun results. Use current_attempt outcome counts for rates; exclude carried_forward and unknown provenance. A current job interval does not prove its tests ran.",
                     "This diagnostic report never creates or qualifies duration improvement issues.",
@@ -256,6 +302,14 @@ class CancellationDiagnostics:
         return "\n".join(lines)
 
     def write(self, directory: Path) -> None:
+        try:
+            self._write(directory)
+        except Exception as error:
+            logger.warning("Optional diagnostic snapshot unavailable ({}); continuing", type(error).__name__)
+
+    def _write(self, directory: Path) -> None:
         directory.mkdir(parents=True, exist_ok=True)
-        (directory / "cancellation-diagnostics.json").write_text(json.dumps(self.report(), indent=2) + "\n", encoding="utf-8")
+        temporary = directory / "cancellation-diagnostics.json.tmp"
+        temporary.write_text(json.dumps(self.report(), indent=2) + "\n", encoding="utf-8")
+        temporary.replace(directory / "cancellation-diagnostics.json")
         (directory / "cancellation-diagnostics.md").write_text(self.markdown(), encoding="utf-8")
