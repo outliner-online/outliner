@@ -27,7 +27,8 @@ describe("production Kanban visible projection", { timeout: 30000 }, () => {
             table,
             "CREATE TABLE tasks (id TEXT PRIMARY KEY, title TEXT, status TEXT CHECK (status IN ('todo', 'done', '', ' ')), detail TEXT, hidden TEXT)",
         );
-        addRecord(table, { title: null, status: null, detail: undefined, hidden: "a" }, "null");
+        // Omit detail to exercise a missing field through the supported storage API.
+        addRecord(table, { title: null, status: null, hidden: "a" }, "null");
         addRecord(table, { title: "", status: "", detail: null, hidden: "b" }, "empty");
         addRecord(table, { title: "Same", status: " ", detail: "x", hidden: "c" }, "space-a");
         addRecord(table, { title: "Same", status: " ", detail: "x", hidden: "d" }, "space-b");
@@ -47,7 +48,7 @@ describe("production Kanban visible projection", { timeout: 30000 }, () => {
                 projectDoc,
                 kanban: getKanbanHandles(projectDoc, kanbanId)!,
                 context: { version: 1, surface: "board", locale: "en-US", timeZone: "UTC" },
-                onProjection: value => latest = value,
+                onProjection: (value: KanbanProjection) => latest = value,
                 connect: localConnector,
             },
         });

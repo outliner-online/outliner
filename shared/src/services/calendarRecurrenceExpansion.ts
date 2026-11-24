@@ -1,4 +1,7 @@
-import { rrulestr } from "rrule";
+import * as rruleModule from "rrule";
+// Node resolves the CommonJS build; the browser bundler resolves the ESM build.
+const rrulestr = (Reflect.get(rruleModule, "rrulestr")
+    ?? Reflect.get(rruleModule, "default")?.rrulestr) as typeof rruleModule.rrulestr;
 import { getLogger } from "../logger.js";
 const logger = getLogger("calendarRecurrenceExpansion");
 import {

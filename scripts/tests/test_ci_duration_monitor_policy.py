@@ -44,6 +44,8 @@ class PolicyTests(unittest.TestCase):
         # These exact API intervals are applied to the reviewed current separated
         # execution contract. Historical server wrapper timing is not retroactively
         # certified as pure test time: live provenance still requires that contract.
+        # The historical new-4 execution is now an aggregate check; retain that
+        # sample as diagnostic rather than treating the aggregate as a test shard.
         for row in records:
             run = copy.deepcopy(row['run'])
             run.update(repository={'full_name':REPOSITORY}, head_repository={'full_name':REPOSITORY})
@@ -138,7 +140,7 @@ class PolicyTests(unittest.TestCase):
 
     def test_current_browser_variants_use_steps_not_reporter_format(self):
         workflows=self.repository_sources();workflow=next(w for w in workflows if w.path.endswith('/ci.yml'))
-        for variant in ['new-4','new-3a','new-3b','firefox-selection-new','onprem']:
+        for variant in ['new-4-1','new-4-2','new-4','new-3a','new-3b','firefox-selection-new','onprem']:
             self.github.runs=[{**GitHub().runs[0],'path':workflow.path}]
             candidate=job(seconds=900,name='e2e-test / e2e-test ('+variant+')')
             candidate['steps'][0]['name']='Run E2E tests ('+variant+')'
@@ -149,6 +151,9 @@ class PolicyTests(unittest.TestCase):
             # new-4's aggregate entrypoint changed with the current orchestration;
             # the unchanged native variants remain independently admissible.
             self.assertEqual(len(admitted),0 if variant in {'new-4','onprem'} else 1)
+            if variant == 'new-4':
+                sample = next(s for o in result['observations'] for s in o['samples'])
+                self.assertEqual(sample['diagnostic_reason'], 'configured test step is absent from the current job entrypoint')
 
     def test_unknown_branch_fork_base_variant_and_source_are_diagnostic(self):
         for mode in ['branch','unverified-pr','foreign-base','retired','source','inactive','wrong-step','step-failed','step-short','setup-dominates']:

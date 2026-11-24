@@ -1,5 +1,6 @@
 <script lang="ts">
 import type { GridNavDirection } from "../../../services/yjstable/gridKeyboardNav";
+import { gridDisplayedCell } from "../../../../../shared/src/notifications/gridProjection";
 
 interface Props {
     value: unknown;
@@ -15,6 +16,7 @@ interface Props {
 }
 
 let { value, editable, ariaLabel, editing = $bindable(false), editSeed, onCommit, onRequestFocus }: Props = $props();
+const displayed = $derived((gridDisplayedCell("number", value) as { value: string }).value);
 
 function commit(e: Event) {
     if (!editing) return;
@@ -46,7 +48,7 @@ function focusNode(node: HTMLElement) {
         aria-label={ariaLabel || "Edit cell value"}
         type="number"
         step="any"
-        value={editSeed ?? (value === null || value === undefined ? "" : String(value))}
+        value={editSeed ?? displayed}
         onblur={commit}
         onkeydown={(e) => {
             if (e.isComposing) return;
@@ -67,13 +69,13 @@ function focusNode(node: HTMLElement) {
     <button
         type="button"
         class="cell-value"
-        aria-label={value === null || value === undefined || String(value) === "" ? `Empty cell, ${ariaLabel || "cell"}` : `${String(value)}, ${ariaLabel || "cell"}`}
+        aria-label={displayed === "" ? `Empty cell, ${ariaLabel || "cell"}` : `${displayed}, ${ariaLabel || "cell"}`}
         class:readonly={!editable}
         aria-disabled={!editable ? "true" : "false"}
         onclick={() => {
             if (editable) editing = true;
         }}
-    >{value === null || value === undefined ? "" : String(value)}</button>
+    >{displayed}</button>
 {/if}
 
 <style>

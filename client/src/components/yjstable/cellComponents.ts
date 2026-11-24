@@ -2,6 +2,7 @@
 // the Svelte cell components rendered inside the dynamic grid.
 
 import type { Component } from "svelte";
+import { type GridCellType, gridCellType, isGridCellType } from "../../../../shared/src/notifications/gridProjection";
 import type { GridNavDirection } from "../../services/yjstable/gridKeyboardNav";
 import type { TableColumnSchema } from "../../services/yjstable/schemaIntrospection";
 import CheckboxCell from "./cells/CheckboxCell.svelte";
@@ -35,7 +36,7 @@ export interface CellProps {
     onRequestFocus?: (direction?: GridNavDirection) => void;
 }
 
-export type CellComponentType = "text" | "number" | "checkbox" | "select" | "date";
+export type CellComponentType = GridCellType;
 
 const CELL_COMPONENTS: Record<CellComponentType, Component<CellProps>> = {
     text: TextCell as Component<CellProps>,
@@ -46,25 +47,12 @@ const CELL_COMPONENTS: Record<CellComponentType, Component<CellProps>> = {
 };
 
 export function isCellComponentType(type: unknown): type is CellComponentType {
-    return typeof type === "string" && type in CELL_COMPONENTS;
+    return isGridCellType(type);
 }
 
 /** Default component type derived from the schema column. */
 export function defaultCellType(column: TableColumnSchema | undefined): CellComponentType {
-    if (!column) return "text";
-    if (column.kind === "enum") return "select";
-    if (column.checkOptions && column.checkOptions.length > 0) return "select";
-    switch (column.kind) {
-        case "boolean":
-            return "checkbox";
-        case "integer":
-        case "number":
-            return "number";
-        case "date":
-            return "date";
-        default:
-            return "text";
-    }
+    return gridCellType(undefined, column);
 }
 
 /**
@@ -78,8 +66,7 @@ export function cellComponentTypeFor(
     configuredType: string | undefined,
     column: TableColumnSchema | undefined,
 ): CellComponentType {
-    if (isCellComponentType(configuredType)) return configuredType;
-    return defaultCellType(column);
+    return gridCellType(configuredType, column);
 }
 
 /**

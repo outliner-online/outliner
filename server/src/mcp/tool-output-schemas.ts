@@ -1,6 +1,21 @@
 import * as z from "zod/v4";
 
 const jsonObject = z.looseObject({});
+const notificationRule = z.strictObject({
+    ruleId: z.string(),
+    target: z.strictObject({
+        projectId: z.string(),
+        kind: z.enum(["grid", "calendar", "kanban"]),
+        objectId: z.string(),
+    }),
+    enabled: z.boolean(),
+    channels: z.strictObject({ mcp: z.boolean(), mobile: z.boolean() }),
+    context: z.json(),
+});
+const notificationSettings = z.strictObject({
+    revision: z.number().int().nonnegative(),
+    rules: z.array(notificationRule),
+});
 const gridColumn = z.looseObject({ name: z.string(), shown: z.boolean() });
 const gridComponent = z.looseObject({ shown: z.boolean() });
 const gridPresentationComponent = z.strictObject({
@@ -186,6 +201,24 @@ const kanbanCounts = z.strictObject({
  * fields remain required. Array results stay arrays (MCP 2026-07-28).
  */
 export const toolOutputSchemas = {
+    get_notification_settings: notificationSettings,
+    update_notification_settings: z.strictObject({
+        applied: z.boolean(),
+        priorRevision: z.number().int().nonnegative(),
+        settings: notificationSettings,
+    }),
+    list_notification_targets: z.strictObject({
+        projectId: z.string(),
+        targets: z.array(
+            z.strictObject({
+                objectId: z.string(),
+                kind: z.enum(["grid", "calendar", "kanban"]),
+                name: z.string(),
+                contextShape: z.string(),
+            }),
+        ),
+        cursor: z.string().optional(),
+    }),
     resolve_url: z.looseObject({
         projectId: z.string(),
         kind: z.enum([
