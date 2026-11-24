@@ -1,10 +1,13 @@
 """Disposable native-metadata HTTP scans with slow optional/required reads."""
 
 import copy
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -91,48 +94,114 @@ class ScanBudgetTests(unittest.TestCase):
                                    required_read_workers=workers)
 
     def test_representative_required_history_overlaps_reads_and_recovers_within_budget(self):
-        # The retained scheduled failure made 447 required attempts (430 HTTP
-        # 200s and 16 HTTP 502s) in 720 seconds. This smaller fixture preserves
-        # that dominant one-jobs-GET-per-run pattern at a deterministic scale.
+        # Native diagnostics at reproduced main SHA 35c53f7 recorded 447
+        # required attempts: 430 HTTP 200s, 16 HTTP 502s, and the final
+        # attempt-jobs transport failure. Preserve its dominant 430-history
+        # scale and run both exact revisions through the scheduled CLI.
         template = copy.deepcopy(self.github.runs[0])
         self.github.runs = []
         self.github.jobs = {}
-        for run_id in range(10, 42):
+        live_now = datetime.now(timezone.utc)
+        for run_id in range(10, 440):
             run = copy.deepcopy(template)
             run['id'] = run_id
             self.github.runs.append(run)
-            self.github.jobs[(run_id, 1)] = [job(run_id, 700)]
-        self.slow_route, self.delay = 'actions/runs/', 0.08
+            fixture_job = job(run_id, 700)
+            fixture_job.update(
+                created_at=(live_now - timedelta(seconds=710)).isoformat(),
+                started_at=(live_now - timedelta(seconds=700)).isoformat(),
+                completed_at=live_now.isoformat())
+            fixture_job['steps'][0].update(
+                started_at=(live_now - timedelta(seconds=700)).isoformat(),
+                completed_at=live_now.isoformat())
+            self.github.jobs[(run_id, 1)] = [fixture_job]
+        self.slow_route, self.delay = 'actions/runs/', 0.01
         original = self.github.request
         fault = {'remaining': 1}
+        fault_route = 'actions/runs/200/attempts/1/jobs'
+        fixture = self.output / 'cli-fixture'
+        fixture.mkdir()
+        clock_path = fixture / 'clock'
+        clock = {'milliseconds': 0, 'baseline': True}
+        clock_lock = threading.Lock()
 
         def recoverable(method, path, payload=None):
-            if urlsplit(path).path == 'actions/runs/25/attempts/1/jobs' and fault['remaining']:
+            route = urlsplit(path).path
+            with clock_lock:
+                clock['milliseconds'] += 2000 if clock['baseline'] else 100
+                if clock['baseline'] and route == fault_route and fault['remaining']:
+                    clock['milliseconds'] = 719000
+                temporary_clock = clock_path.with_suffix('.tmp')
+                temporary_clock.write_text(str(clock['milliseconds']), encoding='ascii')
+                temporary_clock.replace(clock_path)
+            if route == fault_route and fault['remaining']:
                 fault['remaining'] -= 1
                 return Result(502, None)
             return original(method, path, payload)
 
         self.github.request = recoverable
-        baseline_started = time.monotonic()
-        with self.assertRaises(ReadBudgetExceeded):
-            self.run_scan(required=2, workers=1)
-        baseline_elapsed = time.monotonic() - baseline_started
-        baseline_reads = sum(path.endswith('/jobs') for _, path in self.received)
-        self.assertEqual(self.github.mutations, [])
+        clock_path.write_text('0', encoding='ascii')
+        # Drive only monotonic budget accounting from the loopback request
+        # schedule. Both exact revisions retain the production 720-second
+        # budget; the baseline fault lands with exactly one second remaining.
+        (fixture / 'sitecustomize.py').write_text(
+            f'import time\nfrom pathlib import Path\n_clock = Path({str(clock_path)!r})\n'
+            'time.monotonic = lambda: int(_clock.read_text()) / 1000\n'
+            'time.sleep = lambda _seconds: None\n', encoding='utf-8')
+        baseline = fixture / 'baseline'
+        baseline.mkdir()
+        for name in ('ci_duration_monitor.py', 'ci_duration_github.py',
+                     'ci_duration_policy.py', 'ci_cancellation_diagnostics.py'):
+            content = subprocess.run(
+                ['git', 'show', f'35c53f740f3bf03d3f6e9e15da1e87e5124004f5:scripts/{name}'],
+                check=True, capture_output=True).stdout
+            (baseline / name).write_bytes(content)
+
+        env = {**os.environ, 'GITHUB_API_URL': f'http://127.0.0.1:{self.server.server_port}',
+               'GITHUB_REPOSITORY': REPOSITORY,
+               'PYTHONPATH': str(fixture)}
+        common = ['--repository', REPOSITORY, '--config', str(self.output / 'config.json'),
+                  '--source-ref', 'b' * 40]
+        (self.output / 'config.json').write_text(json.dumps({'workflows': [{
+            'path': self.workflow.path, 'families': [{
+                'key': 'tests', 'name': 'Tests', 'job_pattern': r'Tests \(\d+/\d+\)',
+                'test_step_pattern': '^Run tests$', 'source_paths': list(self.workflow.families[0].source_paths),
+                'guidance': 'Keep selection.', 'measurement': 'test-step'}]}]}), encoding='utf-8')
+
+        baseline_output = self.output / 'baseline-output'
+        baseline_run = subprocess.run(
+            [sys.executable, str(baseline / 'ci_duration_monitor.py'), *common,
+             '--output-dir', str(baseline_output)], env=env, capture_output=True, text=True, timeout=15)
+        self.assertEqual(baseline_run.returncode, 1, baseline_run.stdout + baseline_run.stderr)
+        baseline_progress = json.loads((baseline_output / 'scan-progress.json').read_text())
+        self.assertEqual(baseline_progress['error_type'], 'ReadBudgetExceeded')
+        self.assertEqual(baseline_progress['last_request']['path'], fault_route)
+        self.assertIn('cannot accommodate another retry', baseline_run.stdout)
+        self.assertFalse((baseline_output / 'report.json').exists())
 
         self.received.clear()
         fault['remaining'] = 1
-        fixed_started = time.monotonic()
-        report = self.run_scan(required=2, workers=8)
-        fixed_elapsed = time.monotonic() - fixed_started
-        fixed_reads = sum(path.endswith('/jobs') for _, path in self.received)
-        self.assertEqual(fixed_reads, 33)  # 32 required collections plus one retry.
-        self.assertEqual(report['admission_summary']['qualifying_candidates'], 32)
-        self.assertEqual(len(report['observations'][0]['samples']), 32)
-        self.assertLess(fixed_elapsed, 2)
-        self.assertGreater(baseline_elapsed, fixed_elapsed)
-        print(f'Retained-scale ratio 32/430: serial baseline failed after {baseline_reads} required reads in '
-              f'{baseline_elapsed:.3f}s; bounded overlap completed {fixed_reads} reads in {fixed_elapsed:.3f}s.')
+        clock.update(milliseconds=0, baseline=False)
+        clock_path.write_text('0', encoding='ascii')
+        candidate_output = self.output / 'candidate-output'
+        candidate_run = subprocess.run(
+            [sys.executable, str(Path(monitor.__file__)), *common,
+             '--output-dir', str(candidate_output)], env=env, capture_output=True, text=True, timeout=15)
+        self.assertEqual(candidate_run.returncode, 0, candidate_run.stdout + candidate_run.stderr)
+        report = json.loads((candidate_output / 'report.json').read_text())
+        expected_jobs = list(range(10, 440))
+        self.assertEqual(report['admission'], [{
+            'workflow': '.github/workflows/ci.yml', 'family': 'tests',
+            'qualifying_job_ids': expected_jobs, 'existing_open_issues': [],
+            'classification': 'qualifies-new', 'diagnostic_samples': 0}])
+        self.assertEqual([(row['run_id'], row['job_id']) for row in report['observations'][0]['samples']],
+                         [(identifier, identifier) for identifier in expected_jobs])
+        self.assertEqual(report['actions'], [{
+            'workflow': '.github/workflows/ci.yml', 'family': 'tests', 'run_id': 439,
+            'attempt': 1, 'issue': None, 'action': 'create'}])
+        summary = (candidate_output / 'summary.md').read_text()
+        self.assertIn('Admission before existing issue handling: 430 qualifying jobs; 0 qualifying families with existing issues; 1 new qualifying families; 0 families with insufficient evidence.', summary)
+        self.assertEqual(sum(path.endswith('/jobs') for _, path in self.received), 431)
 
     def test_slow_annotations_are_after_required_inventory_and_bounded(self):
         source = monitor.CurrentSource(self.client, monitor._call, REPOSITORY, request=monitor._request)
