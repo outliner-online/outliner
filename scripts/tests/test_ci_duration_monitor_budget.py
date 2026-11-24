@@ -221,7 +221,6 @@ class ScanBudgetTests(unittest.TestCase):
         summary = (candidate_output / 'summary.md').read_text()
         self.assertIn('Admission before existing issue handling: 430 qualifying jobs; 0 qualifying families with existing issues; 1 new qualifying families; 0 families with insufficient evidence.', summary)
         self.assertEqual(sum(path.endswith('/jobs') for _, path in self.received), 431)
-        candidate_progress = json.loads((candidate_output / 'scan-progress.json').read_text())
         self.assertLess(candidate_progress['elapsed_seconds'], baseline_progress['elapsed_seconds'])
         print('Synthetic budget: baseline '
               f"{baseline_progress['elapsed_seconds']}s/{baseline_job_reads} job reads; candidate "
