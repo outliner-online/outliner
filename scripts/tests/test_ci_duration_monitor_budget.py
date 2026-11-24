@@ -83,11 +83,56 @@ class ScanBudgetTests(unittest.TestCase):
         self.server.server_close()
         self.thread.join()
 
-    def run_scan(self, *, required=3, optional=0.05):
+    def run_scan(self, *, required=3, optional=0.05, workers=8):
         return monitor.run_monitor(self.client, (self.workflow,), REPOSITORY, 'ignored',
                                    now=NOW, lookback_hours=48, publish=True,
                                    diagnostics_output=self.output,
-                                   required_read_seconds=required, optional_read_seconds=optional)
+                                   required_read_seconds=required, optional_read_seconds=optional,
+                                   required_read_workers=workers)
+
+    def test_representative_required_history_overlaps_reads_and_recovers_within_budget(self):
+        # The retained scheduled failure made 447 required attempts (430 HTTP
+        # 200s and 16 HTTP 502s) in 720 seconds. This smaller fixture preserves
+        # that dominant one-jobs-GET-per-run pattern at a deterministic scale.
+        template = copy.deepcopy(self.github.runs[0])
+        self.github.runs = []
+        self.github.jobs = {}
+        for run_id in range(10, 42):
+            run = copy.deepcopy(template)
+            run['id'] = run_id
+            self.github.runs.append(run)
+            self.github.jobs[(run_id, 1)] = [job(run_id, 700)]
+        self.slow_route, self.delay = 'actions/runs/', 0.08
+        original = self.github.request
+        fault = {'remaining': 1}
+
+        def recoverable(method, path, payload=None):
+            if urlsplit(path).path == 'actions/runs/25/attempts/1/jobs' and fault['remaining']:
+                fault['remaining'] -= 1
+                return Result(502, None)
+            return original(method, path, payload)
+
+        self.github.request = recoverable
+        baseline_started = time.monotonic()
+        with self.assertRaises(ReadBudgetExceeded):
+            self.run_scan(required=2, workers=1)
+        baseline_elapsed = time.monotonic() - baseline_started
+        baseline_reads = sum(path.endswith('/jobs') for _, path in self.received)
+        self.assertEqual(self.github.mutations, [])
+
+        self.received.clear()
+        fault['remaining'] = 1
+        fixed_started = time.monotonic()
+        report = self.run_scan(required=2, workers=8)
+        fixed_elapsed = time.monotonic() - fixed_started
+        fixed_reads = sum(path.endswith('/jobs') for _, path in self.received)
+        self.assertEqual(fixed_reads, 33)  # 32 required collections plus one retry.
+        self.assertEqual(report['admission_summary']['qualifying_candidates'], 32)
+        self.assertEqual(len(report['observations'][0]['samples']), 32)
+        self.assertLess(fixed_elapsed, 2)
+        self.assertGreater(baseline_elapsed, fixed_elapsed)
+        print(f'Retained-scale ratio 32/430: serial baseline failed after {baseline_reads} required reads in '
+              f'{baseline_elapsed:.3f}s; bounded overlap completed {fixed_reads} reads in {fixed_elapsed:.3f}s.')
 
     def test_slow_annotations_are_after_required_inventory_and_bounded(self):
         source = monitor.CurrentSource(self.client, monitor._call, REPOSITORY, request=monitor._request)
