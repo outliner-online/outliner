@@ -9,6 +9,9 @@ status: implemented
 tests:
 - client/e2e/new/cal-hour-map-single-day-view-4c17e9d2.spec.ts
 - client/src/components/calendar/CalendarHourMinuteGrid.test.ts
+- client/src/components/calendar/CalendarView.hoursProjection.test.ts
 - client/src/components/calendar/CalendarView.test.ts
 - client/src/services/calendar/calendarGridRange.test.ts
 - client/src/services/calendar/calendarHourMinuteLayout.test.ts
+- client/src/services/calendar/calendarHoursVisibleModel.test.ts
+notes: Current generation-checked Hours SQL evidence and committed roles now feed the shared production entry/recurrence and Hours layout producer in shared/src/notifications/calendarHoursVisibleModel.ts. CalendarView renders that accepted layout and publishes its immutable semantic projection. Optimistic editing and intentional stale display remain separate from the comparable model. Mounted real SQL/DOM tests cover a DST day, fragment folding, overlap, clipping, all-day/due bands, a recurrence override, role/working-hour edits, SQL failure and recovery. This is the Hours milestone for issue 5980; it does not establish all-mode projection parity or resolve its review threads.

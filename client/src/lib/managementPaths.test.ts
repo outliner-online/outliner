@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { computeViewRange } from "../services/calendar/calendarGridRange";
 import {
     isReservedPageSegment,
     MANAGEMENT_SEGMENT,
+    projectCalendarObservationRoute,
     projectCalendarPath,
     projectCalendarsPath,
     projectGraphPath,
@@ -64,5 +66,26 @@ describe("managementPaths", () => {
         expect(projectObjectsPath("a/b")).toBe("/a%2Fb/-/objects");
         expect(projectTablePath("acme", "id with space")).toBe("/acme/-/tables/id%20with%20space");
         expect(projectKanbanPath("acme", "board/id")).toBe("/acme/-/kanbans/board%2Fid");
+    });
+
+    it("uses a stable project id for Calendar observation routes", () => {
+        const anchorUtcMs = Date.UTC(2026, 10, 21, 12);
+        const range = computeViewRange(anchorUtcMs, "day", 1, "UTC");
+        const route = projectCalendarObservationRoute("project-id-123", "calendar-id-456", {
+            version: 1,
+            locale: "en-US",
+            timeZone: "UTC",
+            weekStart: 1,
+            viewType: "day",
+            anchorUtcMs,
+            rangeStartUtcMs: range.start,
+            rangeEndUtcMs: range.end,
+            monthLaneFilter: null,
+            collapsedEntryKeys: [],
+        });
+        expect(route).toMatch(/^\/project-id-123\/-\/calendars\/calendar-id-456\?context=/);
+        expect(projectCalendarPath("Renamed Project", "calendar-id-456")).toBe(
+            "/Renamed%20Project/-/calendars/calendar-id-456",
+        );
     });
 });

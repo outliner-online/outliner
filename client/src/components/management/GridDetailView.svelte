@@ -24,15 +24,18 @@
     } from "../../lib/managementPaths";
     import { DemoInitAborted } from "../../lib/demoInit";
     import { openRouteProject, type RouteProjectHandle } from "../../lib/routeProject";
+    import type { GridObservationContextV1 } from "../../../../shared/src/notifications/gridProjection";
 
     const logger = getLogger("GridStandalonePage");
 
     interface Props {
         projectName: string;
         gridId: string;
+        observationContext?: GridObservationContextV1;
+        observationError?: string;
     }
 
-    let { projectName, gridId: routeGridId }: Props = $props();
+    let { projectName, gridId: routeGridId, observationContext, observationError }: Props = $props();
 
     // Page state
     let error: string | undefined = $state(undefined);
@@ -221,6 +224,10 @@
                 <div class="text-gray-600 text-sm font-medium">Loading...</div>
             </div>
         </div>
+    {:else if observationError}
+        <div class="rounded-md bg-red-50 p-4" role="alert" data-testid="grid-observation-context-error">
+            <p class="text-sm text-red-700">{observationError}</p>
+        </div>
     {:else if error}
         <div class="rounded-md bg-red-50 p-4">
             <p class="text-sm text-red-700">{error}</p>
@@ -242,6 +249,7 @@
                     projectId={yjsStore.currentProjectId ?? undefined}
                     projectName={projectName}
                     canWrite={() => Boolean(canAccess)}
+                    {observationContext}
                 />
             {/key}
             {/key}

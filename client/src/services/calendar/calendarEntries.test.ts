@@ -12,6 +12,43 @@ const SETTINGS = {
 };
 
 describe("buildCalendarEntries", () => {
+    it("assigns stable unique render identities to duplicate source rows across reordering", () => {
+        const rows = [
+            { source_kind: "tasks", source_id: "shared", title: "Alpha", start: "2026-03-10T09:00:00Z" },
+            { source_kind: "tasks", source_id: "shared", title: "Beta", start: "2026-03-10T10:00:00Z" },
+        ];
+        const build = (orderedRows: typeof rows) =>
+            buildCalendarEntries(
+                { columns: Object.keys(rows[0]), rows: orderedRows },
+                { roleTitle: "title", roleStart: "start" },
+                "UTC",
+            );
+
+        const before = build(rows);
+        const after = build([...rows].reverse());
+        expect(new Set(before.map(entry => entry.renderKey)).size).toBe(2);
+        expect(Object.fromEntries(after.map(entry => [entry.title, entry.renderKey])))
+            .toEqual(Object.fromEntries(before.map(entry => [entry.title, entry.renderKey])));
+    });
+
+    it("keeps occurrence identities across singleton-to-duplicate and same-title reorder transitions", () => {
+        const original = { source_kind: "items", source_id: "same", title: "Same", start: "2026-03-10T09:00:00Z" };
+        const later = { ...original, start: "2026-03-10T11:00:00Z" };
+        const build = (rows: Record<string, unknown>[]) =>
+            buildCalendarEntries(
+                { columns: ["source_kind", "source_id", "title", "start"], rows },
+                { roleTitle: "title", roleStart: "start" },
+                "UTC",
+            );
+        const singletonKey = build([original])[0].renderKey;
+        const joined = build([original, later]);
+        expect(joined[0].renderKey).toBe(singletonKey);
+        expect(joined[1].renderKey).not.toBe(singletonKey);
+        const reordered = build([later, original]);
+        expect(Object.fromEntries(reordered.map(entry => [entry.startMs, entry.renderKey])))
+            .toEqual(Object.fromEntries(joined.map(entry => [entry.startMs, entry.renderKey])));
+    });
+
     it("builds a timed entry with an instant start", () => {
         const [entry] = buildCalendarEntries(
             {

@@ -18,7 +18,7 @@ export interface Collection {
     cases: CollectedCase[];
 }
 
-const REPORTER = fileURLToPath(new URL("./playwright-collection-reporter.mjs", import.meta.url));
+const REPORTER = fileURLToPath(new URL("../../ci/playwright-collection-reporter.mjs", import.meta.url));
 
 export function findSpecFiles(dir: string, base = dir): string[] {
     return fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => {

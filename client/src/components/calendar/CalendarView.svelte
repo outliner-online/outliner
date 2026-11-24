@@ -8,13 +8,20 @@
 // CalendarBlock/the standalone route) — a calendar has no subdoc to key on
 // the way a table does, so the id itself is the remount key.
 
-import { onDestroy, onMount } from "svelte";
+import { onDestroy, onMount, untrack } from "svelte";
 import type { Project } from "$shared/app-schema";
-import { utcMsToFloatingDate } from "$shared/utils/zonedTime";
+import type { CalendarObservationContextV1, CalendarProjectionResult } from "$shared/notifications/calendarProjection";
+import type { CalendarHoursVisibleModel } from "$shared/notifications/calendarHoursVisibleModel";
 import * as Y from "yjs";
 import { analyzeCalendarEditability } from "../../services/calendar/calendarEditability";
 import { analyzeCalendarColumnWritability } from "../../services/calendar/calendarColumnWritability";
 import { buildCalendarEntries, type CalendarEntry } from "../../services/calendar/calendarEntries";
+import type { CalendarDayVisibleModel } from "$shared/notifications/calendarDayVisibleModel";
+import { deriveCalendarVisibleModel } from "$shared/notifications/calendarVisibleModel";
+import { CALENDAR_DAYS_MODE_LABELS, type CalendarDaysVisibleModel } from "$shared/notifications/calendarDaysVisibleModel";
+import type { CalendarGanttVisibleModel } from "$shared/notifications/calendarGanttVisibleModel";
+import { GANTT_MODE_LABEL } from "$shared/services/calendarGanttPresentation";
+import type { CalendarMonthVisibleModel } from "$shared/notifications/calendarMonthVisibleModel";
 import {
     resolveCalendarEntryWritability,
     writeCalendarEntryDuration,
@@ -33,8 +40,8 @@ import {
     todayAnchor,
     type CalendarViewType,
 } from "../../services/calendar/calendarGridRange";
-import { computeDayHeaders } from "../../services/calendar/calendarDayHeaders";
-import { layoutHourMinuteGrid } from "../../services/calendar/calendarHourMinuteLayout";
+import { computeDayHeaders, formatCalendarRangeLabel } from "../../services/calendar/calendarDayHeaders";
+import { HOUR_MAP_MODE_LABEL, layoutHourMinuteGrid } from "../../services/calendar/calendarHourMinuteLayout";
 import {
     collapseLanePath,
     entryAxisValues,
@@ -43,7 +50,7 @@ import {
 } from "../../services/calendar/calendarGrouping";
 import { isLaneDropWritable, writeCalendarLaneDrop } from "../../services/calendar/calendarLaneWrite";
 import { resolveDefaultWeekStart } from "../../services/calendar/calendarLocale";
-import { layoutMonthGrid } from "../../services/calendar/calendarMonthGridLayout";
+import { layoutMonthGrid, MONTH_MODE_LABEL } from "../../services/calendar/calendarMonthGridLayout";
 import { isOutlineItemAddressable, navigateToOutlineItem } from "../../services/navigation/outlineItemNavigation";
 import {
     applyOptimisticOverrides,
@@ -86,9 +93,11 @@ interface Props {
     project: Project;
     projectId?: string;
     calendarId: string;
+    observationContext?: CalendarObservationContextV1;
+    onVisibleProjection?: (result: CalendarProjectionResult) => void;
 }
 
-let { project, projectId, calendarId }: Props = $props();
+let { project, projectId, calendarId, observationContext, onVisibleProjection }: Props = $props();
 
 const EMPTY_SETTINGS: CalendarSettings = {
     name: "",
@@ -100,14 +109,18 @@ const EMPTY_SETTINGS: CalendarSettings = {
 
 const VIEW_TYPE_OPTIONS: { value: string; label: string; }[] = [
     { value: "day", label: "Day" },
-    { value: "hours", label: "Hour Map" },
-    { value: "days", label: "Multi-day" },
-    { value: "week", label: "Week" },
-    { value: "month", label: "Month" },
-    { value: "gantt", label: "Gantt" },
+    { value: "hours", label: HOUR_MAP_MODE_LABEL },
+    { value: "days", label: CALENDAR_DAYS_MODE_LABELS.days },
+    { value: "week", label: CALENDAR_DAYS_MODE_LABELS.week },
+    { value: "month", label: MONTH_MODE_LABEL },
+    { value: "gantt", label: GANTT_MODE_LABEL },
 ];
 
 const GANTT_SCALES = new Set<GanttScale>(["day", "week", "month", "quarter"]);
+
+function hasAcceptedProjection(type: string): type is "day" | "hours" | "days" | "week" | "month" | "gantt" {
+    return type === "day" || type === "hours" || type === "days" || type === "week" || type === "month" || type === "gantt";
+}
 
 let settings = $state<CalendarSettings>(EMPTY_SETTINGS);
 let queryInput = $state("");
@@ -115,7 +128,17 @@ let result = $state<TableQueryResult>({ columns: [], rows: [] });
 let queryError = $state<string | undefined>(undefined);
 let writeError = $state<string | undefined>(undefined);
 let catalogResultCurrent = $state(false);
-let anchorUtcMs = $state(Date.now());
+let acceptedDayModel = $state<CalendarDayVisibleModel | undefined>(undefined);
+let acceptedHoursModel = $state<CalendarHoursVisibleModel | undefined>(undefined);
+let acceptedDaysModel = $state<CalendarDaysVisibleModel | undefined>(undefined);
+let acceptedGanttModel = $state<CalendarGanttVisibleModel | undefined>(undefined);
+let ganttCollapsedEntryKeys = $state<string[]>([...(untrack(() => observationContext?.collapsedEntryKeys) ?? [])]);
+let acceptedMonthModel = $state<CalendarMonthVisibleModel | undefined>(undefined);
+let acceptedEvidence: {
+    result: TableQueryResult;
+    context: CalendarObservationContextV1;
+} | undefined;
+let anchorUtcMs = $state(untrack(() => observationContext?.anchorUtcMs) ?? Date.now());
 let optimisticOverrides = $state<OptimisticOverrides>(createOptimisticOverrides());
 let showCreateDialog = $state(false);
 let createDefaultStartMs = $state<number | undefined>(undefined);
@@ -136,27 +159,29 @@ const writableColumns = $derived(analyzeCalendarColumnWritability(settings.query
 // and the grid range below is computed in it, so two collaborators viewing a
 // calendar with a fixed timezone see the same window regardless of either
 // viewer's own local zone.
-const timeZone = $derived(resolveCalendarTimezone(settings.timezone));
+const locale = $derived(observationContext?.locale);
+const timeZone = $derived(observationContext?.timeZone ?? resolveCalendarTimezone(settings.timezone));
 const timeZoneOptions = listSupportedTimeZones();
-const weekStart = $derived(settings.weekStart ?? resolveDefaultWeekStart());
+const weekStart = $derived(observationContext?.weekStart ?? settings.weekStart ?? resolveDefaultWeekStart());
 const workingHoursStart = $derived(settings.workingHoursStartMinutes ?? DEFAULT_WORKING_HOURS_START_MINUTES);
 const workingHoursEnd = $derived(settings.workingHoursEndMinutes ?? DEFAULT_WORKING_HOURS_END_MINUTES);
 const KNOWN_VIEW_TYPES = new Set<CalendarViewType>(["day", "hours", "days", "week", "month"]);
-const isGantt = $derived(settings.viewType === "gantt");
+const effectiveViewType = $derived(observationContext?.viewType ?? settings.viewType);
+const isGantt = $derived(effectiveViewType === "gantt");
 // A stored viewType this component does not know how to grid (a stale
 // value) falls back to "week" rather than crashing the range computation,
 // which is only total over the known variants. Irrelevant when `isGantt`,
 // which uses its own scale/range below.
 const viewType = $derived(
-    KNOWN_VIEW_TYPES.has(settings.viewType as CalendarViewType) ? (settings.viewType as CalendarViewType) : "week",
+    KNOWN_VIEW_TYPES.has(effectiveViewType as CalendarViewType) ? (effectiveViewType as CalendarViewType) : "week",
 );
 const ganttScale = $derived(
-    GANTT_SCALES.has(settings.ganttScale as GanttScale) ? (settings.ganttScale as GanttScale) : DEFAULT_GANTT_SCALE,
+    observationContext?.ganttScale ?? (GANTT_SCALES.has(settings.ganttScale as GanttScale) ? (settings.ganttScale as GanttScale) : DEFAULT_GANTT_SCALE),
 );
 const range = $derived(
     isGantt ? computeGanttRange(anchorUtcMs, ganttScale, timeZone) : computeViewRange(anchorUtcMs, viewType, weekStart, timeZone),
 );
-const ganttTicks = $derived(isGantt ? computeGanttTicks(range.start, range.end, ganttScale, timeZone) : []);
+const ganttTicks = $derived(isGantt ? computeGanttTicks(range.start, range.end, ganttScale, timeZone, locale) : []);
 // The same visible window, in the `{ start: Date, end: Date }` shape the
 // query runner injects as `view.range_start`/`view.range_end` (§6.4). The
 // grid keeps working in UTC millis; only the SQL boundary needs Dates.
@@ -176,9 +201,10 @@ const entryByKey = $derived(new Map(placedEntries.map((e) => [e.key, e])));
 // rendered as nested swimlanes here.
 const groupAxis = $derived(settings.groupAxes[0] as string | undefined);
 const groupingActive = $derived(groupAxis !== undefined);
+const acceptedLaneBands = $derived(optimisticOverrides.size === 0 ? acceptedDaysModel?.bands : undefined);
 const lanes = $derived(
     groupAxis
-        ? groupCalendarEntries(placedEntries, [groupAxis], {
+        ? acceptedLaneBands?.map(band => band.lane) ?? groupCalendarEntries(placedEntries, [groupAxis], {
             laneOrder: settings.laneOrder,
             showEmptyLanes: settings.showEmptyLanes,
         })
@@ -193,8 +219,8 @@ function laneLabelForEntry(entry: CalendarEntry): string {
     return collapseLanePath([entryAxisValues(entry, groupAxis)[0]]);
 }
 
-const monthLaneFilterOptions = $derived(lanes?.map((lane) => collapseLanePath(lane.path)) ?? []);
-let monthLaneFilter = $state<string | undefined>(undefined);
+const monthLaneFilterOptions = $derived(acceptedMonthModel?.laneOptions ?? lanes?.map((lane) => collapseLanePath(lane.path)) ?? []);
+let monthLaneFilter = $state<string | undefined>(untrack(() => observationContext?.monthLaneFilter) ?? undefined);
 const monthFilteredEntries = $derived(
     groupingActive && monthLaneFilter !== undefined
         ? placedEntries.filter((entry) => laneLabelForEntry(entry) === monthLaneFilter)
@@ -202,9 +228,12 @@ const monthFilteredEntries = $derived(
 );
 
 const isHourMap = $derived(!isGantt && viewType === "hours");
+const acceptedTimeGridModel = $derived(viewType === "day" ? acceptedDayModel : acceptedDaysModel);
 const timeGridLayout = $derived(
     isGantt || isHourMap || viewType === "month" || groupingActive
         ? undefined
+        : optimisticOverrides.size === 0 && acceptedTimeGridModel
+        ? acceptedTimeGridModel.layout
         : layoutTimeGrid(placedEntries, range.start, range.end),
 );
 // The Hour Map (#4972) is a single-day projection of the *same* entries every
@@ -215,14 +244,19 @@ const timeGridLayout = $derived(
 // falling back to the lane time grid.
 const hourMinuteLayout = $derived(
     isHourMap
-        ? layoutHourMinuteGrid(placedEntries, range.start, range.end, timeZone, {
+        ? optimisticOverrides.size === 0 && acceptedHoursModel
+        ? acceptedHoursModel.layout
+        : layoutHourMinuteGrid(placedEntries, range.start, range.end, timeZone, {
             workingHoursStartMinutes: workingHoursStart,
             workingHoursEndMinutes: workingHoursEnd,
         })
         : undefined,
 );
 const monthCells = $derived(
-    !isGantt && viewType === "month" ? layoutMonthGrid(monthFilteredEntries, range.start, range.end) : undefined,
+    !isGantt && viewType === "month"
+        ? optimisticOverrides.size === 0 && acceptedMonthModel ? acceptedMonthModel.cells
+        : layoutMonthGrid(monthFilteredEntries, range.start, range.end)
+        : undefined,
 );
 
 function isStartWritable(entry: CalendarEntry): boolean {
@@ -302,6 +336,48 @@ const pgSchema = projectSchemaName(projectId);
 // svelte-ignore state_referenced_locally
 const session = createTableEngineSession({ projectDoc: project.ydoc, projectId });
 
+function publishAcceptedModel(currentSettings: CalendarSettings): void {
+    if (!acceptedEvidence) return;
+    const context = acceptedEvidence.context;
+    const derived = deriveCalendarVisibleModel({
+        authority: { current: true, result: acceptedEvidence.result, project },
+        settings: currentSettings,
+        context: { ...context,
+            ...(context.viewType === "gantt" ? { collapsedEntryKeys: ganttCollapsedEntryKeys } : {}),
+            ...(context.viewType === "month" ? { monthLaneFilter: monthLaneFilter ?? null } : {}) },
+        numericGanttTickLabels: locale === undefined,
+    });
+    acceptedDayModel = undefined;
+    acceptedDaysModel = undefined;
+    acceptedHoursModel = undefined;
+    acceptedMonthModel = undefined;
+    acceptedGanttModel = undefined;
+    if (!derived.ready) {
+        onVisibleProjection?.(derived);
+        return;
+    }
+    switch (derived.kind) {
+        case "day": acceptedDayModel = derived.model; break;
+        case "days": acceptedDaysModel = derived.model; break;
+        case "hours": acceptedHoursModel = derived.model; break;
+        case "month": acceptedMonthModel = derived.model; break;
+        case "gantt": acceptedGanttModel = derived.model; break;
+    }
+    onVisibleProjection?.({ ready: true, projection: derived.model.projection });
+}
+
+function invalidateObservation(publishNonReady = hasAcceptedProjection(effectiveViewType)): void {
+    acceptedEvidence = undefined;
+    acceptedDayModel = undefined;
+    acceptedHoursModel = undefined;
+    acceptedDaysModel = undefined;
+    acceptedMonthModel = undefined;
+    acceptedGanttModel = undefined;
+    if (publishNonReady) {
+        onVisibleProjection?.({ ready: false, reason: "Accepted Calendar SQL evidence is stale or unavailable." });
+    }
+}
+
 async function runQuery() {
     const generation = ++queryGeneration;
 
@@ -312,6 +388,22 @@ async function runQuery() {
     const currentTimeZone = timeZone;
     const currentSettings = settings;
     const currentRangeBounds = { startUtcMs: range.start, endUtcMs: range.end };
+    const currentViewType = effectiveViewType;
+    const currentContext: CalendarObservationContextV1 | undefined = hasAcceptedProjection(currentViewType)
+        ? {
+            version: 1,
+            locale: locale ?? new Intl.DateTimeFormat().resolvedOptions().locale,
+            timeZone: currentTimeZone,
+            weekStart,
+            viewType: currentViewType,
+            anchorUtcMs,
+            rangeStartUtcMs: currentRangeBounds.startUtcMs,
+            rangeEndUtcMs: currentRangeBounds.endUtcMs,
+            monthLaneFilter: currentViewType === "month" ? monthLaneFilter ?? null : null,
+            collapsedEntryKeys: currentViewType === "gantt" ? [...ganttCollapsedEntryKeys] : [],
+            ...(currentViewType === "gantt" ? { ganttScale } : {}),
+        }
+        : undefined;
 
     const outcome = await runCalendarQuery(
         session,
@@ -326,6 +418,13 @@ async function runQuery() {
         result = outcome.result;
         queryError = undefined;
         catalogResultCurrent = true;
+        if (currentContext) {
+            acceptedEvidence = { result: outcome.result, context: currentContext };
+            // Roles and other presentation settings do not require another
+            // SQL execution. Use their latest committed value even when they
+            // changed while this accepted query was in flight.
+            publishAcceptedModel(settings);
+        }
         // The query result is authoritative: drop any optimistic placement
         // whose row has now come back, whether or not it agrees with the
         // local guess (a concurrent remote move wins either way).
@@ -333,11 +432,27 @@ async function runQuery() {
     } else {
         catalogResultCurrent = false;
         queryError = outcome.error;
+        if (currentContext) {
+            invalidateObservation();
+        }
     }
 }
 
-function scheduleRequery(invalidateCurrentResult = false) {
-    if (invalidateCurrentResult) catalogResultCurrent = false;
+function scheduleRequery(
+    invalidateCurrentResult = false,
+    invalidateComparable = false,
+    publishNonReady = hasAcceptedProjection(effectiveViewType),
+) {
+    if (invalidateComparable) {
+        // Cancel an in-flight generation before the debounce. Its captured
+        // range must never be paired with labels from the new navigation.
+        queryGeneration++;
+        invalidateObservation(publishNonReady);
+    }
+    if (invalidateCurrentResult) {
+        catalogResultCurrent = false;
+        invalidateObservation();
+    }
     if (requeryTimer !== undefined) clearTimeout(requeryTimer);
     requeryTimer = setTimeout(() => {
         requeryTimer = undefined;
@@ -348,19 +463,25 @@ function scheduleRequery(invalidateCurrentResult = false) {
 function refreshMirror() {
     const next = readSettingsFromMap();
     if (!next) return;
+    const previousViewType = effectiveViewType;
     const queryChanged = next.query !== settings.query;
     const viewTypeChanged = next.viewType !== settings.viewType;
     const timezoneChanged = next.timezone !== settings.timezone;
+    if (viewTypeChanged && !observationContext) ganttCollapsedEntryKeys = [];
     const ganttScaleChanged = next.ganttScale !== settings.ganttScale;
+    const weekStartChanged = (effectiveViewType === "week" || effectiveViewType === "month") && !observationContext && next.weekStart !== settings.weekStart;
     settings = next;
     queryInput = next.query;
     if (queryChanged || timezoneChanged) {
-        scheduleRequery(true);
-    } else if (viewTypeChanged || ganttScaleChanged) {
-        // Presentation-only changes reuse the same current SQL result. They
-        // must not temporarily revoke drag/write authority while the
-        // debounced refresh confirms that unchanged result.
-        scheduleRequery();
+        scheduleRequery(true, true, [previousViewType, next.viewType].some(hasAcceptedProjection));
+    } else if (viewTypeChanged || ganttScaleChanged || weekStartChanged) {
+        // Range/mode changes recapture SQL evidence while keeping existing
+        // drag/write authority until the debounced query refreshes it.
+        scheduleRequery(false, true, [previousViewType, next.viewType].some(hasAcceptedProjection));
+    } else if (catalogResultCurrent && acceptedEvidence) {
+        // Role/grouping/lane presentation changes reuse the accepted rows but
+        // must rebuild both the production model and its projection.
+        publishAcceptedModel(next);
     }
     if (!isInitialSyncDone) {
         isInitialSyncDone = true;
@@ -399,26 +520,26 @@ function commitGanttScale(scale: GanttScale) {
 
 function goToday() {
     anchorUtcMs = todayAnchor(timeZone, Date.now());
-    scheduleRequery();
+    scheduleRequery(false, true);
 }
 function goPrev() {
     anchorUtcMs = isGantt
         ? shiftGanttAnchor(anchorUtcMs, ganttScale, timeZone, -1)
         : shiftAnchor(anchorUtcMs, viewType, weekStart, timeZone, -1);
-    scheduleRequery();
+    scheduleRequery(false, true);
 }
 function goNext() {
     anchorUtcMs = isGantt
         ? shiftGanttAnchor(anchorUtcMs, ganttScale, timeZone, 1)
         : shiftAnchor(anchorUtcMs, viewType, weekStart, timeZone, 1);
-    scheduleRequery();
+    scheduleRequery(false, true);
 }
 
 // The range boundaries are instants at the *calendar zone's* midnight, so
 // the label must read them back in that zone; `toISOString` would name the
 // UTC day, which is the previous one for any zone ahead of UTC.
 const rangeLabel = $derived(
-    `${utcMsToFloatingDate(range.start, timeZone)} – ${utcMsToFloatingDate(range.end - 1, timeZone)} (${timeZone})`,
+    formatCalendarRangeLabel(range.start, range.end, timeZone, locale),
 );
 
 // --- Write dispatch: drag/resize/keyboard all funnel through here. ---
@@ -594,6 +715,9 @@ onMount(() => {
         }
         queryGeneration++;
         catalogResultCurrent = false;
+        // Retain the intentionally stale rendered rows, but revoke the
+        // comparable observation as soon as its catalog authority is lost.
+        invalidateObservation();
         if (state.status === "building") {
             queryError = "SQL catalog is rebuilding";
         } else if (state.status === "error") {
@@ -623,7 +747,7 @@ onDestroy(() => {
             <button type="button" data-testid="calendar-nav-next" onclick={goNext} aria-label="Next period">›</button>
             <span class="range-label" data-testid="calendar-range-label">{rangeLabel}</span>
         </div>
-        <select data-testid="calendar-view-type" aria-label={`${settings.name || "Calendar"} view`} value={settings.viewType} onchange={setViewType}>
+        <select data-testid="calendar-view-type" aria-label={`${settings.name || "Calendar"} view`} value={effectiveViewType} onchange={setViewType}>
             {#each VIEW_TYPE_OPTIONS as opt (opt.value)}
                 <option value={opt.value}>{opt.label}</option>
             {/each}
@@ -708,12 +832,18 @@ onDestroy(() => {
     {#if isGantt}
         <CalendarGanttChart
             entries={placedEntries}
+            acceptedModel={optimisticOverrides.size === 0 ? acceptedGanttModel : undefined}
+            onCollapsedEntryKeysChange={(keys) => {
+                ganttCollapsedEntryKeys = keys;
+                if (catalogResultCurrent && acceptedEvidence) publishAcceptedModel(settings);
+            }}
             groupAxes={settings.groupAxes}
             rangeStart={range.start}
             rangeEnd={range.end}
             ticks={ganttTicks}
             scale={ganttScale}
             {timeZone}
+            initialCollapsedEntryKeys={ganttCollapsedEntryKeys}
             onScaleChange={commitGanttScale}
             isLeafStartWritable={isStartWritable}
             isLeafDurationWritable={isDurationWritable}
@@ -735,7 +865,7 @@ onDestroy(() => {
         <CalendarHourMinuteGrid
             layout={hourMinuteLayout}
             {timeZone}
-            dayHeader={computeDayHeaders(range.start, 1, timeZone)[0]}
+            dayHeader={acceptedHoursModel?.dayHeader ?? computeDayHeaders(range.start, 1, timeZone, locale)[0]}
             {isStartWritable}
             {isDurationWritable}
             onDragMove={previewStart}
@@ -761,6 +891,7 @@ onDestroy(() => {
                     onchange={(e) => {
                         const value = (e.target as HTMLSelectElement).value;
                         monthLaneFilter = value === "" ? undefined : value;
+                        if (catalogResultCurrent && acceptedEvidence) publishAcceptedModel(settings);
                     }}
                 >
                     <option value="">All lanes</option>
@@ -772,8 +903,10 @@ onDestroy(() => {
         {/if}
         <CalendarMonthGrid
             cells={monthCells}
+            acceptedPresentation={optimisticOverrides.size === 0 ? acceptedMonthModel?.presentation : undefined}
             {weekStart}
             {timeZone}
+            {locale}
             todayUtcMs={todayAnchor(timeZone, Date.now())}
             {isStartWritable}
             onDragEnd={commitStart}
@@ -788,12 +921,13 @@ onDestroy(() => {
     {:else if groupingActive && lanes}
         <CalendarLaneTimeGrid
             {lanes}
+            acceptedBands={acceptedLaneBands}
             {timeZone}
             rangeStart={range.start}
             rangeEnd={range.end}
-            workingHoursStartMinutes={workingHoursStart}
-            workingHoursEndMinutes={workingHoursEnd}
-            dayHeaders={computeDayHeaders(range.start, Math.round((range.end - range.start) / 86_400_000), timeZone)}
+            workingHoursStartMinutes={acceptedDaysModel?.workingHoursStartMinutes ?? workingHoursStart}
+            workingHoursEndMinutes={acceptedDaysModel?.workingHoursEndMinutes ?? workingHoursEnd}
+            dayHeaders={acceptedDaysModel?.dayHeaders ?? computeDayHeaders(range.start, Math.round((range.end - range.start) / 86_400_000), timeZone, locale)}
             todayUtcMs={todayAnchor(timeZone, Date.now())}
             {isStartWritable}
             {isDurationWritable}
@@ -817,9 +951,11 @@ onDestroy(() => {
             layout={timeGridLayout}
             {timeZone}
             rangeStart={range.start}
-            workingHoursStartMinutes={workingHoursStart}
-            workingHoursEndMinutes={workingHoursEnd}
-            dayHeaders={computeDayHeaders(range.start, timeGridLayout.dayCount, timeZone)}
+            workingHoursStartMinutes={acceptedTimeGridModel?.workingHoursStartMinutes ?? workingHoursStart}
+            workingHoursEndMinutes={acceptedTimeGridModel?.workingHoursEndMinutes ?? workingHoursEnd}
+            dayHeaders={acceptedTimeGridModel
+                ? acceptedTimeGridModel.dayHeaders
+                : computeDayHeaders(range.start, timeGridLayout.dayCount, timeZone, locale)}
             todayUtcMs={todayAnchor(timeZone, Date.now())}
             {isStartWritable}
             {isDurationWritable}

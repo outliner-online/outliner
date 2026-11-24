@@ -7,7 +7,9 @@ existing GitHub request boundary while sharing this monitor and its tests.
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
+from http.client import IncompleteRead
 import json
 import os
 import re
@@ -23,9 +25,13 @@ from urllib.parse import quote, urlencode
 from loguru import logger
 
 try:
+    from .ci_cancellation_diagnostics import CancellationDiagnostics
     from .ci_duration_policy import CurrentSource
+    from .ci_duration_github import ReadBudgetExceeded, ScanClient
 except ImportError:
+    from ci_cancellation_diagnostics import CancellationDiagnostics
     from ci_duration_policy import CurrentSource
+    from ci_duration_github import ReadBudgetExceeded, ScanClient
 
 MANAGED_LABEL = "ci-duration-monitor"
 READY_LABEL = "review-ready"
@@ -155,7 +161,7 @@ def _request(client: Client, method: str, path: str, payload: dict[str, object] 
     for attempt in range(attempts):
         try:
             response = client.request(method, path, payload)
-        except OSError:
+        except (OSError, IncompleteRead):
             if attempt + 1 == attempts:
                 raise
             logger.warning("GitHub GET {} transport unavailable; retrying read ({}/3)", path.split("?")[0], attempt + 2)
@@ -163,6 +169,8 @@ def _request(client: Client, method: str, path: str, payload: dict[str, object] 
             if method != "GET" or response.status not in {502, 503, 504} or attempt + 1 == attempts:
                 return response
             logger.warning("GitHub GET {} returned {}; retrying read ({}/3)", path.split("?")[0], response.status, attempt + 2)
+        if isinstance(client, ScanClient) and client.remaining() <= attempt + 1:
+            raise ReadBudgetExceeded("GitHub read budget cannot accommodate another retry")
         time.sleep(attempt + 1)
     raise AssertionError("Request retry loop has no terminal outcome")
 
@@ -239,21 +247,40 @@ def read_config(path: Path) -> tuple[Workflow, ...]:
     return tuple(workflows)
 
 
-def collect(client: Client, workflows: tuple[Workflow, ...], cutoff: datetime, source: CurrentSource) -> tuple[list[Observation], list[dict[str, object]]]:
+def collect(client: Client, workflows: tuple[Workflow, ...], cutoff: datetime, source: CurrentSource, diagnostics: CancellationDiagnostics | None = None, *, required_read_workers: int = 8) -> tuple[list[Observation], list[dict[str, object]]]:
     observations = [Observation(workflow, family, []) for workflow in workflows for family in workflow.families]
     totals: list[dict[str, object]] = []
     for workflow in workflows:
         query = urlencode({"created": f">={cutoff.isoformat()}", "status": "completed"})
         runs = _pages(client, f"actions/workflows/{quote(workflow.path.rsplit('/', 1)[-1])}/runs?{query}", "workflow_runs", run_search=True)
+        attempts = []
         for run in runs:
             run_id, latest = _number(run.get("id")), _number(run.get("run_attempt"))
             if _text(run.get("path")).split("@", 1)[0] != workflow.path:
                 raise ValueError("Run does not belong to the configured workflow")
             for attempt in range(1, latest + 1):
                 attempt_run = run if attempt == latest else _object(_call(client, "GET", f"actions/runs/{run_id}/attempts/{attempt}"))
+                if attempt_run.get("id") != run_id or attempt_run.get("run_attempt") != attempt:
+                    raise ValueError("Attempt response belongs to a different run or attempt")
                 if attempt_run.get("status") != "completed":
                     continue
-                jobs = _pages(client, f"actions/runs/{run_id}/attempts/{attempt}/jobs", "jobs")
+                attempts.append((run_id, attempt, attempt_run))
+        # Job pages dominate the native workload (430 successful reads in the
+        # retained 2026-11-24 scan). They are independent immutable attempt
+        # collections, so overlap only these reads and process their results in
+        # discovery order to retain deterministic duplicate and policy logic.
+        def fetch_jobs(item):
+            run_id, attempt, _ = item
+            return _pages(client, f"actions/runs/{run_id}/attempts/{attempt}/jobs", "jobs")
+
+        with ThreadPoolExecutor(max_workers=required_read_workers) as executor:
+            job_sets = executor.map(fetch_jobs, attempts)
+            for (run_id, attempt, attempt_run), jobs in zip(attempts, job_sets):
+                for job in jobs:
+                    if job.get("run_id", run_id) != run_id or job.get("run_attempt", attempt) != attempt:
+                        raise ValueError("Job belongs to a different run or attempt")
+                if diagnostics is not None:
+                    diagnostics.observe(workflow.path, attempt_run, jobs, runs)
                 candidates = []
                 for job in jobs:
                     if job.get("run_attempt", attempt) != attempt:
@@ -440,13 +467,59 @@ def _prepare_labels(client: Client) -> None:
         raise RuntimeError(f"Cannot inspect monitor label: HTTP {response.status}")
 
 
-def run_monitor(client: Client, workflows: tuple[Workflow, ...], repository: str, source_ref: str, *, now: datetime, lookback_hours: int, publish: bool) -> dict[str, object]:
+def run_monitor(client: Client, workflows: tuple[Workflow, ...], repository: str, source_ref: str, *, now: datetime, lookback_hours: int, publish: bool, diagnostics_output: Path | None = None, required_read_seconds: float = 720, optional_read_seconds: float = 30, required_read_workers: int = 8) -> dict[str, object]:
+    # Twelve minutes for required reads leaves a reserve inside the existing
+    # fifteen-minute job for diagnostics, normal reconciliation and teardown.
+    scan = ScanClient(client, diagnostics_output, required_read_seconds, optional_read_seconds)
+    try:
+        report = _run_monitor(scan, workflows, repository, source_ref, now=now,
+                              lookback_hours=lookback_hours, publish=publish,
+                              diagnostics_output=diagnostics_output, required_read_workers=required_read_workers)
+        scan.state = 'complete'
+        return report
+    except Exception as error:
+        scan.state, scan.error = 'failed', type(error).__name__
+        raise
+    finally:
+        scan.save()
+
+
+def _run_monitor(client: ScanClient, workflows: tuple[Workflow, ...], repository: str, source_ref: str, *, now: datetime, lookback_hours: int, publish: bool, diagnostics_output: Path | None = None, required_read_workers: int = 8) -> dict[str, object]:
     source = CurrentSource(client, _call, repository, request=_request)
-    observations, workflow_totals = collect(client, workflows, now - timedelta(hours=lookback_hours), source)
+    cutoff = now - timedelta(hours=lookback_hours)
+    diagnostics = CancellationDiagnostics(repository, now, cutoff, lambda path: _pages(client, path), defer_annotations=True)
+    if diagnostics_output is not None:
+        client.checkpoint = lambda: diagnostics.write(diagnostics_output)
+        client.checkpoint()
+    client.phase("required-collection")
+    try:
+        observations, workflow_totals = collect(client, workflows, cutoff, source, diagnostics, required_read_workers=required_read_workers)
+        diagnostics.complete = not diagnostics.failed
+    finally:
+        # Preserve independent diagnostic evidence even if later issue reads or
+        # publication fail. Incomplete scans are explicitly marked as such.
+        if diagnostics_output is not None:
+            diagnostics.write(diagnostics_output)
     source_ref = source.sha
     # Read the durable issue/comment inventory before any mutation. Unavailable pages cannot
     # silently authorize duplicate issues or readiness re-submission.
+    client.phase("issue-inventory")
     managed = _issues(client)
+    # Annotation absence never affects duration admission. Finish required reads
+    # first, then bound this optional service enrichment independently.
+    required_deadline = client.deadline
+    client.deadline = min(required_deadline, time.monotonic() + client.optional_seconds)
+    client.phase("optional-annotations")
+    try:
+        diagnostics.enrich(lambda: client.remaining() > 0)
+    except Exception as error:
+        diagnostics.failed = True
+        diagnostics.complete = False
+        logger.warning("Optional annotation enrichment unavailable ({}); continuing", type(error).__name__)
+    finally:
+        client.checkpoint()
+        client.deadline = required_deadline
+    client.phase("reconciliation")
     actions: list[dict[str, object]] = []
     prepared = False
     processed: set[int] = set()
@@ -561,6 +634,7 @@ def run_monitor(client: Client, workflows: tuple[Workflow, ...], repository: str
             "diagnostic_samples": sum(item["diagnostic_samples"] for item in admission),
         },
         "workflow_totals": workflow_totals,
+        "cancellation_diagnostics": diagnostics.report(),
         "observations": [{"workflow": item.workflow.path, "family": item.family.key, "samples": [asdict(sample) for sample in item.samples]} for item in observations],
     }
 
@@ -606,7 +680,7 @@ def main(argv: list[str] | None = None, *, client_factory: Callable[[str, str], 
             from ci_duration_github import create_client
 
             client_factory = create_client
-        report = run_monitor(client_factory(token, args.repository), read_config(args.config), args.repository, args.source_ref, now=now or datetime.now(timezone.utc), lookback_hours=args.lookback_hours, publish=args.publish)
+        report = run_monitor(client_factory(token, args.repository), read_config(args.config), args.repository, args.source_ref, now=now or datetime.now(timezone.utc), lookback_hours=args.lookback_hours, publish=args.publish, diagnostics_output=args.output_dir)
         (args.output_dir / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         summary = f"# CI duration monitor\n\nMode: {'publish' if args.publish else 'dry run'}. Runs created in the last {args.lookback_hours} hours; threshold >= {THRESHOLD_SECONDS} seconds.\n\n"
         admission_summary = cast(dict[str, int], report["admission_summary"])
@@ -617,6 +691,10 @@ def main(argv: list[str] | None = None, *, client_factory: Callable[[str, str], 
         shared = cast(list[dict[str, object]], report["shared_setup_diagnostics"])
         summary += f"\n\nShared setup diagnostics: {len(shared)}. See report.json for cross-family step evidence; these never create per-family issues.\n"
         summary += f"\n\nWorkflow-total-only observations: {len(report_only)}. These do not create splitting issues; queue/dependencies/aggregation can exceed ten minutes while every job remains below it.\n"
+        diagnostics_report = cast(dict[str, object], report["cancellation_diagnostics"])
+        diagnostic_rows = cast(list[dict[str, object]], diagnostics_report["observations"])
+        unresolved = sum(cast(dict[str, object], row["finalization"])["state"] == "unresolved_after_job_completion" for row in diagnostic_rows)
+        summary += f"\n\n## Cancellation and finalization evidence\n\n{len(diagnostic_rows)} non-success or unresolved observations; {unresolved} jobs have unresolved `Complete job` metadata. See `cancellation-diagnostics.json` and `cancellation-diagnostics.md` in the retained artifact for separate job outcomes, explicit timeout/concurrency annotations, unknown causes and expected wrapper artifact names. These observations never qualify duration improvement issues.\n"
         (args.output_dir / "summary.md").write_text(summary, encoding="utf-8")
         if os.environ.get("GITHUB_STEP_SUMMARY"):
             with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as stream:

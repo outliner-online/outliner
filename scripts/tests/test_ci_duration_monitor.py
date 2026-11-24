@@ -403,7 +403,9 @@ class MonitorTests(unittest.TestCase):
 
                 with patch.object(self.github, "request", side_effect=failed):
                     self.assertEqual(self.run_cli(), 1)
-                self.assertEqual(requests, attempts)
+                # Both independently discovered run attempts are admitted before
+                # their job reads overlap; each retains the same bounded retry policy.
+                self.assertEqual(requests, attempts * 2)
                 self.assertEqual(self.github.mutations, [])
 
     def test_failed_mutation_response_is_never_retried(self) -> None:
