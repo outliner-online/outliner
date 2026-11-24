@@ -1,8 +1,10 @@
 """Run only tiny real Mocha fixtures to verify prepared CI/local runner parity."""
 
 from pathlib import Path
+import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -11,6 +13,62 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class ServerExecutionBoundaryTest(unittest.TestCase):
+    def test_current_checkout_workflow_artifacts_and_native_failure(self):
+        results_env = os.environ.get('SERVER_TEST_WORKFLOW_RESULTS')
+        if not results_env:
+            self.skipTest('calling workflow provides its downloaded same-checkout results')
+
+        results = (ROOT / results_env).resolve()
+        full_identities = None
+        executed_identities = []
+        for index in [1, 2]:
+            shard = results / f'shard-{index}'
+            full = json.loads((shard / 'full.json').read_text())
+            executed = json.loads((shard / 'executed.json').read_text())
+            identities = sorted((test['file'], test['title']) for test in full['tests'])
+            if full_identities is None:
+                full_identities = identities
+            else:
+                self.assertEqual(identities, full_identities)
+            executed_identities.extend((test['file'], test['title']) for test in executed['tests'])
+        self.assertEqual(sorted(executed_identities), full_identities)
+
+        passing = subprocess.run(
+            ['bash', 'scripts/ci/verify-server-test-job.sh', 'success', str(results), '2'],
+            cwd=ROOT, text=True, capture_output=True, timeout=30,
+        )
+        self.assertEqual(passing.returncode, 0, passing.stdout + passing.stderr)
+
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            failing_test = temporary / 'workflow-native-failure.test.cjs'
+            failing_test.write_text('it("workflow native failure",()=>{throw new Error("expected native failure")});')
+            native_report = temporary / 'native-failure.json'
+            native = subprocess.run(
+                ['bash', 'scripts/run-server-test-command.sh', '--reporter',
+                 '../scripts/ci/server-test-reporter.mjs', str(failing_test)],
+                cwd=ROOT, env=os.environ | {
+                    'SERVER_TEST_FILES_ONLY': '1',
+                    'SERVER_TEST_REPORT': str(native_report),
+                }, text=True, capture_output=True, timeout=30,
+            )
+            self.assertNotEqual(native.returncode, 0)
+            self.assertIn('workflow native failure', native_report.read_text())
+
+            failing_results = temporary / 'server-test-results'
+            shutil.copytree(results, failing_results)
+            outcome_path = failing_results / 'shard-1/outcome.json'
+            outcome = json.loads(outcome_path.read_text())
+            outcome['status'] = native.returncode
+            outcome_path.write_text(json.dumps(outcome))
+            aggregate = subprocess.run(
+                ['bash', 'scripts/ci/verify-server-test-job.sh', 'success',
+                 str(failing_results), '2'], cwd=ROOT, text=True,
+                capture_output=True, timeout=30,
+            )
+            self.assertNotEqual(aggregate.returncode, 0)
+            self.assertIn(f'shard 1 native Mocha exit was {native.returncode}', aggregate.stderr)
+
     def test_workflow_preserves_project_directory_and_aggregate_boundaries(self):
         workflow = (ROOT / '.github/workflows/ci-test-server.yml').read_text()
         project_job = workflow.split('  project-directory-test:', 1)[1]

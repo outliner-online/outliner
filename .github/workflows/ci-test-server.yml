@@ -102,6 +102,17 @@ jobs:
           path: downloaded-server-tests
           merge-multiple: true
 
+      - name: Verify calling workflow boundary
+        env:
+          SERVER_TEST_WORKFLOW_RESULTS: downloaded-server-tests/server-test-results
+          CI: true
+          NODE_ENV: test
+          TEST_ENV: localhost
+        run: |
+          python3 -m unittest \
+            scripts.tests.test_server_test_boundary.ServerExecutionBoundaryTest.test_current_checkout_workflow_artifacts_and_native_failure \
+            -v
+
       - name: Verify complete server test result
         run: |
           bash scripts/ci/verify-server-test-job.sh \
