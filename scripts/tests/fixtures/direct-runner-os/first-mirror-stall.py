@@ -21,6 +21,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     headers={'User-Agent': 'Debian APT-HTTP/1.3'},
                 )
                 with urllib.request.urlopen(upstream, timeout=60) as response:
+                    if os.environ.get('BLOCK_ALTERNATIVE') == '1':
+                        # Block only after the first transport has its genuine
+                        # upstream response; metadata setup must remain valid.
+                        with open('/etc/hosts', 'a') as hosts:
+                            hosts.write('127.0.0.2 archive.ubuntu.com\n')
+                        print('OBSERVED_ALTERNATIVE_BLOCKED', flush=True)
                     self.send_response(response.status)
                     self.send_header('Content-Length', response.headers['Content-Length'])
                     self.end_headers()
@@ -49,6 +55,4 @@ class Handler(http.server.BaseHTTPRequestHandler):
 server = http.server.ThreadingHTTPServer(('0.0.0.0', 80), Handler)
 server.daemon_threads = True
 print('OBSERVED_FIRST_MIRROR_LISTENING', flush=True)
-if os.environ.get('BLOCK_ALTERNATIVE') == '1':
-    print('OBSERVED_ALTERNATIVE_BLOCKED', flush=True)
 server.serve_forever()

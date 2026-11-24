@@ -62,7 +62,6 @@ start_first_mirror() {
   echo '127.0.0.1 us-east-2.ec2.archive.ubuntu.com' >> /etc/hosts
   echo 'Acquire::http::Proxy::us-east-2.ec2.archive.ubuntu.com "DIRECT";' >> /etc/apt/apt.conf.d/80fixture-proxy
   if [ "$block_alternative" = 1 ]; then
-    echo '127.0.0.2 archive.ubuntu.com' >> /etc/hosts
     echo 'Acquire::https::Proxy::archive.ubuntu.com "DIRECT";' >> /etc/apt/apt.conf.d/80fixture-proxy
   fi
   BLOCK_ALTERNATIVE="$block_alternative" \
