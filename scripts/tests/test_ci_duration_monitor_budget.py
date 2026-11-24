@@ -1,6 +1,7 @@
 """Disposable native-metadata HTTP scans with slow optional/required reads."""
 
 import copy
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -174,6 +175,26 @@ class ScanBudgetTests(unittest.TestCase):
                'PYTHONPATH': str(fixture)}
         common = ['--repository', REPOSITORY, '--config', str(self.output / 'config.json'),
                   '--source-ref', 'b' * 40]
+
+        def required_routes(received):
+            def category(path):
+                if not path:
+                    return 'repository'
+                if path.startswith('branches/'):
+                    return 'default-branch'
+                if path.startswith('contents/'):
+                    return 'source-content'
+                if path.startswith('actions/runs/') and path.endswith('/jobs'):
+                    return 'attempt-jobs'
+                if path.startswith('actions/workflows/') and path.endswith('/runs'):
+                    return 'workflow-runs'
+                if path.startswith('actions/workflows/'):
+                    return 'workflow-state'
+                if path == 'issues':
+                    return 'issue-inventory'
+                return path
+            return dict(sorted(Counter(category(path) for method, path in received
+                                       if method == 'GET').items()))
         (self.output / 'config.json').write_text(json.dumps({'workflows': [{
             'path': self.workflow.path, 'families': [{
                 'key': 'tests', 'name': 'Tests', 'job_pattern': r'Tests \(\d+/\d+\)',
@@ -186,14 +207,16 @@ class ScanBudgetTests(unittest.TestCase):
             [sys.executable, str(baseline / 'ci_duration_monitor.py'), *common,
              '--output-dir', str(baseline_output)], env=env, capture_output=True, text=True, timeout=15)
         baseline_harness_seconds = time.monotonic() - baseline_harness_started
-        baseline_job_reads = sum(path.endswith('/jobs') for _, path in self.received)
+        baseline_routes = required_routes(self.received)
         self.assertEqual(baseline_run.returncode, 1, baseline_run.stdout + baseline_run.stderr)
         baseline_progress = json.loads((baseline_output / 'scan-progress.json').read_text())
         self.assertEqual(baseline_progress['error_type'], 'ReadBudgetExceeded')
         self.assertEqual(baseline_progress['last_request']['path'], fault_route)
         self.assertIn('cannot accommodate another retry', baseline_run.stdout)
         self.assertFalse((baseline_output / 'report.json').exists())
-        self.assertEqual(baseline_job_reads, 348)
+        self.assertEqual(baseline_routes, {
+            'attempt-jobs': 348, 'default-branch': 1, 'repository': 1,
+            'source-content': 4, 'workflow-runs': 5, 'workflow-state': 1})
 
         self.received.clear()
         fault['remaining'] = 1
@@ -221,10 +244,18 @@ class ScanBudgetTests(unittest.TestCase):
         summary = (candidate_output / 'summary.md').read_text()
         self.assertIn('Admission before existing issue handling: 430 qualifying jobs; 0 qualifying families with existing issues; 1 new qualifying families; 0 families with insufficient evidence.', summary)
         self.assertEqual(sum(path.endswith('/jobs') for _, path in self.received), 431)
+        candidate_routes = required_routes(self.received)
+        self.assertEqual(candidate_routes, {
+            'attempt-jobs': 431, 'default-branch': 1, 'issue-inventory': 1,
+            'repository': 1, 'source-content': 4, 'workflow-runs': 5,
+            'workflow-state': 1})
         self.assertLess(candidate_progress['elapsed_seconds'], baseline_progress['elapsed_seconds'])
-        print('Synthetic budget: baseline '
-              f"{baseline_progress['elapsed_seconds']}s/{baseline_job_reads} job reads; candidate "
-              f"{candidate_progress['elapsed_seconds']}s/431 job reads. Harness wall time: "
+        print('Required GET routes: '
+              f'baseline={json.dumps(baseline_routes, sort_keys=True)}; '
+              f'candidate={json.dumps(candidate_routes, sort_keys=True)}. '
+              'Synthetic budget: baseline '
+              f"{baseline_progress['elapsed_seconds']}s; candidate "
+              f"{candidate_progress['elapsed_seconds']}s. Harness wall time: "
               f'{baseline_harness_seconds:.3f}s baseline, {candidate_harness_seconds:.3f}s candidate.')
 
     def test_slow_annotations_are_after_required_inventory_and_bounded(self):
