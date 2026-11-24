@@ -36,6 +36,8 @@ class ScanBudgetTests(unittest.TestCase):
         self.trickle = False
         self.received = []
         self.after_request = lambda method, route: None
+        self.request_clock_started = lambda: None
+        self.request_clock_finished = lambda _started: None
         fixture = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -47,6 +49,7 @@ class ScanBudgetTests(unittest.TestCase):
 
             def respond(self):
                 route = self.path.removeprefix('/repos/' + REPOSITORY).lstrip('/')
+                clock_started = fixture.request_clock_started()
                 fixture.received.append((self.command, urlsplit(route).path))
                 body = self.rfile.read(int(self.headers.get('Content-Length', 0)))
                 result = fixture.github.request(self.command, route, json.loads(body) if body else None)
@@ -56,6 +59,7 @@ class ScanBudgetTests(unittest.TestCase):
                 try:
                     if slow and not fixture.trickle:
                         time.sleep(fixture.delay)
+                    fixture.request_clock_finished(clock_started)
                     self.send_response(result.status)
                     self.send_header('Content-Length', str(len(encoded)))
                     self.end_headers()
@@ -118,22 +122,35 @@ class ScanBudgetTests(unittest.TestCase):
         self.slow_route, self.delay = 'actions/runs/', 0.01
         original = self.github.request
         fault = {'remaining': 1}
-        fault_route = 'actions/runs/200/attempts/1/jobs'
+        fault_route = 'actions/runs/357/attempts/1/jobs'
         fixture = self.output / 'cli-fixture'
         fixture.mkdir()
         clock_path = fixture / 'clock'
-        clock = {'milliseconds': 0, 'baseline': True}
+        clock = {'milliseconds': 0}
         clock_lock = threading.Lock()
+
+        def write_clock():
+            temporary_clock = clock_path.with_suffix('.tmp')
+            temporary_clock.write_text(str(clock['milliseconds']), encoding='ascii')
+            temporary_clock.replace(clock_path)
+
+        def clock_started():
+            with clock_lock:
+                return clock['milliseconds']
+
+        def clock_finished(started):
+            with clock_lock:
+                # Every request has the same 1.998-second synthetic latency.
+                # Overlapping requests that start in one wave therefore share
+                # its elapsed time instead of receiving a per-revision discount.
+                clock['milliseconds'] = max(clock['milliseconds'], started + 1998)
+                write_clock()
+
+        self.request_clock_started = clock_started
+        self.request_clock_finished = clock_finished
 
         def recoverable(method, path, payload=None):
             route = urlsplit(path).path
-            with clock_lock:
-                clock['milliseconds'] += 2000 if clock['baseline'] else 100
-                if clock['baseline'] and route == fault_route and fault['remaining']:
-                    clock['milliseconds'] = 719000
-                temporary_clock = clock_path.with_suffix('.tmp')
-                temporary_clock.write_text(str(clock['milliseconds']), encoding='ascii')
-                temporary_clock.replace(clock_path)
             if route == fault_route and fault['remaining']:
                 fault['remaining'] -= 1
                 return Result(502, None)
@@ -141,9 +158,8 @@ class ScanBudgetTests(unittest.TestCase):
 
         self.github.request = recoverable
         clock_path.write_text('0', encoding='ascii')
-        # Drive only monotonic budget accounting from the loopback request
-        # schedule. Both exact revisions retain the production 720-second
-        # budget; the baseline fault lands with exactly one second remaining.
+        # Drive monotonic budget accounting from the identical loopback request
+        # latency. Both exact revisions retain the production 720-second budget.
         (fixture / 'sitecustomize.py').write_text(
             f'import time\nfrom pathlib import Path\n_clock = Path({str(clock_path)!r})\n'
             'time.monotonic = lambda: int(_clock.read_text()) / 1000\n'
@@ -165,26 +181,33 @@ class ScanBudgetTests(unittest.TestCase):
                 'guidance': 'Keep selection.', 'measurement': 'test-step'}]}]}), encoding='utf-8')
 
         baseline_output = self.output / 'baseline-output'
+        baseline_harness_started = time.monotonic()
         baseline_run = subprocess.run(
             [sys.executable, str(baseline / 'ci_duration_monitor.py'), *common,
              '--output-dir', str(baseline_output)], env=env, capture_output=True, text=True, timeout=15)
+        baseline_harness_seconds = time.monotonic() - baseline_harness_started
+        baseline_job_reads = sum(path.endswith('/jobs') for _, path in self.received)
         self.assertEqual(baseline_run.returncode, 1, baseline_run.stdout + baseline_run.stderr)
         baseline_progress = json.loads((baseline_output / 'scan-progress.json').read_text())
         self.assertEqual(baseline_progress['error_type'], 'ReadBudgetExceeded')
         self.assertEqual(baseline_progress['last_request']['path'], fault_route)
         self.assertIn('cannot accommodate another retry', baseline_run.stdout)
         self.assertFalse((baseline_output / 'report.json').exists())
+        self.assertEqual(baseline_job_reads, 348)
 
         self.received.clear()
         fault['remaining'] = 1
-        clock.update(milliseconds=0, baseline=False)
+        clock['milliseconds'] = 0
         clock_path.write_text('0', encoding='ascii')
         candidate_output = self.output / 'candidate-output'
+        candidate_harness_started = time.monotonic()
         candidate_run = subprocess.run(
             [sys.executable, str(Path(monitor.__file__)), *common,
              '--output-dir', str(candidate_output)], env=env, capture_output=True, text=True, timeout=15)
+        candidate_harness_seconds = time.monotonic() - candidate_harness_started
         self.assertEqual(candidate_run.returncode, 0, candidate_run.stdout + candidate_run.stderr)
         report = json.loads((candidate_output / 'report.json').read_text())
+        candidate_progress = json.loads((candidate_output / 'scan-progress.json').read_text())
         expected_jobs = list(range(10, 440))
         self.assertEqual(report['admission'], [{
             'workflow': '.github/workflows/ci.yml', 'family': 'tests',
@@ -198,6 +221,12 @@ class ScanBudgetTests(unittest.TestCase):
         summary = (candidate_output / 'summary.md').read_text()
         self.assertIn('Admission before existing issue handling: 430 qualifying jobs; 0 qualifying families with existing issues; 1 new qualifying families; 0 families with insufficient evidence.', summary)
         self.assertEqual(sum(path.endswith('/jobs') for _, path in self.received), 431)
+        candidate_progress = json.loads((candidate_output / 'scan-progress.json').read_text())
+        self.assertLess(candidate_progress['elapsed_seconds'], baseline_progress['elapsed_seconds'])
+        print('Synthetic budget: baseline '
+              f"{baseline_progress['elapsed_seconds']}s/{baseline_job_reads} job reads; candidate "
+              f"{candidate_progress['elapsed_seconds']}s/431 job reads. Harness wall time: "
+              f'{baseline_harness_seconds:.3f}s baseline, {candidate_harness_seconds:.3f}s candidate.')
 
     def test_slow_annotations_are_after_required_inventory_and_bounded(self):
         source = monitor.CurrentSource(self.client, monitor._call, REPOSITORY, request=monitor._request)
