@@ -276,6 +276,13 @@ describe("unit CI native shard orchestration", () => {
         const downloadIndex = workflow.jobs["unit-test"].steps.findIndex((step: any) => step.name.includes("Download"));
         const rejectIndex = workflow.jobs["unit-test"].steps.findIndex((step: any) => step.name.includes("Reject"));
         expect(downloadIndex).toBeLessThan(rejectIndex);
+        const reject = workflow.jobs["unit-test"].steps[rejectIndex];
+        expect(reject.env.SHARD_RESULT).toBe("${{ needs.unit-shard.result }}");
+        expect(reject.run).toBe('test "$SHARD_RESULT" = success');
+        expect(spawnSync("bash", ["-c", reject.run], { env: { ...process.env, SHARD_RESULT: "failure" } }).status)
+            .toBe(1);
+        expect(spawnSync("bash", ["-c", reject.run], { env: { ...process.env, SHARD_RESULT: "success" } }).status)
+            .toBe(0);
         expect(workflow.jobs["unit-test"].steps.find((step: any) => step.name.includes("Summarise")).run)
             .toContain("job_logs");
         expect(JSON.parse(fs.readFileSync(path.join(root, "client/package.json"), "utf8")).scripts["github:test:unit"])
