@@ -218,6 +218,30 @@ jobs:
           printf 'run=%s attempt=%s expected-artifact=%s wrong-artifact=%s sha=%s\n' \
             "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$EXPECTED_ARTIFACT_ID" "$WRONG_ARTIFACT_ID" "$GITHUB_SHA"
 
+      - name: Wait for uploaded artifacts to become discoverable
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_ARTIFACT_ID: ${{ steps.representative-upload.outputs.artifact-id }}
+          WRONG_ARTIFACT_ID: ${{ steps.wrong-upload.outputs.artifact-id }}
+        run: |
+          set -euo pipefail
+          for attempt in {1..30}; do
+            artifact_ids="$(gh api \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" \
+              --jq '.artifacts[].id')"
+            if grep -Fxq "$EXPECTED_ARTIFACT_ID" <<<"$artifact_ids" && \
+              grep -Fxq "$WRONG_ARTIFACT_ID" <<<"$artifact_ids"; then
+              printf 'uploaded artifacts became discoverable after %s check(s)\n' "$attempt"
+              break
+            fi
+            if (( attempt == 30 )); then
+              echo 'uploaded artifacts did not become discoverable before the deadline' >&2
+              exit 1
+            fi
+            sleep 2
+          done
+
       - name: Download representative E2E evidence
         uses: actions/download-artifact@v8
         with:

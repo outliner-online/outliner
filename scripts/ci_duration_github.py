@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import time
+import threading
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -39,13 +40,15 @@ class ScanClient:
         self.last_request = None
         self.counts = {}
         self.checkpoint = lambda: None
+        self._lock = threading.RLock()
         self.save()
 
     def save(self):
-        try:
-            self._save()
-        except Exception as error:
-            logger.warning('Scan progress unavailable ({}); continuing', type(error).__name__)
+        with self._lock:
+            try:
+                self._save()
+            except Exception as error:
+                logger.warning('Scan progress unavailable ({}); continuing', type(error).__name__)
 
     def _save(self):
         if self.directory is not None:
@@ -70,16 +73,19 @@ class ScanClient:
 
     def request(self, method, path, payload=None):
         # No query strings, response bodies, credentials or exception messages.
-        self.last_request = {'method': method, 'path': path.split('?')[0]}
-        self.save()
+        request_info = {'method': method, 'path': path.split('?')[0]}
+        with self._lock:
+            self.last_request = request_info
+            self.save()
         if method == 'GET' and self.remaining() <= 0:
             raise ReadBudgetExceeded('GitHub read budget exhausted; required evidence is incomplete')
         setter = getattr(self.client, 'set_read_deadline', None)
         if setter is not None:
             setter(self.deadline if method == 'GET' else None)
         started = time.monotonic()
-        counters = self.counts.setdefault(self.stage, {'attempts': 0, 'seconds': 0, 'errors': 0, 'statuses': {}})
-        counters['attempts'] += 1
+        with self._lock:
+            counters = self.counts.setdefault(self.stage, {'attempts': 0, 'seconds': 0, 'errors': 0, 'statuses': {}})
+            counters['attempts'] += 1
         try:
             # The optional read deadline can change; admission's cutoff cannot.
             # Check every mutation immediately before sending it, including
@@ -88,16 +94,20 @@ class ScanClient:
                 raise ReadBudgetExceeded('Issue mutation admission cutoff expired')
             response = self.client.request(method, path, payload)
             status = str(response.status)
-            counters['statuses'][status] = counters['statuses'].get(status, 0) + 1
+            with self._lock:
+                counters['statuses'][status] = counters['statuses'].get(status, 0) + 1
             if method == 'GET' and self.remaining() <= 0:
                 raise ReadBudgetExceeded('GitHub read budget exhausted; required evidence is incomplete')
             return response
         except Exception as error:
-            counters['last_error_type'] = type(error).__name__
-            counters['errors'] += 1
+            with self._lock:
+                self.last_request = request_info
+                counters['last_error_type'] = type(error).__name__
+                counters['errors'] += 1
             raise
         finally:
-            counters['seconds'] = round(counters['seconds'] + time.monotonic() - started, 3)
+            with self._lock:
+                counters['seconds'] = round(counters['seconds'] + time.monotonic() - started, 3)
             if setter is not None:
                 setter(None)
             self.save()
@@ -123,7 +133,7 @@ class GitHubClient:
     """Use repository-relative endpoints and surface failed requests unchanged."""
 
     def __init__(self, token: str, repository: str, api_url: str = "https://api.github.com"):
-        self._read_deadline = None
+        self._read_deadline = threading.local()
         self._token = token
         self._base = f"{api_url.rstrip('/')}/repos/{repository}/"
 
@@ -141,7 +151,8 @@ class GitHubClient:
             data = json.dumps(payload).encode("utf-8")
         url = self._base + path.lstrip("/") if path else self._base.rstrip("/")
         request = Request(url, data=data, headers=headers, method=method)
-        timeout = 30 if self._read_deadline is None else min(30, max(0.001, self._read_deadline - time.monotonic()))
+        deadline = getattr(self._read_deadline, 'value', None)
+        timeout = 30 if deadline is None else min(30, max(0.001, deadline - time.monotonic()))
         try:
             with build_opener(MetadataRedirect()).open(request, timeout=timeout) as response:
                 return Response(response.status, self._decode(self._read(response)))
@@ -157,17 +168,18 @@ class GitHubClient:
             raise ConnectionError("GitHub request failed before a usable response was received") from error
 
     def set_read_deadline(self, deadline: float | None) -> None:
-        self._read_deadline = deadline
+        self._read_deadline.value = deadline
 
     def _read(self, response) -> bytes:
-        if self._read_deadline is None:
+        deadline = getattr(self._read_deadline, 'value', None)
+        if deadline is None:
             return response.read()
         # read1 returns after one buffered/socket read, so a trickling response
         # cannot reset a per-operation socket timeout indefinitely. One blocked
         # operation can still take the opener timeout (at most thirty seconds).
         chunks = []
         while True:
-            if time.monotonic() >= self._read_deadline:
+            if time.monotonic() >= deadline:
                 raise ReadBudgetExceeded("GitHub response exceeded the read budget")
             chunk = response.read1(65536)
             if not chunk:

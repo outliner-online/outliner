@@ -7,6 +7,7 @@ existing GitHub request boundary while sharing this monitor and its tests.
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 from http.client import IncompleteRead
 import json
@@ -246,12 +247,13 @@ def read_config(path: Path) -> tuple[Workflow, ...]:
     return tuple(workflows)
 
 
-def collect(client: Client, workflows: tuple[Workflow, ...], cutoff: datetime, source: CurrentSource, diagnostics: CancellationDiagnostics | None = None) -> tuple[list[Observation], list[dict[str, object]]]:
+def collect(client: Client, workflows: tuple[Workflow, ...], cutoff: datetime, source: CurrentSource, diagnostics: CancellationDiagnostics | None = None, *, required_read_workers: int = 8) -> tuple[list[Observation], list[dict[str, object]]]:
     observations = [Observation(workflow, family, []) for workflow in workflows for family in workflow.families]
     totals: list[dict[str, object]] = []
     for workflow in workflows:
         query = urlencode({"created": f">={cutoff.isoformat()}", "status": "completed"})
         runs = _pages(client, f"actions/workflows/{quote(workflow.path.rsplit('/', 1)[-1])}/runs?{query}", "workflow_runs", run_search=True)
+        attempts = []
         for run in runs:
             run_id, latest = _number(run.get("id")), _number(run.get("run_attempt"))
             if _text(run.get("path")).split("@", 1)[0] != workflow.path:
@@ -262,7 +264,18 @@ def collect(client: Client, workflows: tuple[Workflow, ...], cutoff: datetime, s
                     raise ValueError("Attempt response belongs to a different run or attempt")
                 if attempt_run.get("status") != "completed":
                     continue
-                jobs = _pages(client, f"actions/runs/{run_id}/attempts/{attempt}/jobs", "jobs")
+                attempts.append((run_id, attempt, attempt_run))
+        # Job pages dominate the native workload (430 successful reads in the
+        # retained 2026-11-24 scan). They are independent immutable attempt
+        # collections, so overlap only these reads and process their results in
+        # discovery order to retain deterministic duplicate and policy logic.
+        def fetch_jobs(item):
+            run_id, attempt, _ = item
+            return _pages(client, f"actions/runs/{run_id}/attempts/{attempt}/jobs", "jobs")
+
+        with ThreadPoolExecutor(max_workers=required_read_workers) as executor:
+            job_sets = executor.map(fetch_jobs, attempts)
+            for (run_id, attempt, attempt_run), jobs in zip(attempts, job_sets):
                 for job in jobs:
                     if job.get("run_id", run_id) != run_id or job.get("run_attempt", attempt) != attempt:
                         raise ValueError("Job belongs to a different run or attempt")
@@ -454,14 +467,14 @@ def _prepare_labels(client: Client) -> None:
         raise RuntimeError(f"Cannot inspect monitor label: HTTP {response.status}")
 
 
-def run_monitor(client: Client, workflows: tuple[Workflow, ...], repository: str, source_ref: str, *, now: datetime, lookback_hours: int, publish: bool, diagnostics_output: Path | None = None, required_read_seconds: float = 720, optional_read_seconds: float = 30) -> dict[str, object]:
+def run_monitor(client: Client, workflows: tuple[Workflow, ...], repository: str, source_ref: str, *, now: datetime, lookback_hours: int, publish: bool, diagnostics_output: Path | None = None, required_read_seconds: float = 720, optional_read_seconds: float = 30, required_read_workers: int = 8) -> dict[str, object]:
     # Twelve minutes for required reads leaves a reserve inside the existing
     # fifteen-minute job for diagnostics, normal reconciliation and teardown.
     scan = ScanClient(client, diagnostics_output, required_read_seconds, optional_read_seconds)
     try:
         report = _run_monitor(scan, workflows, repository, source_ref, now=now,
                               lookback_hours=lookback_hours, publish=publish,
-                              diagnostics_output=diagnostics_output)
+                              diagnostics_output=diagnostics_output, required_read_workers=required_read_workers)
         scan.state = 'complete'
         return report
     except Exception as error:
@@ -471,7 +484,7 @@ def run_monitor(client: Client, workflows: tuple[Workflow, ...], repository: str
         scan.save()
 
 
-def _run_monitor(client: ScanClient, workflows: tuple[Workflow, ...], repository: str, source_ref: str, *, now: datetime, lookback_hours: int, publish: bool, diagnostics_output: Path | None = None) -> dict[str, object]:
+def _run_monitor(client: ScanClient, workflows: tuple[Workflow, ...], repository: str, source_ref: str, *, now: datetime, lookback_hours: int, publish: bool, diagnostics_output: Path | None = None, required_read_workers: int = 8) -> dict[str, object]:
     source = CurrentSource(client, _call, repository, request=_request)
     cutoff = now - timedelta(hours=lookback_hours)
     diagnostics = CancellationDiagnostics(repository, now, cutoff, lambda path: _pages(client, path), defer_annotations=True)
@@ -480,7 +493,7 @@ def _run_monitor(client: ScanClient, workflows: tuple[Workflow, ...], repository
         client.checkpoint()
     client.phase("required-collection")
     try:
-        observations, workflow_totals = collect(client, workflows, cutoff, source, diagnostics)
+        observations, workflow_totals = collect(client, workflows, cutoff, source, diagnostics, required_read_workers=required_read_workers)
         diagnostics.complete = not diagnostics.failed
     finally:
         # Preserve independent diagnostic evidence even if later issue reads or
