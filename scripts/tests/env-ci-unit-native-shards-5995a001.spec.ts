@@ -179,11 +179,24 @@ describe("unit CI native shard orchestration", () => {
         });
         expect(fs.readFileSync(marker, "utf8")).toBe("ran");
         expect(fs.readFileSync(path.join(root, "job_logs/base-test.log"), "utf8")).toContain("BASE OK");
-        expect(
-            JSON.parse(
-                fs.readFileSync(path.join(root, "coverage/unit_and_integration/coverage-final.json"), "utf8"),
-            )["/source.ts"].s[0],
-        ).toBe(2);
+        const mergedCoverage = JSON.parse(
+            fs.readFileSync(path.join(root, "coverage/unit_and_integration/coverage-final.json"), "utf8"),
+        );
+        expect(Object.keys(mergedCoverage).sort()).toEqual(["/source.ts", "/types.d.ts"]);
+        expect(mergedCoverage["/source.ts"]).toMatchObject({
+            statementMap: {
+                0: { start: { line: 1, column: 0 }, end: { line: 1, column: 1 } },
+            },
+            s: { 0: 2 },
+        });
+        expect(mergedCoverage["/types.d.ts"]).toMatchObject({
+            statementMap: {},
+            fnMap: {},
+            branchMap: {},
+            s: {},
+            f: {},
+            b: {},
+        });
     });
 
     test("the aggregate propagates base failure and rejects missing, empty, stale, and duplicate evidence", () => {
