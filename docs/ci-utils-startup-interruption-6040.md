@@ -59,9 +59,11 @@ the client Svelte package and lockfile; it did not change `.github/workflows/ci.
 immediately preceding main commit `acfc423a5abc0836c1fb904ab31be210e96bce93`.
 
 At the affected revision, the outer CI workflow used concurrency group
-`ci-${{ github.workflow }}-${{ github.ref }}` with `cancel-in-progress: true`.
+<code v-pre>ci-${{ github.workflow }}-${{ github.ref }}</code> with
+`cancel-in-progress: true`.
 The reusable E2E workflow independently used
-`e2e-${{ github.workflow }}-${{ github.ref }}` with `cancel-in-progress: true`.
+<code v-pre>e2e-${{ github.workflow }}-${{ github.ref }}</code> with
+`cancel-in-progress: true`.
 The E2E matrix used `fail-fast: false`, included the ordinary `utils` project,
 and retained its 30-minute job timeout. The job stopped about two minutes after
 it began, so the job timeout was not reached. Other matrix shards continued
