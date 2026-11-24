@@ -1,6 +1,7 @@
 """Proxy signed Ubuntu metadata but deterministically stall package bodies."""
 
 import http.server
+import os
 import time
 import urllib.error
 import urllib.parse
@@ -48,4 +49,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
 server = http.server.ThreadingHTTPServer(('0.0.0.0', 80), Handler)
 server.daemon_threads = True
 print('OBSERVED_FIRST_MIRROR_LISTENING', flush=True)
+if os.environ.get('BLOCK_ALTERNATIVE') == '1':
+    print('OBSERVED_ALTERNATIVE_BLOCKED', flush=True)
 server.serve_forever()
