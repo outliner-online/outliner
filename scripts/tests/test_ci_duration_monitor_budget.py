@@ -148,14 +148,10 @@ class ScanBudgetTests(unittest.TestCase):
             f'import time\nfrom pathlib import Path\n_clock = Path({str(clock_path)!r})\n'
             'time.monotonic = lambda: int(_clock.read_text()) / 1000\n'
             'time.sleep = lambda _seconds: None\n', encoding='utf-8')
-        baseline = fixture / 'baseline'
-        baseline.mkdir()
-        for name in ('ci_duration_monitor.py', 'ci_duration_github.py',
-                     'ci_duration_policy.py', 'ci_cancellation_diagnostics.py'):
-            content = subprocess.run(
-                ['git', 'show', f'35c53f740f3bf03d3f6e9e15da1e87e5124004f5:scripts/{name}'],
-                check=True, capture_output=True).stdout
-            (baseline / name).write_bytes(content)
+        # The Actions checkout is intentionally shallow, so keep the four
+        # production modules from the reproduced SHA as a hermetic fixture
+        # instead of requiring that historical Git object at test time.
+        baseline = Path(__file__).parent / 'fixtures/ci-duration/reproduced-main-35c53f7'
 
         env = {**os.environ, 'GITHUB_API_URL': f'http://127.0.0.1:{self.server.server_port}',
                'GITHUB_REPOSITORY': REPOSITORY,
