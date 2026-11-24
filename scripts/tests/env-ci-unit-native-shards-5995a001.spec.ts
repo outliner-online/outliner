@@ -7,6 +7,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import YAML from "yaml";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const unitWorkflow = () => YAML.parse(fs.readFileSync(path.join(root, ".github/workflows/ci-test-unit.yml"), "utf8"));
 const temporaryDirectories: string[] = [];
 afterEach(() => temporaryDirectories.splice(0).forEach((directory) => fs.rmSync(directory, { recursive: true })));
 function temporaryDirectory() {
@@ -56,7 +57,29 @@ function realVitestFailureRunner(directory: string) {
         }] } } }] } };\n`);
     return { config, vitest: path.join(root, "client/node_modules/.bin/vitest") };
 }
-function failingBasePackage(directory: string) {
+function realVitestPassingRunner(directory: string) {
+    const sourceFile = path.join(directory, "covered-source.js");
+    const config = path.join(directory, "vitest.config.js");
+    fs.writeFileSync(sourceFile, "export const coveredValue = 1;\n");
+    for (const [file, value] of [["first.test.js", 1], ["second.test.js", 1]] as const) {
+        fs.writeFileSync(
+            path.join(directory, file),
+            `import { test, expect } from "vitest"; import { coveredValue } from "./covered-source.js"; test(${
+                JSON.stringify(file)
+            }, () => expect(coveredValue).toBe(${value}));\n`,
+        );
+    }
+    fs.writeFileSync(
+        config,
+        `export default { test: { projects: [{ test: { name: "unit", root: ${
+            JSON.stringify(directory)
+        }, include: ["*.test.js"], globals: true, coverage: { enabled: true, provider: "v8", reporter: ["json"], include: [${
+            JSON.stringify(sourceFile)
+        }] } } }] } };\n`,
+    );
+    return { config, sourceFile, vitest: path.join(root, "client/node_modules/.bin/vitest") };
+}
+function basePackage(directory: string, failing = true) {
     const baseDirectory = path.join(directory, "base-package");
     fs.mkdirSync(baseDirectory);
     fs.symlinkSync(path.join(root, "client/node_modules"), path.join(baseDirectory, "node_modules"), "dir");
@@ -64,7 +87,9 @@ function failingBasePackage(directory: string) {
         scripts: { "test:base": "vitest run --config vitest.base.config.ts" },
     }));
     fs.writeFileSync(path.join(baseDirectory, "deliberate-base-failure.test.js"),
-        'import { test, expect } from "vitest"; test("deliberate base-path failure", () => expect(1).toBe(2));\n');
+        `import { test, expect } from "vitest"; test("deliberate base-path ${
+            failing ? "failure" : "success"
+        }", () => expect(1).toBe(${failing ? 2 : 1}));\n`);
     fs.writeFileSync(path.join(baseDirectory, "vitest.base.config.ts"),
         `export default { test: { root: ${JSON.stringify(baseDirectory)}, include: ["*.test.js"] } };\n`);
     return baseDirectory;
@@ -158,6 +183,9 @@ describe("unit CI native shard orchestration", () => {
             JSON.parse(fs.readFileSync(path.join(directory, "shard-1.json"), "utf8")).testResults[0].assertionResults[0]
                 .status,
         ).toBe("failed");
+        const reject = unitWorkflow().jobs["unit-test"].steps.find((step: any) => step.name.includes("Reject"));
+        expect(spawnSync("bash", ["-c", reject.run], { env: { ...process.env, SHARD_RESULT: "failure" } }).status)
+            .toBe(1);
     });
 
     test("the real aggregate verifies exact identities and coverage before running base exactly once", () => {
@@ -199,15 +227,51 @@ describe("unit CI native shard orchestration", () => {
         });
     });
 
+    test("the shipped stable-check command verifies a real native sharded selection", () => {
+        const directory = temporaryDirectory();
+        const native = realVitestPassingRunner(directory);
+        const artifacts = path.join(directory, "artifacts");
+        for (const shard of [1, 2]) {
+            const shardDirectory = path.join(artifacts, `unit-shard-${shard}-100-2`);
+            execFileSync(path.join(root, "scripts/ci/run-unit-tests.sh"), [], {
+                cwd: root,
+                env: env({
+                    UNIT_SHARD: `${shard}/2`,
+                    UNIT_VITEST_BIN: native.vitest,
+                    UNIT_VITEST_CONFIG: native.config,
+                    UNIT_EVIDENCE_DIR: path.join(shardDirectory, "unit-evidence"),
+                    UNIT_COVERAGE_DIR: path.join(shardDirectory, "coverage", `unit-shard-${shard}`),
+                }),
+            });
+        }
+        const manifest = path.join(directory, "coverage-manifest.json");
+        fs.writeFileSync(manifest, JSON.stringify([native.sourceFile]));
+        const workflow = unitWorkflow();
+        const stableCommand = workflow.jobs["unit-test"].steps.find((step: any) => step.name.includes("Verify")).run;
+        execFileSync("bash", ["-c", stableCommand], {
+            cwd: root,
+            env: env({
+                UNIT_ARTIFACT_DIR: artifacts,
+                UNIT_VITEST_BIN: native.vitest,
+                UNIT_VITEST_CONFIG: native.config,
+                UNIT_BASE_DIR: basePackage(directory, false),
+                UNIT_COVERAGE_MANIFEST: manifest,
+            }),
+        });
+        expect(fs.readFileSync(path.join(root, "job_logs/base-test.log"), "utf8")).toContain("Tests  1 passed");
+    });
+
     test("the aggregate propagates base failure and rejects missing, empty, stale, and duplicate evidence", () => {
         const directory = temporaryDirectory();
         artifactFixture(directory);
         const vitest = fakeVitest(directory);
-        const failingBase = failingBasePackage(directory);
+        const failingBase = basePackage(directory);
+        const stableCommand =
+            unitWorkflow().jobs["unit-test"].steps.find((step: any) => step.name.includes("Verify")).run;
         const run = (artifacts: string, extra: Record<string, string> = {}) =>
             spawnSync(
-                path.join(root, "scripts/ci/finalize-unit-tests.sh"),
-                [],
+                "bash",
+                ["-c", stableCommand],
                 {
                     cwd: root,
                     env: env({
@@ -275,7 +339,7 @@ describe("unit CI native shard orchestration", () => {
     });
 
     test("workflow retains the stable aggregate and runs base only after both shards", () => {
-        const workflow = YAML.parse(fs.readFileSync(path.join(root, ".github/workflows/ci-test-unit.yml"), "utf8"));
+        const workflow = unitWorkflow();
         expect(fs.readFileSync(path.join(root, "scripts/ci/verify-unit-shards.mjs"), "utf8")).toContain(
             "--no-static-parse",
         );
@@ -286,6 +350,11 @@ describe("unit CI native shard orchestration", () => {
             .toBe(true);
         expect(workflow.jobs["unit-test"].steps.find((step: any) => step.name.includes("Verify")).run)
             .toBe("scripts/ci/finalize-unit-tests.sh");
+        const diagnostics = workflow.jobs["unit-test"].steps.find((step: any) => step.name === "Upload logs");
+        expect(diagnostics.if).toBe("failure()");
+        expect(diagnostics.with.name).toBe("unit-test-logs");
+        expect(diagnostics.with.path).toContain("unit-artifacts/**/job_logs/");
+        expect(diagnostics.with.path).toContain("job_logs/");
         const downloadIndex = workflow.jobs["unit-test"].steps.findIndex((step: any) => step.name.includes("Download"));
         const rejectIndex = workflow.jobs["unit-test"].steps.findIndex((step: any) => step.name.includes("Reject"));
         expect(downloadIndex).toBeLessThan(rejectIndex);
