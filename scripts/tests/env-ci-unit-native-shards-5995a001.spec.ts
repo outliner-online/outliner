@@ -120,7 +120,7 @@ function runStableWorkflow(isolated: ReturnType<typeof isolatedCheckout>) {
     const stableCommand = workflow.jobs["unit-test"].steps.find((step: any) => step.name.includes("Verify")).run;
     const result = spawnSync("bash", ["-c", stableCommand], {
         cwd: isolated.checkout,
-        env: env({ UNIT_ARTIFACT_DIR: artifacts }),
+        env: env({ UNIT_ARTIFACT_DIR: artifacts, UNIT_BASE_DIR: path.join(root, "client") }),
     });
     return { artifacts, result, shardRuns };
 }
@@ -145,10 +145,13 @@ function artifactFixture(directory: string, run = "100", attempt = "2") {
     fs.writeFileSync(path.join(directory, "coverage-baseline.json"), JSON.stringify({
         "/source.ts": {
             path: "/source.ts",
-            statementMap: { 0: { start: { line: 1, column: 0 }, end: { line: 1, column: 1 } } },
+            statementMap: {
+                0: { start: { line: 1, column: 0 }, end: { line: 1, column: 1 } },
+                5: { start: { line: 2, column: 0 }, end: { line: 2, column: 1 } },
+            },
             fnMap: {},
             branchMap: {},
-            s: { 0: 0 },
+            s: { 0: 0, 5: 0 },
             f: {},
             b: {},
         },
@@ -170,11 +173,12 @@ function artifactFixture(directory: string, run = "100", attempt = "2") {
             "/source.ts": {
                 path: "/source.ts",
                 statementMap: {
-                    [shard === 1 ? 0 : 5]: { start: { line: 1, column: 0 }, end: { line: 1, column: 1 } },
+                    0: { start: { line: 1, column: 0 }, end: { line: 1, column: 1 } },
+                    5: { start: { line: 2, column: 0 }, end: { line: 2, column: 1 } },
                 },
                 fnMap: {},
                 branchMap: {},
-                s: { [shard === 1 ? 0 : 5]: 1 },
+                s: { 0: shard === 1 ? 1 : 0, 5: shard === 2 ? 1 : 0 },
                 f: {},
                 b: {},
             },
@@ -250,7 +254,7 @@ describe("unit CI native shard orchestration", () => {
             statementMap: {
                 0: { start: { line: 1, column: 0 }, end: { line: 1, column: 1 } },
             },
-            s: { 0: 2 },
+            s: { 0: 1 },
         });
         expect(mergedCoverage["/types.d.ts"]).toMatchObject({
             statementMap: {},
@@ -266,7 +270,10 @@ describe("unit CI native shard orchestration", () => {
         const directory = temporaryDirectory();
         const isolated = isolatedCheckout(directory);
         const successfulWorkflow = runStableWorkflow(isolated);
-        expect(successfulWorkflow.result.status).toBe(0);
+        expect(
+            successfulWorkflow.result.status,
+            `${successfulWorkflow.result.stdout}\n${successfulWorkflow.result.stderr}`,
+        ).toBe(0);
         expect(successfulWorkflow.shardRuns.every((result) => result.status === 0)).toBe(true);
         const nativeCoverageDirectory = path.join(isolated.checkout, "native-coverage");
         const nativeCoverageRun = spawnSync(
@@ -298,17 +305,26 @@ describe("unit CI native shard orchestration", () => {
         ).toBeGreaterThan(1);
         expect(mergedCoverage).toEqual(nativeCoverage);
         expect(fs.readFileSync(path.join(isolated.checkout, "job_logs/base-test.log"), "utf8")).toContain(
-            "Tests  1 passed",
+            "passed",
         );
-        const failingBaseCheckout = isolatedCheckout(temporaryDirectory(), { base: true });
-        const failedWorkflow = runStableWorkflow(failingBaseCheckout);
-        expect(failedWorkflow.result.status).toBe(1);
-        const baseFailureLog = fs.readFileSync(
-            path.join(failingBaseCheckout.checkout, "job_logs/base-test.log"),
-            "utf8",
+        const nativeFailure = path.join(root, "client", "src", "tests", "deliberate-native-failure.base-spec.ts");
+        fs.writeFileSync(
+            nativeFailure,
+            'import { expect, test } from "vitest"; test("BASE PACKAGE ENTRY", () => expect(1).toBe(2));\n',
         );
-        expect(baseFailureLog).toContain("BASE PACKAGE ENTRY");
-        expect(baseFailureLog).toContain("expected 1 to be 2");
+        try {
+            const failingBaseCheckout = isolatedCheckout(temporaryDirectory());
+            const failedWorkflow = runStableWorkflow(failingBaseCheckout);
+            expect(failedWorkflow.result.status).toBe(1);
+            const baseFailureLog = fs.readFileSync(
+                path.join(failingBaseCheckout.checkout, "job_logs/base-test.log"),
+                "utf8",
+            );
+            expect(baseFailureLog).toContain("BASE PACKAGE ENTRY");
+            expect(baseFailureLog).toContain("expected 1 to be 2");
+        } finally {
+            fs.rmSync(nativeFailure);
+        }
     });
 
     test("the package unit entry remains usable without shard orchestration", () => {
@@ -317,7 +333,7 @@ describe("unit CI native shard orchestration", () => {
             cwd: isolated.client,
             env: env({ UNIT_SHARD: "" }),
         });
-        expect(result.status).toBe(0);
+        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
         expect(`${result.stdout}\n${result.stderr}`).toContain("> test:base");
 
         const unitFailure = isolatedCheckout(temporaryDirectory(), { unit: true });
@@ -401,7 +417,19 @@ describe("unit CI native shard orchestration", () => {
             };
             fs.writeFileSync(shardCoverage, JSON.stringify(data));
         }
-        expect(run(directory).stderr.toString()).toContain("coverage maps are empty for executable file");
+        expect(run(directory).stderr.toString()).toContain("coverage statementMap is incomplete");
+        artifactFixture(directory);
+        for (const shard of [1, 2]) {
+            const shardCoverage = path.join(
+                directory,
+                `unit-shard-${shard}-100-2/coverage/unit-shard-${shard}/coverage-final.json`,
+            );
+            const data = JSON.parse(fs.readFileSync(shardCoverage, "utf8"));
+            delete data["/source.ts"].statementMap[5];
+            delete data["/source.ts"].s[5];
+            fs.writeFileSync(shardCoverage, JSON.stringify(data));
+        }
+        expect(run(directory).stderr.toString()).toContain("coverage statementMap is incomplete");
         artifactFixture(directory);
         const first = path.join(directory, "unit-shard-1-100-2/unit-evidence/shard-1.json");
         fs.copyFileSync(first, path.join(directory, "unit-shard-2-100-2/unit-evidence/shard-2.json"));

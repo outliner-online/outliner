@@ -96,6 +96,17 @@ function validateCoverageMaps(coverage) {
 function coverageEntryCount(data) {
     return Object.keys(data.statementMap).length + Object.keys(data.fnMap).length + Object.keys(data.branchMap).length;
 }
+function validateCompleteCoverageMaps(coverage, baseline, shard) {
+    for (const [file, expected] of Object.entries(baseline)) {
+        if (coverageEntryCount(expected) === 0) continue;
+        if (!coverage[file]) throw new Error(`coverage is missing executable file in shard ${shard}: ${file}`);
+        for (const mapName of ["statementMap", "fnMap", "branchMap"]) {
+            if (JSON.stringify(coverage[file][mapName]) !== JSON.stringify(expected[mapName])) {
+                throw new Error(`coverage ${mapName} is incomplete for shard ${shard}: ${file}`);
+            }
+        }
+    }
+}
 function nativeCoverageBaseline() {
     if (process.env.UNIT_COVERAGE_BASELINE) {
         return JSON.parse(fs.readFileSync(process.env.UNIT_COVERAGE_BASELINE, "utf8"));
@@ -157,11 +168,7 @@ for (let shard = 1; shard <= shardCount; shard++) {
         throw new Error(`native coverage file set differs for shard ${shard}`);
     }
     validateCoverageMaps(coverage);
-    for (const [file, baseline] of Object.entries(coverageBaseline)) {
-        if (coverageEntryCount(baseline) > 0 && (!coverage[file] || coverageEntryCount(coverage[file]) === 0)) {
-            throw new Error(`coverage maps are empty for executable file in shard ${shard}: ${file}`);
-        }
-    }
+    validateCompleteCoverageMaps(coverage, coverageBaseline, shard);
     mergedCoverage.merge(coverage);
 }
 compareIdentities(executed, expected);
