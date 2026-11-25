@@ -477,13 +477,19 @@ describe("unit CI native shard orchestration", () => {
         expect(fs.readFileSync(path.join(root, "scripts/ci/verify-unit-shards.mjs"), "utf8")).toContain(
             "--no-static-parse",
         );
-        expect(workflow.jobs["unit-test"].needs).toBe("unit-shard");
+        expect(workflow.jobs["unit-test"].needs).toEqual(["unit-shard", "unit-coverage-baseline"]);
         expect(workflow.jobs["unit-test"].if).toBe("always()");
         expect(workflow.jobs["unit-test"]["timeout-minutes"]).toBe(20);
         expect(workflow.jobs["unit-test"].steps.some((step: any) => step.uses === "./.github/actions/setup-test-env"))
             .toBe(true);
-        expect(workflow.jobs["unit-test"].steps.find((step: any) => step.name.includes("Verify")).run)
-            .toBe("scripts/ci/finalize-unit-tests.sh");
+        const verify = workflow.jobs["unit-test"].steps.find((step: any) => step.name.includes("Verify"));
+        expect(verify.run).toBe("scripts/ci/finalize-unit-tests.sh");
+        expect(verify.env.UNIT_COVERAGE_BASELINE).toBe("unit-baseline/coverage-final.json");
+        expect(
+            workflow.jobs["unit-coverage-baseline"].steps.find((step: any) =>
+                step.name === "Run native unit coverage baseline"
+            ).run,
+        ).toContain("vitest run --project unit --coverage");
         const diagnostics = workflow.jobs["unit-test"].steps.find((step: any) => step.name === "Upload logs");
         expect(diagnostics.if).toBe("failure()");
         expect(diagnostics.with.name).toBe("unit-test-logs");

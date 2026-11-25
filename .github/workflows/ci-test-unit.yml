@@ -6,6 +6,45 @@ concurrency:
   group: unit-${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
   cancel-in-progress: true
 jobs:
+  unit-coverage-baseline:
+    name: native coverage baseline
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    timeout-minutes: 20
+    permissions:
+      packages: read
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          clean: true
+      - name: Setup Test Environment
+        uses: ./.github/actions/setup-test-env
+      - name: Run native unit coverage baseline
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p job_logs coverage/unit-baseline
+          cd client
+          ./node_modules/.bin/vitest run --project unit --coverage --coverage.reporter=json \
+            --coverage.reportsDirectory=../coverage/unit-baseline \
+            2>&1 | tee -a ../job_logs/unit-coverage-baseline.log
+      - name: Upload native coverage baseline
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-coverage-baseline-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            coverage/unit-baseline/coverage-final.json
+            job_logs/unit-coverage-baseline.log
+          archive: true
+          if-no-files-found: error
+          retention-days: 2
   unit-shard:
     name: unit shard ${{ matrix.shard }} of 2
     strategy:
@@ -62,7 +101,7 @@ jobs:
   unit-test:
     name: unit-test
     if: always()
-    needs: unit-shard
+    needs: [unit-shard, unit-coverage-baseline]
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/${{ github.repository }}:latest
@@ -85,12 +124,23 @@ jobs:
         with:
           pattern: unit-shard-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: unit-artifacts
+      - name: Download current-attempt native coverage baseline
+        uses: actions/download-artifact@v8
+        with:
+          name: unit-coverage-baseline-${{ github.run_id }}-${{ github.run_attempt }}
+          path: unit-baseline
       - name: Reject failed or cancelled shards
         env:
           SHARD_RESULT: ${{ needs.unit-shard.result }}
         run: test "$SHARD_RESULT" = success
+      - name: Reject failed or cancelled native baseline
+        env:
+          BASELINE_RESULT: ${{ needs.unit-coverage-baseline.result }}
+        run: test "$BASELINE_RESULT" = success
       - name: Verify complete selection, merge coverage, and run base tests
         run: scripts/ci/finalize-unit-tests.sh
+        env:
+          UNIT_COVERAGE_BASELINE: unit-baseline/coverage-final.json
       - name: Upload logs
         if: failure()
         uses: actions/upload-artifact@v7
