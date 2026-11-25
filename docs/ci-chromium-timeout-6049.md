@@ -9,12 +9,16 @@ setup, the server build, and service startup completed before the test step;
 they do not show which test was last active or why its Playwright process did
 not finish. Elapsed job time alone was not used to attribute the cancellation.
 
-The retained repository-visible evidence therefore establishes the outer job
-deadline as the cancellation authority, but it does not establish a shared
-repository-controlled stall inside the test step. This investigation makes no
-workflow or test correction. In particular, it does not change timeouts,
-concurrency, retries, required-check identities, test selection, artifact
-identity, failure propagation, or deployment prerequisites.
+The original retained evidence establishes the outer job deadline as the
+cancellation authority, but it does not establish a shared
+repository-controlled stall inside the test step. A subsequent ordinary hosted
+Chromium execution on this investigation's pull request exposed a separate,
+repeatable repository boundary after the test step: execution-status recording
+remained active until the outer job deadline and prevented artifact and
+post-action steps from running. Status recording is now bounded to 30 seconds
+and remains non-success if it cannot finish. The correction does not change
+job timeouts, concurrency, retries, required-check identities, test selection,
+artifact identity, failure propagation, or deployment prerequisites.
 
 ## Affected main execution
 
@@ -112,3 +116,25 @@ repository correction is justified only if that evidence demonstrates the
 shared defect; it must keep normal completion evidence and ensure a matched
 failure or interruption remains non-success through the aggregate and deploy
 gates, followed by ordinary hosted Chromium verification on the corrected SHA.
+
+## Repository-controlled finalization correction
+
+The first hosted run of this investigation supplied evidence that was not
+available in the historical records. In [PR run 45678082056, tables-2 job
+139432333398](https://github.com/outliner-online/outliner/actions/runs/45678082056/job/139432333398),
+setup and startup succeeded, and `Run E2E tests (tables-2)` reached a terminal
+`cancelled` result at 18:53:53 UTC. `Record setup and execution status` started
+at that same instant but never received a terminal timestamp. Artifact upload
+and both post-actions remained pending until GitHub cancelled the job at
+19:43:17 with the explicit annotation `The job has exceeded the maximum
+execution time of 45m0s`.
+
+That sequence demonstrates a repository-controlled finalization stall at the
+status-recording step independently of the test outcome. The workflow now runs
+the extracted status recorder under a 30-second GNU `timeout`, with shell
+`pipefail` preserving timeout or recorder failure as non-success. A normal
+control verifies that the actual recorder writes the terminal job and test
+outcomes; a matched blocked-input control verifies that the same recorder is
+terminated with exit 124 rather than consuming the remaining job lifetime.
+This boundary does not explain the historical unfinished Playwright commands,
+and the correction makes no such root-cause claim.
