@@ -2,10 +2,14 @@
 
 import http.server
 import os
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+
+metadata_cache = {}
+alternative_blocked = threading.Event()
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -26,6 +30,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         # upstream response; metadata setup must remain valid.
                         with open('/etc/hosts', 'a') as hosts:
                             hosts.write('127.0.0.2 archive.ubuntu.com\n')
+                        alternative_blocked.set()
                         print('OBSERVED_ALTERNATIVE_BLOCKED', flush=True)
                     self.send_response(response.status)
                     self.send_header('Content-Length', response.headers['Content-Length'])
@@ -39,6 +44,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 print('OBSERVED_FIRST_MIRROR_CLIENT_CLOSED', flush=True)
             return
+        if self.path in metadata_cache:
+            status, body = metadata_cache[self.path]
+            self.send_response(status)
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if alternative_blocked.is_set():
+            # A retry may ask for a metadata variant that the initial update did
+            # not use. Fail that request directly instead of proxying recursively
+            # through the now-blocked archive hostname.
+            self.send_error(503, 'alternative deliberately unavailable')
+            return
         upstream = 'http://security.ubuntu.com' if 'resolute-security' in self.path else 'http://archive.ubuntu.com'
         try:
             response = urllib.request.urlopen(upstream + self.path, timeout=60)
@@ -46,6 +64,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             response = error
         with response:
             body = response.read()
+            metadata_cache[self.path] = (response.status, body)
             self.send_response(response.status)
             self.send_header('Content-Length', str(len(body)))
             self.end_headers()
