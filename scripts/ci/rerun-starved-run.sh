@@ -55,7 +55,76 @@ if [ "$RUN_ATTEMPT" -ge "$MAX_ATTEMPTS" ]; then
     exit 0
 fi
 
-jobs_json="$(gh api "repos/$REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs?per_page=100")"
+# Retry only this read, never a rerun write. Three 30-second reads (plus a
+# five-second kill grace each) and six seconds of backoff fit the five-minute
+# workflow budget. The HTTP status comes from gh's response headers, not an
+# error message that could also describe an authentication or transport error.
+jobs_endpoint="repos/$REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs?per_page=100"
+for read_attempt in 1 2 3; do
+    api_exit=0
+    api_response="$(timeout --kill-after=5s 30s gh api --include --method GET "$jobs_endpoint")" || api_exit=$?
+    IFS= read -r status_line <<< "$api_response"
+    http_status=""
+    if [[ "$status_line" =~ ^HTTP/[0-9.]+[[:space:]]+([0-9]{3})([[:space:]]|$) ]]; then
+        http_status="${BASH_REMATCH[1]}"
+    fi
+
+    if [ "$api_exit" -eq 0 ] && [ "$http_status" = "200" ]; then
+        jobs_json="$(printf '%s' "$api_response" | sed '1,/^\r\{0,1\}$/d')"
+        break
+    fi
+
+    if [ "$api_exit" -eq 1 ] && [[ "$http_status" =~ ^(502|503|504)$ ]] && [ "$read_attempt" -lt 3 ]; then
+        delay_seconds=$((read_attempt * 2))
+        echo "::warning::Jobs evidence unavailable for $REPO run $RUN_ID attempt $RUN_ATTEMPT (HTTP $http_status); retrying read $((read_attempt + 1))/3 in ${delay_seconds}s." >&2
+        sleep "$delay_seconds"
+        continue
+    fi
+
+    echo "::error::Jobs evidence unavailable for $REPO run $RUN_ID attempt $RUN_ATTEMPT (HTTP ${http_status:-unknown}, gh exit $api_exit); no rerun requested." >&2
+    exit 1
+done
+
+# Missing fields are not negative evidence: in particular, a missing step
+# status otherwise compares unequal to "completed" and looks like runner loss.
+# Validate every job before emitting any classification. Slurping also rejects
+# an empty body or multiple JSON documents. Keep the existing first-page scope.
+if ! printf '%s' "$jobs_json" | jq -se --arg run "$RUN_ID" --arg attempt "$RUN_ATTEMPT" '
+    def verdict:
+      . == null or IN("success", "failure", "neutral", "cancelled", "skipped",
+                      "timed_out", "action_required", "stale", "startup_failure");
+    def status:
+      IN("queued", "pending", "waiting", "requested", "in_progress", "completed");
+    def timestamp:
+      if . == null then true
+      elif type == "string" then try (fromdateiso8601 | type == "number") catch false
+      else false end;
+    length == 1 and (.[0] |
+      type == "object" and
+      (.total_count | type == "number" and . >= 0 and floor == .) and
+      (.jobs | type == "array") and
+      ((.jobs | length) == ([.total_count, 100] | min)) and
+      all(.jobs[];
+        type == "object" and
+        (.run_id | tostring) == $run and
+        ((has("run_attempt") | not) or (.run_attempt | tostring) == $attempt) and
+        (.name | type == "string" and length > 0) and
+        (.status | status) and
+        has("conclusion") and (.conclusion | verdict) and
+        has("runner_name") and (.runner_name | . == null or type == "string") and
+        has("started_at") and (.started_at | timestamp) and
+        has("completed_at") and (.completed_at | timestamp) and
+        (.steps | type == "array") and
+        all(.steps[];
+          type == "object" and (.status | status) and
+          has("conclusion") and (.conclusion | verdict)
+        )
+      )
+    )
+' >/dev/null 2>&1; then
+    echo "::error::Invalid jobs evidence for $REPO run $RUN_ID attempt $RUN_ATTEMPT (malformed, incomplete, or wrong target); no rerun requested." >&2
+    exit 1
+fi
 
 starved="$(
     printf '%s' "$jobs_json" | jq -r --argjson min "$MIN_QUEUED_SECONDS" '
