@@ -51,14 +51,12 @@ function isolatedCheckout(directory: string, failures: { unit?: boolean; base?: 
         fs.copyFileSync(path.join(root, "scripts", "ci", script), path.join(checkout, "scripts", "ci", script));
     }
     fs.symlinkSync(path.join(root, "client", "node_modules"), path.join(client, "node_modules"), "dir");
-    const githubUnit = JSON.parse(fs.readFileSync(path.join(root, "client", "package.json"), "utf8")).scripts[
-        "github:test:unit"
-    ];
+    const productionScripts = JSON.parse(fs.readFileSync(path.join(root, "client", "package.json"), "utf8")).scripts;
     fs.writeFileSync(path.join(client, "package.json"), JSON.stringify({
         type: "module",
         scripts: {
-            "github:test:unit": githubUnit,
-            "test:base": "vitest run --config vitest.base.config.ts",
+            "github:test:unit": productionScripts["github:test:unit"],
+            "test:base": productionScripts["test:base"],
         },
     }));
     fs.writeFileSync(path.join(client, "src", "covered-source.js"), "export const coveredValue = 1;\n");
@@ -186,7 +184,8 @@ describe("unit CI native shard orchestration", () => {
             ).testResults[0].assertionResults[0].status,
         ).toBe("failed");
         const reject = unitWorkflow().jobs["unit-test"].steps.find((step: any) => step.name.includes("Reject"));
-        expect(spawnSync("bash", ["-c", reject.run], { env: { ...process.env, SHARD_RESULT: "failure" } }).status)
+        const shardResult = failed.status === 0 ? "success" : "failure";
+        expect(spawnSync("bash", ["-c", reject.run], { env: { ...process.env, SHARD_RESULT: shardResult } }).status)
             .toBe(1);
     });
 
