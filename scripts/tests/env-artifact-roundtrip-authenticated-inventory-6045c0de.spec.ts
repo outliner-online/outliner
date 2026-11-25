@@ -41,12 +41,13 @@ function expectAuthenticatedIdentity(
 
 function expectUnavailableControl(control: Record<string, any>): void {
     expect(control["continue-on-error"]).toBeUndefined();
+    expect(control.if).toBeUndefined();
     expect(control.env).toEqual({
         GH_TOKEN: "${{ github.token }}",
         UNAVAILABLE_ARTIFACT_ID: "0",
     });
     expect(control.run).toContain(
-        'scripts/ci/reject-unavailable-artifact.sh \\\n  "$GITHUB_REPOSITORY" "$UNAVAILABLE_ARTIFACT_ID"',
+        'scripts/ci/reject-unavailable-artifact.sh \\\n  "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$UNAVAILABLE_ARTIFACT_ID"',
     );
 }
 
@@ -103,7 +104,11 @@ test("regression rejects split lookup paths and substituted artifact identities"
 });
 
 test("unavailable control requires both download failure and authenticated absence evidence", () => {
-    expectUnavailableControl(step(artifactJob(), "Reject an unavailable artifact"));
+    const control = step(artifactJob(), "Reject an unavailable artifact");
+    expectUnavailableControl(control);
+    const skippedControl = structuredClone(control);
+    skippedControl.if = "${{ false }}";
+    expect(() => expectUnavailableControl(skippedControl)).toThrow();
 
     const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "unavailable-artifact-control-"));
     const ghFixture = path.join(fixtureRoot, "gh");
@@ -112,12 +117,23 @@ test("unavailable control requires both download failure and authenticated absen
         `#!/bin/bash
 set -euo pipefail
 test "$1" = api
+count=$(($(cat "$FIXTURE_STATE" 2>/dev/null || echo 0) + 1))
+printf '%s' "$count" > "$FIXTURE_STATE"
+if [[ "$2" == repos/outliner-online/outliner/actions/runs/999/artifacts* ]]; then
+  if [ "$PROVIDER_RESULT" = masked-access ] && [ "$count" -gt 2 ]; then
+    exit 1
+  fi
+  case "$PROVIDER_RESULT" in
+    authentication) exit 1 ;;
+    network) echo 'connection reset' >&2; exit 1 ;;
+  esac
+  printf '111\\n222\\n'
+  exit 0
+fi
 test "$2" = --include
 test "$3" = repos/outliner-online/outliner/actions/artifacts/0/zip
 case "$PROVIDER_RESULT" in
-  not-found) printf 'HTTP/2.0 404 Not Found\\n'; exit 1 ;;
-  authentication) printf 'HTTP/2.0 401 Unauthorized\\n'; exit 1 ;;
-  network) echo 'connection reset' >&2; exit 1 ;;
+  not-found|masked-access) printf 'HTTP/2.0 404 Not Found\\n'; exit 1 ;;
   success) printf 'HTTP/2.0 200 OK\\n'; exit 0 ;;
 esac
 exit 64
@@ -126,10 +142,11 @@ exit 64
     );
 
     const runControl = (providerResult: string, token = "short-lived-test-token"): number =>
-        spawnSync(unavailableControl, ["outliner-online/outliner", "0"], {
+        spawnSync(unavailableControl, ["outliner-online/outliner", "999", "0", "111", "222"], {
             encoding: "utf8",
             env: {
                 ...process.env,
+                FIXTURE_STATE: path.join(fixtureRoot, `state-${providerResult}-${token.length}`),
                 GH_TOKEN: token,
                 PATH: `${fixtureRoot}:${process.env.PATH}`,
                 PROVIDER_RESULT: providerResult,
@@ -142,6 +159,8 @@ exit 64
         expect(runControl("network"), "the production control rejects transport failure").not.toBe(0);
         expect(runControl("success"), "the production control rejects an unexpected download").not.toBe(0);
         expect(runControl("not-found", ""), "the production control rejects a missing workflow credential").not.toBe(0);
+        expect(runControl("masked-access"), "a concealed repository-access failure must not satisfy the control")
+            .not.toBe(0);
     } finally {
         fs.rmSync(fixtureRoot, { recursive: true, force: true });
     }

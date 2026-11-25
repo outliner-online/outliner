@@ -381,7 +381,9 @@ jobs:
         run: |
           set -euo pipefail
           scripts/ci/reject-unavailable-artifact.sh \
-            "$GITHUB_REPOSITORY" "$UNAVAILABLE_ARTIFACT_ID"
+            "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$UNAVAILABLE_ARTIFACT_ID" \
+            "${{ steps.representative-upload.outputs.artifact-id }}" \
+            "${{ steps.wrong-upload.outputs.artifact-id }}"
 
       - name: Download wrong-artifact control
         uses: actions/download-artifact@v8
