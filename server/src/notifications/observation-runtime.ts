@@ -168,6 +168,10 @@ export class NotificationObservationRuntime {
         };
     }
 
+    isClosed(): boolean {
+        return this.stopped;
+    }
+
     start(): void {
         if (this.started || this.stopped) return;
         this.started = true;
@@ -560,6 +564,7 @@ export class NotificationObservationRuntime {
                 continue;
             }
             const payload: ViewChangePayload = freezeDeep({
+                uid: entry.uid,
                 eventId: randomUUID(),
                 ruleId: entry.rule.ruleId,
                 channel,

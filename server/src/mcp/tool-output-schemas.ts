@@ -201,6 +201,12 @@ const kanbanCounts = z.strictObject({
  * fields remain required. Array results stay arrays (MCP 2026-07-28).
  */
 export const toolOutputSchemas = {
+    get_notification_delivery_status: z.strictObject({
+        state: z.enum(["configured", "active", "pending", "expired", "disabled", "unavailable"]),
+        expiresAtMs: z.number().optional(),
+        latestAttempt: z.enum(["accepted", "failed", "unknown", "expired", "no_destination", "cancelled", "deferred"])
+            .nullable(),
+    }),
     get_notification_settings: notificationSettings,
     get_notification_status: z.array(z.strictObject({
         ruleId: z.string(),

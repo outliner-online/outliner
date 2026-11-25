@@ -37,6 +37,7 @@ export interface RefreshTokenRecord {
 }
 
 export interface VerifiedOAuthAccessToken {
+    expiresAtMs: number;
     uid: string;
     scope: string;
     clientId: string;

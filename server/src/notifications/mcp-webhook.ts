@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { Webhook } from "standardwebhooks";
 import { type HttpsPost, sendNotificationHttps } from "./https-transport.js";
 
@@ -55,7 +55,7 @@ export function createMcpCallbackVerifier(sender: typeof sendNotificationHttps) 
     return async function verify(input: VerifyMcpCallbackInput): Promise<
         { kind: "verified"; } | { kind: "failed" | "unknown"; reason: string; }
     > {
-        const challenge = randomBytes(32).toString("base64url");
+        const challenge = randomUUID();
         const post: HttpsPost = {
             url: input.url,
             headerProfile: "mcp-events",
@@ -67,7 +67,7 @@ export function createMcpCallbackVerifier(sender: typeof sendNotificationHttps) 
                 const authority = await input.revalidate();
                 if (!authority) return null;
                 const signed = signMcpWebhook({
-                    body: { challenge },
+                    body: { type: "verification", challenge },
                     eventId: randomUUID(),
                     subscriptionId: input.subscriptionId,
                     secret: input.secret,

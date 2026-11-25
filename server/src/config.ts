@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 const ConfigSchema = z.object({
+    NOTIFICATION_CREDENTIAL_KEY: z.string().optional(),
     OUTLINER_DEPLOYMENT_MODE: z.enum(["cloud", "onprem"]).default("cloud"),
     OUTLINER_DATA_DIR: z.string().optional(),
     OUTLINER_STATIC_DIR: z.string().optional(),
