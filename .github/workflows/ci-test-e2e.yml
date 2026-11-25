@@ -766,37 +766,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p job_logs
-          node <<'NODE' 2>&1 | tee job_logs/execution-status.log
-          const fs = require('node:fs');
-          const path = require('node:path');
-          const file = 'job_logs/execution-context.json';
-          const record = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
-          const runtimeFile = process.env.E2E_BROWSER_RUNTIME_REPORT;
-          if (runtimeFile && fs.existsSync(runtimeFile)) {
-            record.browserRuntimeProbe = JSON.parse(fs.readFileSync(runtimeFile, 'utf8'));
-            record.browserVersion = record.browserRuntimeProbe.browserVersion;
-            record.playwrightVersion = record.browserRuntimeProbe.playwrightVersion;
-            record.playwrightVersionSource = 'Firefox runtime probe';
-          }
-          record.status = process.env.E2E_JOB_STATUS;
-          record.steps = JSON.parse(process.env.E2E_STEP_OUTCOMES);
-          if (process.env.E2E_BROWSER === 'firefox') {
-            const executionFile = path.resolve('client', process.env.E2E_EXECUTION_REPORT);
-            if (fs.existsSync(executionFile)) {
-              const execution = JSON.parse(fs.readFileSync(executionFile, 'utf8'));
-              record.testExecution = {
-                status: execution.status,
-                ...execution.counts,
-                report: path.relative(process.cwd(), executionFile),
-              };
-            } else if (record.steps.tests && record.steps.tests.outcome !== 'skipped') {
-              record.testExecution = { status: 'unobserved', collected: null, executed: null, attempts: null };
-            }
-          }
-          record.finishedAt = new Date().toISOString();
-          fs.writeFileSync(file, JSON.stringify(record, null, 2) + '\n');
-          console.log(JSON.stringify(record));
-          NODE
+          # Status retention must not consume the remaining job lifetime and
+          # prevent the artifact and post-action steps from running.
+          timeout --signal=TERM --kill-after=5s 30s \
+            node scripts/ci/record-e2e-execution-status.mjs \
+            2>&1 | tee job_logs/execution-status.log
 
       - name: Upload Logs & Artifacts
         # Retain Playwright command evidence, reports and attachments. Raw service
