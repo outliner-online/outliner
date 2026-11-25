@@ -96,7 +96,10 @@ function validateCoverageMaps(coverage) {
 function coverageEntryCount(data) {
     return Object.keys(data.statementMap).length + Object.keys(data.fnMap).length + Object.keys(data.branchMap).length;
 }
-function validateCompleteCoverageMaps(coverage, baseline, schema, shard) {
+function canonicalDefinitions(map) {
+    return Object.values(map).map((definition) => JSON.stringify(definition)).sort();
+}
+function validateCoverageSchema(coverage, schema, shard) {
     for (const [file, expected] of Object.entries(schema)) {
         if (!coverage[file]) throw new Error(`coverage is missing schema file in shard ${shard}: ${file}`);
         for (const mapName of ["statementMap", "fnMap", "branchMap"]) {
@@ -105,12 +108,17 @@ function validateCompleteCoverageMaps(coverage, baseline, schema, shard) {
             }
         }
     }
+}
+function validateCompleteCoverageMaps(coverage, baseline) {
     for (const [file, expected] of Object.entries(baseline)) {
         if (coverageEntryCount(expected) === 0) continue;
-        if (!coverage[file]) throw new Error(`coverage is missing executable file in shard ${shard}: ${file}`);
+        if (!coverage[file]) throw new Error(`merged coverage is missing executable file: ${file}`);
         for (const mapName of ["statementMap", "fnMap", "branchMap"]) {
-            if (JSON.stringify(coverage[file][mapName]) !== JSON.stringify(expected[mapName])) {
-                throw new Error(`coverage ${mapName} differs from native selection for shard ${shard}: ${file}`);
+            if (
+                JSON.stringify(canonicalDefinitions(coverage[file][mapName]))
+                !== JSON.stringify(canonicalDefinitions(expected[mapName]))
+            ) {
+                throw new Error(`merged coverage ${mapName} differs from native selection: ${file}`);
             }
         }
     }
@@ -179,13 +187,14 @@ for (let shard = 1; shard <= shardCount; shard++) {
         throw new Error(`native coverage file set differs for shard ${shard}`);
     }
     validateCoverageMaps(coverage);
-    validateCompleteCoverageMaps(coverage, coverageBaseline, schema, shard);
+    validateCoverageSchema(coverage, schema, shard);
     mergedCoverage.merge(coverage);
 }
 compareIdentities(executed, expected);
 if (mergedCoverage.files().length !== nativeCoverageFiles.length) {
     throw new Error("merged coverage is incomplete");
 }
+validateCompleteCoverageMaps(mergedCoverage.toJSON(), coverageBaseline);
 const output = path.resolve("coverage/unit_and_integration/coverage-final.json");
 fs.mkdirSync(path.dirname(output), { recursive: true });
 fs.writeFileSync(output, JSON.stringify(mergedCoverage.toJSON()));

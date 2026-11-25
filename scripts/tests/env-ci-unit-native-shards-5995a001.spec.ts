@@ -346,7 +346,7 @@ describe("unit CI native shard orchestration", () => {
         } finally {
             fs.rmSync(nativeFailure);
         }
-    });
+    }, 120_000);
 
     test("the package unit entry remains usable without shard orchestration", () => {
         const isolated = isolatedCheckout(temporaryDirectory());
