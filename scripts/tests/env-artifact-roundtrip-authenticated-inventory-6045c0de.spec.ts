@@ -125,12 +125,12 @@ exit 64
         { mode: 0o755 },
     );
 
-    const runControl = (providerResult: string): number =>
+    const runControl = (providerResult: string, token = "short-lived-test-token"): number =>
         spawnSync(unavailableControl, ["outliner-online/outliner", "0"], {
             encoding: "utf8",
             env: {
                 ...process.env,
-                GH_TOKEN: "short-lived-test-token",
+                GH_TOKEN: token,
                 PATH: `${fixtureRoot}:${process.env.PATH}`,
                 PROVIDER_RESULT: providerResult,
             },
@@ -141,6 +141,7 @@ exit 64
         expect(runControl("authentication"), "the production control rejects authentication failure").not.toBe(0);
         expect(runControl("network"), "the production control rejects transport failure").not.toBe(0);
         expect(runControl("success"), "the production control rejects an unexpected download").not.toBe(0);
+        expect(runControl("not-found", ""), "the production control rejects a missing workflow credential").not.toBe(0);
     } finally {
         fs.rmSync(fixtureRoot, { recursive: true, force: true });
     }
