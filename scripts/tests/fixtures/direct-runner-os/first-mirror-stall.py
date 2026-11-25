@@ -9,7 +9,6 @@ import urllib.parse
 import urllib.request
 
 metadata_cache = {}
-alternative_blocked = threading.Event()
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -25,13 +24,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     headers={'User-Agent': 'Debian APT-HTTP/1.3'},
                 )
                 with urllib.request.urlopen(upstream, timeout=60) as response:
-                    if os.environ.get('BLOCK_ALTERNATIVE') == '1':
-                        # Block only after the first transport has its genuine
-                        # upstream response; metadata setup must remain valid.
-                        with open('/etc/hosts', 'a') as hosts:
-                            hosts.write('127.0.0.2 archive.ubuntu.com\n')
-                        alternative_blocked.set()
-                        print('OBSERVED_ALTERNATIVE_BLOCKED', flush=True)
                     self.send_response(response.status)
                     self.send_header('Content-Length', response.headers['Content-Length'])
                     self.end_headers()
@@ -51,12 +43,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             return
-        if alternative_blocked.is_set():
-            # A retry may ask for a metadata variant that the initial update did
-            # not use. Fail that request directly instead of proxying recursively
-            # through the now-blocked archive hostname.
-            self.send_error(503, 'alternative deliberately unavailable')
-            return
         upstream = 'http://security.ubuntu.com' if 'resolute-security' in self.path else 'http://archive.ubuntu.com'
         try:
             response = urllib.request.urlopen(upstream + self.path, timeout=60)
@@ -70,6 +56,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
 
+
+class AlternativeHandler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *_args):
+        pass
+
+    def do_CONNECT(self):
+        print('OBSERVED_ALTERNATIVE_BLOCKED ' + self.path, flush=True)
+        self.send_error(503, 'alternative deliberately unavailable')
+
+
+if os.environ.get('BLOCK_ALTERNATIVE') == '1':
+    alternative = http.server.ThreadingHTTPServer(('127.0.0.1', 18083), AlternativeHandler)
+    alternative.daemon_threads = True
+    threading.Thread(target=alternative.serve_forever, daemon=True).start()
 
 server = http.server.ThreadingHTTPServer(('0.0.0.0', 80), Handler)
 server.daemon_threads = True

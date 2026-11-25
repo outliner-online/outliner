@@ -62,7 +62,7 @@ start_first_mirror() {
   echo '127.0.0.1 us-east-2.ec2.archive.ubuntu.com' >> /etc/hosts
   echo 'Acquire::http::Proxy::us-east-2.ec2.archive.ubuntu.com "DIRECT";' >> /etc/apt/apt.conf.d/80fixture-proxy
   if [ "$block_alternative" = 1 ]; then
-    echo 'Acquire::https::Proxy::archive.ubuntu.com "DIRECT";' >> /etc/apt/apt.conf.d/80fixture-proxy
+    echo 'Acquire::https::Proxy::archive.ubuntu.com "http://127.0.0.1:18083";' >> /etc/apt/apt.conf.d/80fixture-proxy
   fi
   BLOCK_ALTERNATIVE="$block_alternative" \
     python3 -u /fixture/scripts/tests/fixtures/direct-runner-os/first-mirror-stall.py > /tmp/first-mirror.log 2>&1 &
