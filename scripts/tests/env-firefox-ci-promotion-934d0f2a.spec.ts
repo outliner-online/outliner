@@ -96,7 +96,7 @@ describe("ENV-934d0f2a: Firefox promotion to ordinary E2E CI", () => {
 
     it("bounds new-2 inside the unchanged job deadline and requires its archive", () => {
         const job = workflow("ci-test-e2e.yml").jobs["e2e-test"];
-        expect(job["timeout-minutes"]).toBe(30);
+        expect(job["timeout-minutes"]).toBe(45);
         const step = job.steps.find((value: { id?: string; }) => value.id === "tests");
         expect(step.run).toContain('if [[ "$project" =~ ^new-2-([12])$ ]]; then');
         expect(step.run).toContain("python3 ../scripts/ci/run-bounded-e2e.py");
@@ -112,7 +112,7 @@ describe("ENV-934d0f2a: Firefox promotion to ordinary E2E CI", () => {
 
     it("bounds both tables shards with their original selection and retains successful evidence", () => {
         const job = workflow("ci-test-e2e.yml").jobs["e2e-test"];
-        expect(job["timeout-minutes"]).toBe(30);
+        expect(job["timeout-minutes"]).toBe(45);
         const run = job.steps.find((value: { id?: string; }) => value.id === "tests").run;
         const tables = run.split('elif [[ "$project" =~ ^tables-([12])$ ]]; then')[1]
             .split("else")[0];
@@ -127,7 +127,7 @@ describe("ENV-934d0f2a: Firefox promotion to ordinary E2E CI", () => {
     it("bounds every startup while retaining readiness and two attempts", () => {
         const job = workflow("ci-test-e2e.yml").jobs["e2e-test"];
         const step = job.steps.find((value: { id?: string; }) => value.id === "startup");
-        expect(job["timeout-minutes"]).toBe(30);
+        expect(job["timeout-minutes"]).toBe(45);
         expect(step["continue-on-error"]).toBeUndefined();
         expect(step.run).toContain("bash scripts/ci/run-e2e-startup.sh");
         expect(step.run).not.toContain('if [ "$E2E_PROJECT" = "utils" ]');

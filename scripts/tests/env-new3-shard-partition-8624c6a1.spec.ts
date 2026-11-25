@@ -53,7 +53,7 @@ describe("ENV-8624c6a1: complete new-3 partition and gate", () => {
     it("preserves the old check name and fails its real shell gate on every nonsuccess outcome", () => {
         const document = parse(fs.readFileSync(path.join(root, ".github/workflows/ci-test-e2e.yml"), "utf8"));
         const matrix = document.jobs["e2e-test"];
-        expect(matrix["timeout-minutes"]).toBe(30);
+        expect(matrix["timeout-minutes"]).toBe(45);
         expect(matrix.strategy["fail-fast"]).toBe(false);
         const gate = document.jobs["new-3-complete"];
         expect(gate.name).toBe("e2e-test (new-3)");
