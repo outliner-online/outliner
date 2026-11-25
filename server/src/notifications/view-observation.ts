@@ -13,6 +13,7 @@ import type {
     GridObservationContextV1,
     GridVisibleProjection,
 } from "../../../shared/src/notifications/gridProjection.js";
+import { parseGridObservationContext } from "../../../shared/src/notifications/gridProjection.js";
 import type {
     KanbanObservationContextV1,
     KanbanVisibleProjection,
@@ -215,7 +216,8 @@ function validateRequest(target: TargetRef, context: ObservationContext): void {
         throw new McpReadError("invalid_argument", "Invalid project or view ID");
     }
     if (target.kind === "grid") {
-        if (context.version !== 1 || !("surface" in context) || context.surface !== "table") invalidContext();
+        const parsed = parseGridObservationContext(JSON.stringify(context));
+        if (parsed.status !== "supported") invalidContext();
     } else if (target.kind === "kanban") {
         if (!isKanbanObservationContextV1(context)) invalidContext();
     } else if (target.kind === "calendar") {

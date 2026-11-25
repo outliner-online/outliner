@@ -15,6 +15,28 @@ describe("ViewObservationService retained lifecycle", () => {
         timeZone: "UTC",
     };
 
+    it("rejects Grid contexts that the production route cannot reopen", async () => {
+        let opened = false;
+        const service = new ViewObservationService({} as never, async () => true, {
+            grid: async () => {
+                opened = true;
+                throw new Error("unreachable");
+            },
+        });
+        let failure: unknown;
+        try {
+            await service.openViewObservation({
+                uid: "reader",
+                target: { projectId: "project", kind: "grid", objectId: "tasks" },
+                context: { ...context, timeZone: "Not/A-Time-Zone" },
+            });
+        } catch (error) {
+            failure = error;
+        }
+        expect(failure).to.have.property("code", "invalid_argument");
+        expect(opened).to.equal(false);
+    });
+
     it("invalidates tokens on live updates and releases idempotently", async () => {
         const doc = new Y.Doc();
         let closed = 0;

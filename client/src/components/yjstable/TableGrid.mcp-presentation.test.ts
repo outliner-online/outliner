@@ -1,5 +1,8 @@
 // Saved presentation stays separate from SELECT eligibility and physical write authorization.
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/svelte";
+import { execFile } from "node:child_process";
+import path from "node:path";
+import { promisify } from "node:util";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
 import { GRID_OBSERVATION_PARITY } from "../../../../shared/tests/fixtures/gridObservationParity";
@@ -24,6 +27,8 @@ import { resetTableEngineForTests } from "../../services/yjstable/tableEngine";
 import { fakeMonacoRegistry } from "../../tests/mocks/fakeMonaco";
 import { QUERY, setupSavedPresentation } from "./__fixtures__/mcpPresentation";
 import ProjectGridView from "./ProjectGridView.svelte";
+
+const execFileAsync = promisify(execFile);
 
 // Monaco's browser editor requires layout APIs absent from jsdom; SQL execution and mutations are real.
 vi.mock("../../lib/monaco/monacoLoader", () => ({
@@ -62,7 +67,9 @@ function cell(container: HTMLElement, id: string, column: string) {
 }
 
 describe("MCP-saved Grid presentation in the production runtime (#5436)", () => {
-    it("matches the live projection to occurrence-specific automatic UNION renderers", { timeout: 60000 }, async () => {
+    it("matches the live projection and headless capture to occurrence-specific automatic UNION renderers", {
+        timeout: 120000,
+    }, async () => {
         fixture.projectDoc.destroy();
         const projectDoc = new Y.Doc({ guid: "grid-projection-union" });
         const choices = getTableHandles(projectDoc, createTable(projectDoc, "Choices", "choices"))!;
@@ -111,6 +118,31 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
                     rows: [[{ value: displayedDate }], [{ value: displayedTimestamp }]],
                 },
             });
+
+            // Cross the real server boundary in the same oracle: seed actual
+            // Hocuspocus rooms from the same fixture, execute through PGlite,
+            // and compare the retained headless snapshot with the projection
+            // whose cells were just observed in the mounted TableGrid DOM.
+            const serverDirectory = path.resolve(process.cwd(), "../server");
+            const { stdout } = await execFileAsync(process.execPath, [
+                "--loader",
+                "ts-node/esm",
+                "--loader",
+                "./tests/loaders/pin-server-deps.mjs",
+                "--no-warnings",
+                "--input-type=module",
+                "-e",
+                "import('./tests/view-observation-grid-probe.ts').then(async m => { "
+                + "console.log('GRID_PARITY:' + JSON.stringify(await m.captureGridObservationParity())); "
+                + "process.exit(0) })",
+            ], {
+                cwd: serverDirectory,
+                timeout: 60_000,
+                env: { ...process.env, TS_NODE_TRANSPILE_ONLY: "1" },
+            });
+            const serialized = stdout.split("\n").find(line => line.startsWith("GRID_PARITY:"));
+            expect(serialized, stdout).toBeDefined();
+            expect(JSON.parse(serialized!.slice("GRID_PARITY:".length))).toEqual(initial.projection);
 
             // Retain renderer inputs outside equality: an explicit text
             // override changes only the date's displayed normalization.

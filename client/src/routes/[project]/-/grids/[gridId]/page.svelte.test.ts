@@ -148,6 +148,7 @@ describe("public demo standalone Grid observation context", { timeout: 60000 }, 
     it.each([
         ["chart surface", { ...tableContext, surface: "chart" }],
         ["extra SQL", { ...tableContext, sql: "SELECT secret FROM hidden" }],
+        ["invalid time zone", { ...tableContext, timeZone: "Not/A-Time-Zone" }],
     ])("rejects an unsupported %s context", async (_label, observation) => {
         seed();
         setPage({ url: demoUrl(observation) });
