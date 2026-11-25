@@ -97,7 +97,7 @@ function coverageEntryCount(data) {
     return Object.keys(data.statementMap).length + Object.keys(data.fnMap).length + Object.keys(data.branchMap).length;
 }
 function canonicalDefinitions(map) {
-    return Object.values(map).map((definition) => JSON.stringify(definition)).sort();
+    return [...new Set(Object.values(map).map((definition) => JSON.stringify(definition)))].sort();
 }
 function validateCoverageSchema(coverage, schema, shard) {
     for (const [file, expected] of Object.entries(schema)) {
