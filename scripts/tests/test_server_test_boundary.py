@@ -13,6 +13,35 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class ServerExecutionBoundaryTest(unittest.TestCase):
+    def test_prepared_workflow_native_failure_evidence(self):
+        evidence_env = os.environ.get('SERVER_TEST_NATIVE_FAILURE_EVIDENCE')
+        if not evidence_env:
+            self.skipTest('prepared shard workflow provides the native-failure evidence path')
+
+        evidence_path = (ROOT / evidence_env).resolve()
+        evidence_path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory() as directory:
+            failing_test = Path(directory) / 'workflow-native-failure.test.cjs'
+            failing_test.write_text(
+                'it("workflow native failure",()=>{throw new Error("expected native failure")});'
+            )
+            native_report = Path(directory) / 'native-failure-report.json'
+            native = subprocess.run(
+                ['bash', 'scripts/run-server-test-command.sh', '--reporter',
+                 '../scripts/ci/server-test-reporter.mjs', str(failing_test)],
+                cwd=ROOT, env=os.environ | {
+                    'SERVER_TEST_FILES_ONLY': '1',
+                    'SERVER_TEST_REPORT': str(native_report),
+                }, text=True, capture_output=True, timeout=30,
+            )
+            self.assertNotEqual(native.returncode, 0)
+            report = json.loads(native_report.read_text())
+            self.assertIn('workflow native failure', [test['title'] for test in report['tests']])
+            evidence_path.write_text(json.dumps({
+                'status': native.returncode,
+                'tests': report['tests'],
+            }))
+
     def test_current_checkout_workflow_artifacts_and_native_failure(self):
         results_env = os.environ.get('SERVER_TEST_WORKFLOW_RESULTS')
         if not results_env:
@@ -39,27 +68,21 @@ class ServerExecutionBoundaryTest(unittest.TestCase):
         )
         self.assertEqual(passing.returncode, 0, passing.stdout + passing.stderr)
 
+        native_evidence = json.loads((results / 'shard-1/native-failure.json').read_text())
+        self.assertIsInstance(native_evidence.get('status'), int)
+        self.assertNotEqual(native_evidence['status'], 0)
+        self.assertIn(
+            'workflow native failure',
+            [test['title'] for test in native_evidence.get('tests', [])],
+        )
+
         with tempfile.TemporaryDirectory() as directory:
             temporary = Path(directory)
-            failing_test = temporary / 'workflow-native-failure.test.cjs'
-            failing_test.write_text('it("workflow native failure",()=>{throw new Error("expected native failure")});')
-            native_report = temporary / 'native-failure.json'
-            native = subprocess.run(
-                ['bash', 'scripts/run-server-test-command.sh', '--reporter',
-                 '../scripts/ci/server-test-reporter.mjs', str(failing_test)],
-                cwd=ROOT, env=os.environ | {
-                    'SERVER_TEST_FILES_ONLY': '1',
-                    'SERVER_TEST_REPORT': str(native_report),
-                }, text=True, capture_output=True, timeout=30,
-            )
-            self.assertNotEqual(native.returncode, 0)
-            self.assertIn('workflow native failure', native_report.read_text())
-
             failing_results = temporary / 'server-test-results'
             shutil.copytree(results, failing_results)
             outcome_path = failing_results / 'shard-1/outcome.json'
             outcome = json.loads(outcome_path.read_text())
-            outcome['status'] = native.returncode
+            outcome['status'] = native_evidence['status']
             outcome_path.write_text(json.dumps(outcome))
             aggregate = subprocess.run(
                 ['bash', 'scripts/ci/verify-server-test-job.sh', 'success',
@@ -67,7 +90,9 @@ class ServerExecutionBoundaryTest(unittest.TestCase):
                 capture_output=True, timeout=30,
             )
             self.assertNotEqual(aggregate.returncode, 0)
-            self.assertIn(f'shard 1 native Mocha exit was {native.returncode}', aggregate.stderr)
+            self.assertIn(
+                f"shard 1 native Mocha exit was {native_evidence['status']}", aggregate.stderr
+            )
 
     def test_workflow_preserves_project_directory_and_aggregate_boundaries(self):
         workflow = (ROOT / '.github/workflows/ci-test-server.yml').read_text()
