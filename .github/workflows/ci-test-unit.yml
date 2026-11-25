@@ -53,6 +53,7 @@ jobs:
           path: |
             job_logs/unit-test-shard-${{ matrix.shard }}.log
             unit-evidence/shard-${{ matrix.shard }}.json
+            unit-evidence/coverage-schema-${{ matrix.shard }}.json
             coverage/unit-shard-${{ matrix.shard }}/coverage-final.json
           archive: true
           if-no-files-found: error

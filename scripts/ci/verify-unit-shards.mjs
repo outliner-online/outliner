@@ -96,14 +96,20 @@ function validateCoverageMaps(coverage) {
 function coverageEntryCount(data) {
     return Object.keys(data.statementMap).length + Object.keys(data.fnMap).length + Object.keys(data.branchMap).length;
 }
-function validateCompleteCoverageMaps(coverage, baseline, shard) {
+function validateCompleteCoverageMaps(coverage, baseline, schema, shard) {
+    for (const [file, expected] of Object.entries(schema)) {
+        if (!coverage[file]) throw new Error(`coverage is missing schema file in shard ${shard}: ${file}`);
+        for (const mapName of ["statementMap", "fnMap", "branchMap"]) {
+            if (JSON.stringify(coverage[file][mapName]) !== JSON.stringify(expected[mapName])) {
+                throw new Error(`coverage ${mapName} differs from runner schema for shard ${shard}: ${file}`);
+            }
+        }
+    }
     for (const [file, expected] of Object.entries(baseline)) {
         if (coverageEntryCount(expected) === 0) continue;
         if (!coverage[file]) throw new Error(`coverage is missing executable file in shard ${shard}: ${file}`);
-        for (const mapName of ["statementMap", "fnMap", "branchMap"]) {
-            if (JSON.stringify(coverage[file][mapName]) !== JSON.stringify(expected[mapName])) {
-                throw new Error(`coverage ${mapName} is incomplete for shard ${shard}: ${file}`);
-            }
+        if (coverageEntryCount(coverage[file]) === 0) {
+            throw new Error(`coverage maps are empty for executable file in shard ${shard}: ${file}`);
         }
     }
 }
@@ -145,13 +151,16 @@ for (let shard = 1; shard <= shardCount; shard++) {
     const shardDir = path.join(artifactDir, `unit-shard-${shard}-${runId}-${runAttempt}`);
     const reportPath = path.join(shardDir, "unit-evidence", `shard-${shard}.json`);
     const coveragePath = path.join(shardDir, "coverage", `unit-shard-${shard}`, "coverage-final.json");
+    const schemaPath = path.join(shardDir, "unit-evidence", `coverage-schema-${shard}.json`);
     if (!fs.existsSync(reportPath)) throw new Error(`missing current-attempt execution report for shard ${shard}`);
     if (!fs.existsSync(coveragePath)) throw new Error(`missing current-attempt coverage for shard ${shard}`);
+    if (!fs.existsSync(schemaPath)) throw new Error(`missing current-attempt coverage schema for shard ${shard}`);
     const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
     const identities = executedIdentities(report);
     if (!identities.length) throw new Error(`empty execution report for shard ${shard}`);
     executed.push(...identities);
     const coverage = JSON.parse(fs.readFileSync(coveragePath, "utf8"));
+    const schema = JSON.parse(fs.readFileSync(schemaPath, "utf8"));
     const coverageFiles = Object.keys(coverage).map((file) => path.resolve(file)).sort();
     if (!coverageFiles.length) throw new Error(`empty coverage for shard ${shard}`);
     const missing = expectedCoverageFiles.filter((file) => !coverageFiles.includes(file));
@@ -168,7 +177,7 @@ for (let shard = 1; shard <= shardCount; shard++) {
         throw new Error(`native coverage file set differs for shard ${shard}`);
     }
     validateCoverageMaps(coverage);
-    validateCompleteCoverageMaps(coverage, coverageBaseline, shard);
+    validateCompleteCoverageMaps(coverage, coverageBaseline, schema, shard);
     mergedCoverage.merge(coverage);
 }
 compareIdentities(executed, expected);

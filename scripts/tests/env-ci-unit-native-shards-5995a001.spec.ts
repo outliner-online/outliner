@@ -47,7 +47,12 @@ function isolatedCheckout(directory: string, failures: { unit?: boolean; base?: 
     const client = path.join(checkout, "client");
     fs.mkdirSync(path.join(checkout, "scripts", "ci"), { recursive: true });
     fs.mkdirSync(path.join(client, "src"), { recursive: true });
-    for (const script of ["run-unit-tests.sh", "finalize-unit-tests.sh", "verify-unit-shards.mjs"]) {
+    for (const script of [
+        "run-unit-tests.sh",
+        "finalize-unit-tests.sh",
+        "verify-unit-shards.mjs",
+        "write-unit-coverage-schema.mjs",
+    ]) {
         fs.copyFileSync(path.join(root, "scripts", "ci", script), path.join(checkout, "scripts", "ci", script));
     }
     fs.symlinkSync(path.join(root, "client", "node_modules"), path.join(client, "node_modules"), "dir");
@@ -101,6 +106,10 @@ function runStableWorkflow(isolated: ReturnType<typeof isolatedCheckout>) {
             fs.copyFileSync(
                 path.join(isolated.checkout, "unit-evidence", `shard-${shard}.json`),
                 path.join(shardDirectory, "unit-evidence", `shard-${shard}.json`),
+            );
+            fs.copyFileSync(
+                path.join(isolated.checkout, "unit-evidence", `coverage-schema-${shard}.json`),
+                path.join(shardDirectory, "unit-evidence", `coverage-schema-${shard}.json`),
             );
             fs.copyFileSync(
                 path.join(isolated.checkout, "coverage", `unit-shard-${shard}`, "coverage-final.json"),
@@ -169,7 +178,7 @@ function artifactFixture(directory: string, run = "100", attempt = "2") {
                 assertionResults: [{ ancestorTitles: ["suite"], title, status: "passed" }],
             }],
         }));
-        fs.writeFileSync(path.join(base, "coverage", `unit-shard-${shard}`, "coverage-final.json"), JSON.stringify({
+        const coverage = {
             "/source.ts": {
                 path: "/source.ts",
                 statementMap: {
@@ -191,7 +200,19 @@ function artifactFixture(directory: string, run = "100", attempt = "2") {
                 f: {},
                 b: {},
             },
-        }));
+        };
+        fs.writeFileSync(
+            path.join(base, "coverage", `unit-shard-${shard}`, "coverage-final.json"),
+            JSON.stringify(coverage),
+        );
+        fs.writeFileSync(
+            path.join(base, "unit-evidence", `coverage-schema-${shard}.json`),
+            JSON.stringify(Object.fromEntries(Object.entries(coverage).map(([file, data]) => [file, {
+                statementMap: data.statementMap,
+                fnMap: data.fnMap,
+                branchMap: data.branchMap,
+            }]))),
+        );
     }
 }
 const env = (extra: Record<string, string> = {}) => ({
@@ -417,7 +438,7 @@ describe("unit CI native shard orchestration", () => {
             };
             fs.writeFileSync(shardCoverage, JSON.stringify(data));
         }
-        expect(run(directory).stderr.toString()).toContain("coverage statementMap is incomplete");
+        expect(run(directory).stderr.toString()).toContain("coverage statementMap differs from runner schema");
         artifactFixture(directory);
         for (const shard of [1, 2]) {
             const shardCoverage = path.join(
@@ -429,7 +450,7 @@ describe("unit CI native shard orchestration", () => {
             delete data["/source.ts"].s[5];
             fs.writeFileSync(shardCoverage, JSON.stringify(data));
         }
-        expect(run(directory).stderr.toString()).toContain("coverage statementMap is incomplete");
+        expect(run(directory).stderr.toString()).toContain("coverage statementMap differs from runner schema");
         artifactFixture(directory);
         const first = path.join(directory, "unit-shard-1-100-2/unit-evidence/shard-1.json");
         fs.copyFileSync(first, path.join(directory, "unit-shard-2-100-2/unit-evidence/shard-2.json"));

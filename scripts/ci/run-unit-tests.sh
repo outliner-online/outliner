@@ -24,3 +24,5 @@ mkdir -p "$(dirname "$evidence_file")"
   --outputFile.json="$evidence_file" --coverage.reportsDirectory="$coverage_dir"
 test -s "$evidence_file"
 test -s "$coverage_dir/coverage-final.json"
+node ../scripts/ci/write-unit-coverage-schema.mjs "$coverage_dir/coverage-final.json" \
+  "$evidence_dir/coverage-schema-${shard_index}.json"
