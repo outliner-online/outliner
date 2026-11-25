@@ -433,6 +433,32 @@ describe("default saved Grid and Calendar observation producers", function() {
         await handle.close();
     });
 
+    it("recovers after an invalid saved Grid query is corrected", async () => {
+        const service = new ViewObservationService(server.hocuspocus, async () => true);
+        const handle = await service.openViewObservation({
+            uid: UID,
+            target: { projectId: PROJECT, kind: "grid", objectId: "heterogeneous" },
+            context: gridContext,
+        });
+        const initial = await handle.readSnapshot({ observedAtUtcMs: 1 });
+        expect(initial.status).to.equal("ready");
+
+        const projectDoc = (held[0] as any).document as Y.Doc;
+        const grid = getGridDefinitionTarget(projectDoc as never, "heterogeneous")!;
+        setGridQuery(grid, "DELETE FROM choices");
+        expect(await handle.readSnapshot({ observedAtUtcMs: 2 })).to.deep.equal({
+            status: "unavailable",
+            reason: "invalid_query",
+        });
+
+        setGridQuery(grid, "SELECT observed_on AS value FROM choices");
+        const recovered = await handle.readSnapshot({ observedAtUtcMs: 3 });
+        expect(recovered.status).to.equal("ready");
+        if (recovered.status !== "ready" || recovered.projection.kind !== "grid") throw new Error("Grid not ready");
+        expect(recovered.projection.rows).to.deep.equal([[{ value: "2026-11-21" }]]);
+        await handle.close();
+    });
+
     it("never certifies an old Grid query when the definition changes during source opening", async () => {
         const reached = deferred();
         const resume = deferred();

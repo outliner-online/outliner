@@ -48,6 +48,9 @@ interface Capture {
     readonly definition: Y.Map<unknown>;
     readonly revision: string;
     readonly projection: Awaited<ReturnType<CapturedViewProducer["read"]>>;
+    /** Whether every authority required by the captured registry was opened. */
+    readonly authoritiesComplete: boolean;
+    authoritiesCurrent(): boolean;
     current(): boolean;
     definitionCurrent(): boolean;
     definitionExists(): boolean;
@@ -107,6 +110,21 @@ export function savedViewOpener(
                     ) {
                         await candidate.release();
                         return candidate.projection;
+                    }
+                    // Validation and query-size failures happen before Table
+                    // rooms are opened. Such a candidate can report the
+                    // configuration error, but its partial document set is
+                    // not evidence that a retained Table room lost its
+                    // incarnation. Keep the retained authorities so a later
+                    // configuration correction can recover on this handle.
+                    if (
+                        !closed && !candidate.authoritiesComplete && retained.authoritiesCurrent()
+                        && candidate.definitionCurrent()
+                        && retained.definition === candidate.definition
+                    ) {
+                        const projection = candidate.projection;
+                        await candidate.release();
+                        return projection;
                     }
                     if (
                         closed || !candidate.definitionCurrent() || retained.definition !== candidate.definition
@@ -168,7 +186,7 @@ async function openCapture(
             return complete(project, sources, definition, {
                 status: "unavailable",
                 reason: "resource_limit",
-            }, host, target);
+            }, host, target, undefined, false);
         }
         let normalized: string;
         try {
@@ -176,7 +194,7 @@ async function openCapture(
         } catch {
             transferred = true;
             return complete(project, sources, definition, { status: "unavailable", reason: "invalid_query" }, host,
-                target);
+                target, undefined, false);
         }
         const identifiers = parseSqlIdentifiers(normalized);
         const tables = [...doc.getMap<Y.Map<unknown>>("yjsTables").entries()].map(([id, entry]) => ({
@@ -195,7 +213,7 @@ async function openCapture(
             ) {
                 transferred = true;
                 return complete(project, sources, definition, { status: "stale", reason: "inputs_changed" }, host,
-                    target, `stale:${projectInputRevision}`);
+                    target, `stale:${projectInputRevision}`, false);
             }
         }
         const docs = [doc, ...[...sources.values()].map(value => value.document as unknown as Y.Doc)];
@@ -402,6 +420,7 @@ function complete(
     host: LiveRoomHost,
     target: TargetRef,
     capturedRevision?: string,
+    authoritiesComplete = true,
 ): Capture {
     const documents = [project.document as unknown as Y.Doc,
         ...[...sources.values()].map(value => value.document as unknown as Y.Doc)];
@@ -415,6 +434,10 @@ function complete(
         definition,
         revision: value,
         projection: ready,
+        authoritiesComplete,
+        authoritiesCurrent: () =>
+            !released
+            && documents.every(doc => isLiveRoom(host, (doc as Y.Doc & { name?: string; }).name ?? doc.guid, doc)),
         current: () => !released && isCaptureCurrent(host, target, documents, definition, value),
         definitionCurrent: () => definitionFor(documents[0]!, target.kind as Kind, target.objectId) === definition,
         definitionExists: () => definitionFor(documents[0]!, target.kind as Kind, target.objectId) !== undefined,
