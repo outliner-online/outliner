@@ -498,9 +498,14 @@ describe("unit CI native shard orchestration", () => {
         expect(verify.env.UNIT_COVERAGE_BASELINE).toBe("coverage/unit-baseline/coverage-final.json");
         expect(
             workflow.jobs["unit-coverage-baseline"].steps.find((step: any) =>
-                step.name === "Run native unit coverage baseline"
+                step.name === "Generate native unit coverage schema"
             ).run,
-        ).toContain("vitest run --project unit --coverage");
+        ).toContain("--project unit --coverage --passWithNoTests");
+        expect(
+            workflow.jobs["unit-coverage-baseline"].steps.some((step: any) =>
+                step.uses === "./.github/actions/setup-test-env"
+            ),
+        ).toBe(false);
         const diagnostics = workflow.jobs["unit-test"].steps.find((step: any) => step.name === "Upload logs");
         expect(diagnostics.if).toBe("failure()");
         expect(diagnostics.with.name).toBe("unit-test-logs");

@@ -7,7 +7,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   unit-coverage-baseline:
-    name: native coverage baseline
+    name: native coverage schema baseline
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/${{ github.repository }}:latest
@@ -23,15 +23,14 @@ jobs:
         uses: actions/checkout@v7
         with:
           clean: true
-      - name: Setup Test Environment
-        uses: ./.github/actions/setup-test-env
-      - name: Run native unit coverage baseline
+      - name: Generate native unit coverage schema
         shell: bash
         run: |
           set -o pipefail
           mkdir -p job_logs coverage/unit-baseline
           cd client
-          ./node_modules/.bin/vitest run --project unit --coverage --coverage.reporter=json \
+          ./node_modules/.bin/vitest run __unit_coverage_schema_no_tests__ \
+            --project unit --coverage --passWithNoTests --coverage.reporter=json \
             --coverage.reportsDirectory=../coverage/unit-baseline \
             2>&1 | tee -a ../job_logs/unit-coverage-baseline.log
       - name: Upload native coverage baseline

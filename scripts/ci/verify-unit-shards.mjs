@@ -96,6 +96,20 @@ function coverageEntryCount(data) {
 function canonicalDefinitions(map) {
     return [...new Set(Object.values(map).map((definition) => JSON.stringify(definition)))].sort();
 }
+function coverageDefinitionSignatures(map) {
+    const withoutColumns = (value) => {
+        if (Array.isArray(value)) return value.map(withoutColumns);
+        if (value && typeof value === "object") {
+            return Object.fromEntries(
+                Object.entries(value)
+                    .filter(([key]) => key !== "column")
+                    .map(([key, child]) => [key, withoutColumns(child)]),
+            );
+        }
+        return value;
+    };
+    return [...new Set(Object.values(map).map((definition) => JSON.stringify(withoutColumns(definition))))].sort();
+}
 function validateCoverageSchema(coverage, schema, shard) {
     for (const [file, expected] of Object.entries(schema)) {
         if (!coverage[file]) throw new Error(`coverage is missing schema file in shard ${shard}: ${file}`);
@@ -152,10 +166,14 @@ function validateCompleteCoverageMaps(coverage, baseline) {
         if (coverageEntryCount(expected) === 0) continue;
         if (!coverage[file]) throw new Error(`merged coverage is missing executable file: ${file}`);
         for (const mapName of ["statementMap", "fnMap", "branchMap"]) {
-            const mergedDefinitions = new Set(canonicalDefinitions(coverage[file][mapName]));
-            const missingDefinitions = canonicalDefinitions(expected[mapName])
-                .filter((definition) => !mergedDefinitions.has(definition));
-            if (missingDefinitions.length) {
+            // Svelte's source-map columns can differ depending on whether a
+            // module is transformed during discovery or test execution. Match
+            // definitions by their stable source lines and structure, while
+            // the current-attempt runner schemas above validate exact maps.
+            const mergedSignatures = new Set(coverageDefinitionSignatures(coverage[file][mapName]));
+            const missingSignatures = coverageDefinitionSignatures(expected[mapName])
+                .filter((definition) => !mergedSignatures.has(definition));
+            if (missingSignatures.length) {
                 throw new Error(`merged coverage ${mapName} is missing native selection definitions: ${file}`);
             }
         }
