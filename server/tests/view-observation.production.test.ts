@@ -1,4 +1,7 @@
 import { expect } from "chai";
+import { execFile } from "node:child_process";
+import path from "node:path";
+import { promisify } from "node:util";
 import * as Y from "yjs";
 import {
     type CalendarObservationContextV1,
@@ -14,6 +17,30 @@ import { seedGridObservationParity } from "./view-observation-grid-fixture.js";
 const UID = "owner";
 const PROJECT = "saved-view-production";
 const gridContext: GridObservationContextV1 = { version: 1, surface: "table", locale: "en-US", timeZone: "UTC" };
+const execFileAsync = promisify(execFile);
+
+describe("Grid observation production UI parity", function() {
+    this.timeout(120_000);
+
+    it("compares the headless capture directly with mounted TableGrid semantics", async () => {
+        const clientDirectory = path.resolve(process.cwd(), "../client");
+        const { stdout, stderr } = await execFileAsync(process.execPath, [
+            path.join(clientDirectory, "node_modules/vitest/vitest.mjs"),
+            "run",
+            "--project",
+            "unit",
+            "--coverage=false",
+            "src/components/yjstable/TableGrid.mcp-presentation.test.ts",
+            "-t",
+            "matches the live projection and headless capture",
+        ], {
+            cwd: clientDirectory,
+            timeout: 100_000,
+            env: { ...process.env, NODE_OPTIONS: "" },
+        });
+        expect(`${stdout}\n${stderr}`).to.contain("1 passed");
+    });
+});
 
 describe("default saved Grid and Calendar observation producers", function() {
     this.timeout(30_000);
@@ -96,6 +123,20 @@ describe("default saved Grid and Calendar observation producers", function() {
             title: "Relation free",
             columns: [{ label: "value" }],
             rows: [[{ value: "2026-11-21" }]],
+        });
+        await handle.close();
+    });
+
+    it("refuses a complete PGlite result above the observation row limit", async () => {
+        const service = new ViewObservationService(server.hocuspocus, async () => true);
+        const handle = await service.openViewObservation({
+            uid: UID,
+            target: { projectId: PROJECT, kind: "grid", objectId: "too-many-rows" },
+            context: gridContext,
+        });
+        expect(await handle.readSnapshot({ observedAtUtcMs: 1 })).to.deep.equal({
+            status: "unavailable",
+            reason: "resource_limit",
         });
         await handle.close();
     });
