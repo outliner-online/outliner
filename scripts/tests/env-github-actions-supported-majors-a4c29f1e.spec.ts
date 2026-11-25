@@ -186,7 +186,7 @@ test("artifact and Pages deployment producers retain their consumer-facing contr
     const e2e = parseWorkflow("ci-test-e2e.yml");
     const artifact = findStep(e2e, "e2e-test", "Upload Logs & Artifacts");
     expect(artifact.if).toBe(
-        "steps.tests.outputs.startup_verified == 'true' && (failure() || startsWith(matrix.project, 'firefox-') || startsWith(matrix.project, 'new-2-') || startsWith(matrix.project, 'new-3') || matrix.project == 'tables-1' || matrix.project == 'utils')",
+        "steps.tests.outputs.startup_verified == 'true' && (failure() || cancelled() || startsWith(matrix.project, 'firefox-') || startsWith(matrix.project, 'new-2-') || startsWith(matrix.project, 'new-3') || startsWith(matrix.project, 'new-4-') || startsWith(matrix.project, 'tables-') || matrix.project == 'utils')",
     );
     expect(artifact.with.name).toBe(
         "e2e-artifacts-${{ env.E2E_BROWSER }}-${{ matrix.project }}-${{ github.run_id }}-${{ github.run_attempt }}",
@@ -215,6 +215,14 @@ test("artifact and Pages deployment producers retain their consumer-facing contr
     expect(roundtripDownload.with.name).toBeUndefined();
     expect(wrongUpload.id).toBe("wrong-upload");
     expectMultiFileArtifactArchive(wrongUpload);
+    const discoverability = findStep(
+        e2e,
+        "artifact-roundtrip",
+        "Wait for uploaded artifacts to become discoverable",
+    ).run;
+    expect(discoverability).toContain('grep -Fxq "$EXPECTED_ARTIFACT_ID"');
+    expect(discoverability).toContain('grep -Fxq "$WRONG_ARTIFACT_ID"');
+    expect(discoverability).toContain("sleep 30");
     expect(findStep(e2e, "artifact-roundtrip", "Verify downloaded E2E evidence").run).toContain(
         "scripts/ci/verify-artifact-roundtrip.sh artifact-roundtrip/source artifact-roundtrip/downloaded",
     );

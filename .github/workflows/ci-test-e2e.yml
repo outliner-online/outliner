@@ -233,6 +233,10 @@ jobs:
             if grep -Fxq "$EXPECTED_ARTIFACT_ID" <<<"$artifact_ids" && \
               grep -Fxq "$WRONG_ARTIFACT_ID" <<<"$artifact_ids"; then
               printf 'uploaded artifacts became discoverable after %s check(s)\n' "$attempt"
+              # The REST inventory can precede download-artifact's artifact-service
+              # view. Give that service a bounded propagation window before the
+              # exact-ID positive and negative-control downloads.
+              sleep 30
               break
             fi
             if (( attempt == 30 )); then
