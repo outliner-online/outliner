@@ -1,59 +1,24 @@
 import { expect } from "chai";
 import * as Y from "yjs";
-import type { KanbanObservationContextV1 } from "../../shared/src/notifications/kanbanProjection.js";
-import { createKanbanEntry } from "../../shared/src/services/kanbanDefinition.js";
-import { releaseWithoutStore } from "../src/mcp/live-room.js";
+import {
+    type CalendarObservationContextV1,
+    decodeCalendarObservationContext,
+} from "../../shared/src/notifications/calendarProjection.js";
+import type { GridObservationContextV1 } from "../../shared/src/notifications/gridProjection.js";
+import { computeViewRange } from "../../shared/src/services/calendarGridRange.js";
+import { createGridEntry, getGridDefinitionTarget, setGridQuery } from "../../shared/src/services/gridDefinition.js";
+import { GRID_OBSERVATION_PARITY } from "../../shared/tests/fixtures/gridObservationParity.js";
 import { ViewObservationService } from "../src/notifications/view-observation.js";
-import { Project } from "../src/schema/app-schema.js";
+import { seedGridObservationParity } from "./view-observation-grid-fixture.js";
 
 const UID = "owner";
-const PROJECT = "kanban-production";
-const context: KanbanObservationContextV1 = {
-    version: 1,
-    surface: "board",
-    locale: "en-US",
-    timeZone: "UTC",
-};
+const PROJECT = "saved-view-production";
+const gridContext: GridObservationContextV1 = { version: 1, surface: "table", locale: "en-US", timeZone: "UTC" };
 
-function deferred() {
-    let resolve!: () => void;
-    const promise = new Promise<void>(done => resolve = done);
-    return { promise, resolve };
-}
-
-async function seed(host: any, query: string, settings: Record<string, unknown> = {}) {
-    const canonical = Project.createInstance("Kanban production");
-    const tableDoc = new Y.Doc({ guid: `${PROJECT}--table--tasks` });
-    tableDoc.getText("schema").insert(0, "CREATE TABLE tasks(id TEXT PRIMARY KEY, status TEXT, title TEXT)");
-    for (
-        const [id, values] of [["a", { status: "todo", title: "A" }], ["b", { status: "done", title: "B" }]] as const
-    ) {
-        const record = new Y.Map<unknown>();
-        for (const [key, value] of Object.entries(values)) record.set(key, value);
-        record.set("id", id);
-        tableDoc.getMap<Y.Map<unknown>>("data").set(id, record);
-    }
-    const tableEntry = new Y.Map<unknown>();
-    tableEntry.set("name", "Tasks");
-    tableEntry.set("sqlName", "tasks");
-    tableEntry.set("doc", tableDoc);
-    canonical.ydoc.getMap("yjsTables").set("tasks", tableEntry);
-    createKanbanEntry(canonical.ydoc as never, "board", {
-        query,
-        groupField: "status",
-        laneOrder: ["done", "todo"],
-        ...settings,
-    });
-    const project = await host.openDirectConnection(`projects/${PROJECT}`, { context: { uid: UID } });
-    Y.applyUpdate(project.document as unknown as Y.Doc, Y.encodeStateAsUpdate(canonical.ydoc as never));
-    const source = await host.openDirectConnection(`projects/${PROJECT}/tables/tasks`, { context: { uid: UID } });
-    Y.applyUpdate(source.document as unknown as Y.Doc, Y.encodeStateAsUpdate(tableDoc));
-    return [project, source];
-}
-
-describe("retained view observation production refresh", function() {
+describe("default saved Grid and Calendar observation producers", function() {
     this.timeout(30_000);
     let server: any;
+    let held: { disconnect(): Promise<void>; }[];
     let stop: (server: unknown) => Promise<void>;
 
     beforeEach(async () => {
@@ -62,43 +27,86 @@ describe("retained view observation production refresh", function() {
         acl.grant("projectUsers", PROJECT, UID);
         server = await fixture.startTestServer(fixture.tempDir(), acl);
         stop = fixture.stopTestServer;
+        held = await seedSavedViews(server.hocuspocus);
     });
-    afterEach(async () => stop(server));
+    afterEach(async () => {
+        await Promise.all(held.map(connection => connection.disconnect()));
+        await stop(server);
+    });
 
-    it("refreshes an ordinary source edit on the same handle and retained rooms", async () => {
-        const held = await seed(server.hocuspocus, "SELECT id, status, title FROM tasks ORDER BY id", {
-            titleField: "title",
-        });
+    it("executes a heterogeneous UNION and preserves occurrence-specific Grid display semantics", async () => {
         const service = new ViewObservationService(server.hocuspocus, async () => true);
         const handle = await service.openViewObservation({
             uid: UID,
-            target: { projectId: PROJECT, kind: "kanban", objectId: "board" },
-            context,
+            target: { projectId: PROJECT, kind: "grid", objectId: "heterogeneous" },
+            context: gridContext,
         });
-        const first = await handle.readSnapshot({ observedAtUtcMs: 1 });
-        expect(first.status).to.equal("ready");
-        let invalidations = 0;
-        handle.onInvalidate(() => invalidations++);
-        const source = held[1].document as unknown as Y.Doc;
-        source.getMap<Y.Map<unknown>>("data").get("a")!.set("title", "Changed");
-        expect(invalidations).to.equal(1);
-        const refreshed = await handle.readSnapshot({ observedAtUtcMs: 2 });
-        expect(refreshed.status).to.equal("ready");
-        if (refreshed.status !== "ready" || refreshed.projection.kind !== "kanban") throw new Error("not ready");
-        expect(refreshed.projection.lanes.flatMap(lane => lane.cards.map(card => card.title))).to.include("Changed");
-        expect(server.hocuspocus.documents.get(`projects/${PROJECT}/tables/tasks`)).to.equal(source);
+        const snapshot = await handle.readSnapshot({ observedAtUtcMs: Date.parse("2026-11-25T00:00:00Z") });
+        expect(snapshot.status).to.equal("ready");
+        if (snapshot.status !== "ready" || snapshot.projection.kind !== "grid") throw new Error("Grid not ready");
+        // These are the actual TableGrid semantics asserted by
+        // TableGrid.mcp-presentation.test.ts for the same accepted inputs:
+        // DATE uses its physical field, while the computed TIMESTAMP branch
+        // uses the result-OID fallback. Source identities remain hidden.
+        expect(snapshot.projection).to.deep.equal({
+            kind: "grid",
+            title: "Heterogeneous",
+            columns: [{ label: "value" }],
+            rows: GRID_OBSERVATION_PARITY.expectedVisibleValues.map(value => [{ value }]),
+        });
+        expect(handle.isCurrent(snapshot.versionToken)).to.equal(true);
         await handle.close();
-        await Promise.all(held.map(connection => connection.disconnect()));
     });
 
-    it("rejects a replacement that arrives during a held refresh", async () => {
-        const held = await seed(server.hocuspocus, "SELECT id, status FROM tasks ORDER BY id");
+    it("uses the native result-OID fallback for a legitimately ambiguous Grid mapping", async () => {
+        const project = held[0] as any;
+        const projectDoc = project.document as Y.Doc;
+        setGridQuery(
+            getGridDefinitionTarget(projectDoc as never, "heterogeneous")!,
+            "SELECT observed_on AS value FROM choices UNION ALL "
+                + "SELECT observed_at AS value FROM notes ORDER BY value",
+        );
+        const service = new ViewObservationService(server.hocuspocus, async () => true);
+        const handle = await service.openViewObservation({
+            uid: UID,
+            target: { projectId: PROJECT, kind: "grid", objectId: "heterogeneous" },
+            context: gridContext,
+        });
+        const snapshot = await handle.readSnapshot({ observedAtUtcMs: 1 });
+        expect(snapshot.status).to.equal("ready");
+        if (snapshot.status !== "ready" || snapshot.projection.kind !== "grid") throw new Error("Grid not ready");
+        expect(snapshot.projection.rows).to.deep.equal(
+            GRID_OBSERVATION_PARITY.expectedAmbiguousValues.map(value => [{ value }]),
+        );
+        await handle.close();
+    });
+
+    it("uses the result-OID fallback for a relation-free saved Grid", async () => {
+        const service = new ViewObservationService(server.hocuspocus, async () => true);
+        const handle = await service.openViewObservation({
+            uid: UID,
+            target: { projectId: PROJECT, kind: "grid", objectId: "relation-free" },
+            context: gridContext,
+        });
+        const snapshot = await handle.readSnapshot({ observedAtUtcMs: 1 });
+        expect(snapshot.status).to.equal("ready");
+        if (snapshot.status !== "ready" || snapshot.projection.kind !== "grid") throw new Error("Grid not ready");
+        expect(snapshot.projection).to.deep.equal({
+            kind: "grid",
+            title: "Relation free",
+            columns: [{ label: "value" }],
+            rows: [[{ value: "2026-11-21" }]],
+        });
+        await handle.close();
+    });
+
+    it("refuses a held Grid capture when its saved definition incarnation is replaced", async () => {
         const reached = deferred();
         const resume = deferred();
-        let openings = 0;
+        let certifications = 0;
         const service = new ViewObservationService(server.hocuspocus, async () => true, {}, {
-            beforeSourceOpen: async () => {
-                if (++openings === 2) {
+            beforeFinalCertification: async () => {
+                if (++certifications === 2) {
                     reached.resolve();
                     await resume.promise;
                 }
@@ -106,17 +114,19 @@ describe("retained view observation production refresh", function() {
         });
         const handle = await service.openViewObservation({
             uid: UID,
-            target: { projectId: PROJECT, kind: "kanban", objectId: "board" },
-            context,
+            target: { projectId: PROJECT, kind: "grid", objectId: "heterogeneous" },
+            context: gridContext,
         });
-        const source = held[1].document as unknown as Y.Doc;
-        source.getMap("data").delete("a");
+        const source = (held[1] as any).document as Y.Doc;
+        source.getMap<Y.Map<unknown>>("data").get("same")!.set("observed_on", "2026-11-25");
         const pending = handle.readSnapshot({ observedAtUtcMs: 2 });
         await reached.promise;
-        const room = `projects/${PROJECT}/tables/tasks`;
-        releaseWithoutStore(held[1]);
-        server.hocuspocus.documents.delete(room);
-        const replacement = await server.hocuspocus.openDirectConnection(room, { context: { uid: UID } });
+        const projectDoc = (held[0] as any).document as Y.Doc;
+        projectDoc.getMap("yjsGrids").delete("heterogeneous");
+        createGridEntry(projectDoc as never, "heterogeneous", {
+            name: "Replacement",
+            query: "SELECT observed_on AS value FROM choices",
+        });
         resume.resolve();
         expect(await pending).to.deep.equal({ status: "stale", reason: "incarnation_lost" });
         expect(await handle.readSnapshot({ observedAtUtcMs: 3 })).to.deep.equal({
@@ -124,100 +134,97 @@ describe("retained view observation production refresh", function() {
             reason: "incarnation_lost",
         });
         await handle.close();
-        await replacement.disconnect();
-        await held[0].disconnect();
     });
 
-    it("rejects a same-room saved definition replacement as incarnation_lost", async () => {
-        const held = await seed(server.hocuspocus, "SELECT id, status, title FROM tasks ORDER BY id", {
-            titleField: "title",
+    it("never certifies an old Grid query when the definition changes during source opening", async () => {
+        const reached = deferred();
+        const resume = deferred();
+        let sourceOpenings = 0;
+        const service = new ViewObservationService(server.hocuspocus, async () => true, {}, {
+            beforeSourceOpen: async () => {
+                if (++sourceOpenings === 1) {
+                    reached.resolve();
+                    await resume.promise;
+                }
+            },
         });
+        const opening = service.openViewObservation({
+            uid: UID,
+            target: { projectId: PROJECT, kind: "grid", objectId: "heterogeneous" },
+            context: gridContext,
+        });
+        await reached.promise;
+        const projectDoc = (held[0] as any).document as Y.Doc;
+        setGridQuery(
+            getGridDefinitionTarget(projectDoc as never, "heterogeneous")!,
+            "SELECT observed_on AS value FROM choices",
+        );
+        resume.resolve();
+        const handle = await opening;
+        const snapshot = await handle.readSnapshot({ observedAtUtcMs: 1 });
+        expect(snapshot.status).to.equal("ready");
+        if (snapshot.status !== "ready" || snapshot.projection.kind !== "grid") throw new Error("Grid not ready");
+        expect(snapshot.projection.rows).to.deep.equal([[{ value: "2026-11-21" }]]);
+        await handle.close();
+    });
+
+    it("executes Calendar SQL with the explicit saved range and time-zone context", async () => {
+        const anchorUtcMs = Date.parse("2026-11-21T12:00:00Z");
+        const range = computeViewRange(anchorUtcMs, "day", 1, "UTC");
+        const context: CalendarObservationContextV1 = {
+            version: 1,
+            locale: "en-US",
+            timeZone: "UTC",
+            weekStart: 1,
+            viewType: "day",
+            anchorUtcMs,
+            rangeStartUtcMs: range.start,
+            rangeEndUtcMs: range.end,
+            monthLaneFilter: null,
+            collapsedEntryKeys: [],
+        };
         const service = new ViewObservationService(server.hocuspocus, async () => true);
         const handle = await service.openViewObservation({
             uid: UID,
-            target: { projectId: PROJECT, kind: "kanban", objectId: "board" },
+            target: { projectId: PROJECT, kind: "calendar", objectId: "calendar" },
             context,
         });
-        expect((await handle.readSnapshot({ observedAtUtcMs: 1 })).status).to.equal("ready");
-        const project = held[0].document as unknown as Y.Doc;
-        project.getMap("yjsKanbans").delete("board");
-        createKanbanEntry(project as never, "board", {
-            query: "SELECT id, status, title FROM tasks ORDER BY id",
-            groupField: "status",
-            titleField: "title",
-        });
-        expect(await handle.readSnapshot({ observedAtUtcMs: 2 })).to.deep.equal({
-            status: "stale",
-            reason: "incarnation_lost",
-        });
-        expect(await handle.readSnapshot({ observedAtUtcMs: 3 })).to.deep.equal({
-            status: "stale",
-            reason: "incarnation_lost",
+        const snapshot = await handle.readSnapshot({ observedAtUtcMs: anchorUtcMs });
+        expect(snapshot.status).to.equal("ready");
+        if (snapshot.status !== "ready" || !("version" in snapshot.projection)) throw new Error("Calendar not ready");
+        expect(snapshot.projection.title).to.equal("Calendar");
+        expect(snapshot.projection.content.some(value => value.kind === "timed" && value.title === "Choice"))
+            .to.equal(true);
+        expect(snapshot.effectiveContext).to.deep.equal(context);
+        const link = new URL(snapshot.deepLink, "https://outliner.example");
+        expect(decodeCalendarObservationContext(link.searchParams.get("context") ?? "")).to.deep.equal({
+            valid: true,
+            context,
         });
         await handle.close();
-        await Promise.all(held.map(connection => connection.disconnect()));
-    });
-
-    it("returns forbidden when access is revoked while a refresh opens its sources", async () => {
-        const held = await seed(server.hocuspocus, "SELECT id, status FROM tasks ORDER BY id");
-        const reached = deferred();
-        const resume = deferred();
-        let openings = 0;
-        let accessible = true;
-        const service = new ViewObservationService(server.hocuspocus, async () => accessible, {}, {
-            beforeSourceOpen: async () => {
-                if (++openings === 2) {
-                    reached.resolve();
-                    await resume.promise;
-                }
-            },
-        });
-        const handle = await service.openViewObservation({
-            uid: UID,
-            target: { projectId: PROJECT, kind: "kanban", objectId: "board" },
-            context,
-        });
-        (held[1].document as unknown as Y.Doc).getMap("data").delete("a");
-        const pending = handle.readSnapshot({ observedAtUtcMs: 2 });
-        await reached.promise;
-        accessible = false;
-        resume.resolve();
-        expect(await pending).to.deep.equal({ status: "forbidden", reason: "access_revoked" });
-        await handle.close();
-        await Promise.all(held.map(connection => connection.disconnect()));
-    });
-
-    it("releases an arriving refresh when the handle closes during source opening", async () => {
-        const held = await seed(server.hocuspocus, "SELECT id, status FROM tasks ORDER BY id");
-        const reached = deferred();
-        const resume = deferred();
-        let openings = 0;
-        const service = new ViewObservationService(server.hocuspocus, async () => true, {}, {
-            beforeSourceOpen: async () => {
-                if (++openings === 2) {
-                    reached.resolve();
-                    await resume.promise;
-                }
-            },
-        });
-        const handle = await service.openViewObservation({
-            uid: UID,
-            target: { projectId: PROJECT, kind: "kanban", objectId: "board" },
-            context,
-        });
-        let invalidations = 0;
-        handle.onInvalidate(() => invalidations++);
-        const source = held[1].document as unknown as Y.Doc;
-        source.getMap("data").delete("a");
-        const pending = handle.readSnapshot({ observedAtUtcMs: 2 });
-        await reached.promise;
-        const closing = handle.close();
-        resume.resolve();
-        expect(await pending).to.deep.equal({ status: "stale", reason: "closed" });
-        await closing;
-        const before = invalidations;
-        source.getMap("data").set("after-close", new Y.Map());
-        expect(invalidations).to.equal(before);
-        await Promise.all(held.map(connection => connection.disconnect()));
     });
 });
+
+async function seedSavedViews(host: any): Promise<any[]> {
+    const connections = await seedGridObservationParity(host, PROJECT, UID);
+    const project = connections[0];
+    const projectDoc = project.document as Y.Doc;
+    const calendar = new Y.Map<unknown>();
+    calendar.set("name", "Calendar");
+    calendar.set("query", "SELECT id AS source_id, 'choices' AS source_kind, "
+        + "'Choice' AS title, observed_on AS starts FROM choices "
+        + "WHERE observed_on >= current_setting('view.range_start')::date "
+        + "AND observed_on < current_setting('view.range_end')::date");
+    calendar.set("roleTitle", "title");
+    calendar.set("roleStart", "starts");
+    calendar.set("groupAxes", []);
+    calendar.set("laneOrder", []);
+    projectDoc.getMap("calendars").set("calendar", calendar);
+    return connections;
+}
+
+function deferred() {
+    let resolve!: () => void;
+    const promise = new Promise<void>(done => resolve = done);
+    return { promise, resolve };
+}

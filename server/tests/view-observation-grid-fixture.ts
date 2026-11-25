@@ -27,6 +27,10 @@ export async function seedGridObservationParity(host: any, projectId: string, ui
         query: `${GRID_OBSERVATION_PARITY.branchA} UNION ALL ${GRID_OBSERVATION_PARITY.branchB} ORDER BY source_kind`,
         components: { source_kind: { hidden: true }, source_id: { hidden: true }, hidden: { hidden: true } },
     });
+    createGridEntry(canonical.ydoc as never, "relation-free", {
+        name: "Relation free",
+        query: "SELECT DATE '2026-11-21' AS value",
+    });
     const project = await host.openDirectConnection(`projects/${projectId}`, { context: { uid } });
     Y.applyUpdate(project.document as Y.Doc, Y.encodeStateAsUpdate(canonical.ydoc as never));
     const sourceConnections = [];

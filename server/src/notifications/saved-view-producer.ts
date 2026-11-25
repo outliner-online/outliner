@@ -296,6 +296,14 @@ async function gridProjection(
         source: column.source,
         field: await fieldFor(db, column.source.sqlName, column.physicalColumn),
     })));
+    // A proven empty dependency set is authoritative relation-free evidence:
+    // no physical field can exist, so the UI's result-OID renderer fallback is
+    // the complete production derivation rather than incomplete provenance.
+    const metadataStatus = binding.status === "proven" && binding.relations.length === 0
+        ? "relation-free" as const
+        : analysis.status === "proven"
+        ? "resolved" as const
+        : "unavailable" as const;
     const projected = projectGridTable({
         title: String(definition.get("name") ?? ""),
         context,
@@ -313,7 +321,7 @@ async function gridProjection(
         componentTypes: components.types,
         resultColumns: result.fields.map(field => ({ name: field.name, typeId: field.dataTypeID })),
         physicalColumns,
-        metadataStatus: analysis.status === "proven" ? "resolved" : "unavailable",
+        metadataStatus,
     });
     return projected.status === "ready"
         ? { status: "ready", projection: projected.projection, revision: "pending" }
