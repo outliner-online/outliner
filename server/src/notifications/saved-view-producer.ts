@@ -96,6 +96,18 @@ export function savedViewOpener(
                         await retained.release();
                         return { status: "not_found", reason: terminal };
                     }
+                    // A project edit observed while the candidate is still
+                    // opening sources leaves that candidate intentionally
+                    // incomplete. It cannot prove that an unopened retained
+                    // source changed incarnation, so discard it and preserve
+                    // the retained authority for the next refresh attempt.
+                    if (
+                        candidate.projection.status === "stale" && candidate.projection.reason === "inputs_changed"
+                        && candidate.definitionCurrent() && retained.definition === candidate.definition
+                    ) {
+                        await candidate.release();
+                        return candidate.projection;
+                    }
                     if (
                         closed || !candidate.definitionCurrent() || retained.definition !== candidate.definition
                         || !sameAuthorities(retained, candidate)

@@ -397,6 +397,42 @@ describe("default saved Grid and Calendar observation producers", function() {
         await handle.close();
     });
 
+    it("recovers after a Grid definition edit interrupts source opening", async () => {
+        const reached = deferred();
+        const resume = deferred();
+        let sourceOpenings = 0;
+        const service = new ViewObservationService(server.hocuspocus, async () => true, {}, {
+            beforeSourceOpen: async () => {
+                if (++sourceOpenings === 3) {
+                    reached.resolve();
+                    await resume.promise;
+                }
+            },
+        });
+        const handle = await service.openViewObservation({
+            uid: UID,
+            target: { projectId: PROJECT, kind: "grid", objectId: "heterogeneous" },
+            context: gridContext,
+        });
+        const source = (held[1] as any).document as Y.Doc;
+        source.getMap<Y.Map<unknown>>("data").get("same")!.set("observed_on", "2026-11-25");
+        const pending = handle.readSnapshot({ observedAtUtcMs: 2 });
+        await reached.promise;
+        const projectDoc = (held[0] as any).document as Y.Doc;
+        setGridQuery(
+            getGridDefinitionTarget(projectDoc as never, "heterogeneous")!,
+            "SELECT observed_on AS value FROM choices",
+        );
+        resume.resolve();
+        expect(await pending).to.deep.equal({ status: "stale", reason: "inputs_changed" });
+
+        const recovered = await handle.readSnapshot({ observedAtUtcMs: 3 });
+        expect(recovered.status).to.equal("ready");
+        if (recovered.status !== "ready" || recovered.projection.kind !== "grid") throw new Error("Grid not ready");
+        expect(recovered.projection.rows).to.deep.equal([[{ value: "2026-11-25" }]]);
+        await handle.close();
+    });
+
     it("never certifies an old Grid query when the definition changes during source opening", async () => {
         const reached = deferred();
         const resume = deferred();
