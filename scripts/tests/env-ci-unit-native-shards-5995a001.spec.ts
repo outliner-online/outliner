@@ -42,42 +42,49 @@ printf '{"/source.ts":{"path":"/source.ts","statementMap":{"0":{}},"fnMap":{},"b
 `);
     return file;
 }
-function realVitestFailureRunner(directory: string) {
-    const sourceFile = path.join(directory, "covered-source.js");
-    const testFile = path.join(directory, "deliberate-failure.test.js");
-    const config = path.join(directory, "vitest.config.js");
-    fs.writeFileSync(sourceFile, "export const coveredValue = 1;\n");
-    fs.writeFileSync(testFile,
-        'import { test, expect } from "vitest"; import { coveredValue } from "./covered-source.js"; test("deliberate native failure", () => expect(coveredValue).toBe(2));\n');
-    fs.writeFileSync(config,
-        `export default { test: { projects: [{ test: { name: "unit", root: ${
-            JSON.stringify(directory)
-        }, include: ["*.test.js"], globals: true, coverage: { enabled: true, provider: "v8", reporter: ["json"], include: [${
-            JSON.stringify(sourceFile)
-        }] } } }] } };\n`);
-    return { config, vitest: path.join(root, "client/node_modules/.bin/vitest") };
-}
-function realVitestPassingRunner(directory: string) {
-    const sourceFile = path.join(directory, "covered-source.js");
-    const config = path.join(directory, "vitest.config.js");
-    fs.writeFileSync(sourceFile, "export const coveredValue = 1;\n");
-    for (const [file, value] of [["first.test.js", 1], ["second.test.js", 1]] as const) {
+function isolatedCheckout(directory: string, failures: { unit?: boolean; base?: boolean; } = {}) {
+    const checkout = path.join(directory, "checkout");
+    const client = path.join(checkout, "client");
+    fs.mkdirSync(path.join(checkout, "scripts", "ci"), { recursive: true });
+    fs.mkdirSync(path.join(client, "src"), { recursive: true });
+    for (const script of ["run-unit-tests.sh", "finalize-unit-tests.sh", "verify-unit-shards.mjs"]) {
+        fs.copyFileSync(path.join(root, "scripts", "ci", script), path.join(checkout, "scripts", "ci", script));
+    }
+    fs.symlinkSync(path.join(root, "client", "node_modules"), path.join(client, "node_modules"), "dir");
+    const githubUnit = JSON.parse(fs.readFileSync(path.join(root, "client", "package.json"), "utf8")).scripts[
+        "github:test:unit"
+    ];
+    fs.writeFileSync(path.join(client, "package.json"), JSON.stringify({
+        type: "module",
+        scripts: {
+            "github:test:unit": githubUnit,
+            "test:base": "vitest run --config vitest.base.config.ts",
+        },
+    }));
+    fs.writeFileSync(path.join(client, "src", "covered-source.js"), "export const coveredValue = 1;\n");
+    for (const file of ["first.test.js", "second.test.js"]) {
         fs.writeFileSync(
-            path.join(directory, file),
+            path.join(client, "src", file),
             `import { test, expect } from "vitest"; import { coveredValue } from "./covered-source.js"; test(${
                 JSON.stringify(file)
-            }, () => expect(coveredValue).toBe(${value}));\n`,
+            }, () => expect(coveredValue).toBe(${failures.unit ? 2 : 1}));\n`,
         );
     }
     fs.writeFileSync(
-        config,
-        `export default { test: { projects: [{ test: { name: "unit", root: ${
-            JSON.stringify(directory)
-        }, include: ["*.test.js"], globals: true, coverage: { enabled: true, provider: "v8", reporter: ["json"], include: [${
-            JSON.stringify(sourceFile)
-        }] } } }] } };\n`,
+        path.join(client, "vite.config.ts"),
+        'export default { test: { projects: [{ test: { name: "unit", include: ["src/*.test.js"], coverage: { enabled: true, provider: "v8", reporter: ["json"], include: ["src/covered-source.js"] } } }] } };\n',
     );
-    return { config, sourceFile, vitest: path.join(root, "client/node_modules/.bin/vitest") };
+    fs.writeFileSync(
+        path.join(client, "base.test.js"),
+        `import { test, expect } from "vitest"; test("base package entry", () => { console.log("BASE PACKAGE ENTRY"); expect(1).toBe(${
+            failures.base ? 2 : 1
+        }); });\n`,
+    );
+    fs.writeFileSync(
+        path.join(client, "vitest.base.config.ts"),
+        'export default { test: { include: ["base.test.js"] } };\n',
+    );
+    return { checkout, client };
 }
 function basePackage(directory: string, failing = true) {
     const baseDirectory = path.join(directory, "base-package");
@@ -166,22 +173,17 @@ describe("unit CI native shard orchestration", () => {
             }),
         });
         expect(fs.statSync(path.join(directory, "shard-1.json")).size).toBeGreaterThan(0);
-        const realFailure = realVitestFailureRunner(directory);
-        const failed = spawnSync(path.join(root, "scripts/ci/run-unit-tests.sh"), [], {
-            cwd: root,
-            env: env({
-                UNIT_SHARD: "1/1",
-                UNIT_VITEST_BIN: realFailure.vitest,
-                UNIT_VITEST_CONFIG: realFailure.config,
-                UNIT_EVIDENCE_DIR: directory,
-                UNIT_COVERAGE_DIR: path.join(directory, "real-coverage"),
-            }),
+        const failingCheckout = isolatedCheckout(path.join(directory, "native-failure"), { unit: true });
+        const failed = spawnSync("npm", ["run", "github:test:unit"], {
+            cwd: failingCheckout.client,
+            env: env({ UNIT_SHARD: "1/1" }),
         });
         expect(failed.status).toBe(1);
-        expect(`${failed.stdout}\n${failed.stderr}`).toContain("deliberate native failure");
+        expect(`${failed.stdout}\n${failed.stderr}`).toContain("expected 1 to be 2");
         expect(
-            JSON.parse(fs.readFileSync(path.join(directory, "shard-1.json"), "utf8")).testResults[0].assertionResults[0]
-                .status,
+            JSON.parse(
+                fs.readFileSync(path.join(failingCheckout.checkout, "unit-evidence", "shard-1.json"), "utf8"),
+            ).testResults[0].assertionResults[0].status,
         ).toBe("failed");
         const reject = unitWorkflow().jobs["unit-test"].steps.find((step: any) => step.name.includes("Reject"));
         expect(spawnSync("bash", ["-c", reject.run], { env: { ...process.env, SHARD_RESULT: "failure" } }).status)
@@ -229,36 +231,58 @@ describe("unit CI native shard orchestration", () => {
 
     test("the shipped stable-check command verifies a real native sharded selection", () => {
         const directory = temporaryDirectory();
-        const native = realVitestPassingRunner(directory);
-        const artifacts = path.join(directory, "artifacts");
+        const isolated = isolatedCheckout(directory);
+        const artifacts = path.join(isolated.checkout, "unit-artifacts");
         for (const shard of [1, 2]) {
-            const shardDirectory = path.join(artifacts, `unit-shard-${shard}-100-2`);
-            execFileSync(path.join(root, "scripts/ci/run-unit-tests.sh"), [], {
-                cwd: root,
-                env: env({
-                    UNIT_SHARD: `${shard}/2`,
-                    UNIT_VITEST_BIN: native.vitest,
-                    UNIT_VITEST_CONFIG: native.config,
-                    UNIT_EVIDENCE_DIR: path.join(shardDirectory, "unit-evidence"),
-                    UNIT_COVERAGE_DIR: path.join(shardDirectory, "coverage", `unit-shard-${shard}`),
-                }),
+            execFileSync("npm", ["run", "github:test:unit"], {
+                cwd: isolated.client,
+                env: env({ UNIT_SHARD: `${shard}/2` }),
             });
+            const shardDirectory = path.join(artifacts, `unit-shard-${shard}-100-2`);
+            fs.mkdirSync(path.join(shardDirectory, "unit-evidence"), { recursive: true });
+            fs.mkdirSync(path.join(shardDirectory, "coverage", `unit-shard-${shard}`), { recursive: true });
+            fs.copyFileSync(
+                path.join(isolated.checkout, "unit-evidence", `shard-${shard}.json`),
+                path.join(shardDirectory, "unit-evidence", `shard-${shard}.json`),
+            );
+            fs.copyFileSync(
+                path.join(isolated.checkout, "coverage", `unit-shard-${shard}`, "coverage-final.json"),
+                path.join(shardDirectory, "coverage", `unit-shard-${shard}`, "coverage-final.json"),
+            );
         }
-        const manifest = path.join(directory, "coverage-manifest.json");
-        fs.writeFileSync(manifest, JSON.stringify([native.sourceFile]));
         const workflow = unitWorkflow();
         const stableCommand = workflow.jobs["unit-test"].steps.find((step: any) => step.name.includes("Verify")).run;
         execFileSync("bash", ["-c", stableCommand], {
-            cwd: root,
+            cwd: isolated.checkout,
             env: env({
                 UNIT_ARTIFACT_DIR: artifacts,
-                UNIT_VITEST_BIN: native.vitest,
-                UNIT_VITEST_CONFIG: native.config,
-                UNIT_BASE_DIR: basePackage(directory, false),
-                UNIT_COVERAGE_MANIFEST: manifest,
             }),
         });
-        expect(fs.readFileSync(path.join(root, "job_logs/base-test.log"), "utf8")).toContain("Tests  1 passed");
+        expect(fs.readFileSync(path.join(isolated.checkout, "job_logs/base-test.log"), "utf8")).toContain(
+            "Tests  1 passed",
+        );
+        fs.writeFileSync(
+            path.join(isolated.client, "base.test.js"),
+            'import { test, expect } from "vitest"; test("base package failure", () => { console.log("BASE PACKAGE FAILURE"); expect(1).toBe(2); });\n',
+        );
+        const baseFailure = spawnSync("bash", ["-c", stableCommand], {
+            cwd: isolated.checkout,
+            env: env({ UNIT_ARTIFACT_DIR: artifacts }),
+        });
+        expect(baseFailure.status).toBe(1);
+        expect(fs.readFileSync(path.join(isolated.checkout, "job_logs/base-test.log"), "utf8")).toContain(
+            "BASE PACKAGE FAILURE",
+        );
+    });
+
+    test("the package unit entry remains usable without shard orchestration", () => {
+        const isolated = isolatedCheckout(temporaryDirectory());
+        const result = spawnSync("npm", ["run", "github:test:unit"], {
+            cwd: isolated.client,
+            env: env({ UNIT_SHARD: "" }),
+        });
+        expect(result.status).toBe(0);
+        expect(`${result.stdout}\n${result.stderr}`).toContain("> test:base");
     });
 
     test("the aggregate propagates base failure and rejects missing, empty, stale, and duplicate evidence", () => {
