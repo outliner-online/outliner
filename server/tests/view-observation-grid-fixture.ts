@@ -31,6 +31,11 @@ export async function seedGridObservationParity(host: any, projectId: string, ui
         name: "Relation free",
         query: "SELECT DATE '2026-11-21' AS value",
     });
+    createGridEntry(canonical.ydoc as never, "unrouted-label", {
+        name: "Unrouted label",
+        query: "SELECT 'display-label' AS source_kind, observed_on AS value FROM choices",
+        components: { source_kind: { hidden: true } },
+    });
     createGridEntry(canonical.ydoc as never, "too-many-rows", {
         name: "Too many rows",
         query: "SELECT value FROM generate_series(1, 10001) AS value",

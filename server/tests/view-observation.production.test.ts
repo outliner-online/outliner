@@ -1,5 +1,8 @@
 import { expect } from "chai";
 import { execFile } from "node:child_process";
+import crypto from "node:crypto";
+import { readFile, rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import * as Y from "yjs";
@@ -24,21 +27,30 @@ describe("Grid observation production UI parity", function() {
 
     it("compares the headless capture directly with mounted TableGrid semantics", async () => {
         const clientDirectory = path.resolve(process.cwd(), "../client");
-        const { stdout, stderr } = await execFileAsync(process.execPath, [
-            path.join(clientDirectory, "node_modules/vitest/vitest.mjs"),
-            "run",
-            "--project",
-            "unit",
-            "--coverage=false",
-            "src/components/yjstable/TableGrid.mcp-presentation.test.ts",
-            "-t",
-            "matches the live projection and headless capture",
-        ], {
-            cwd: clientDirectory,
-            timeout: 100_000,
-            env: { ...process.env, NODE_OPTIONS: "" },
-        });
-        expect(`${stdout}\n${stderr}`).to.contain("1 passed");
+        const evidencePath = path.join(os.tmpdir(), `grid-parity-${crypto.randomUUID()}.json`);
+        try {
+            await execFileAsync(process.execPath, [
+                path.join(clientDirectory, "node_modules/vitest/vitest.mjs"),
+                "run",
+                "--project",
+                "unit",
+                "--coverage=false",
+                "src/components/yjstable/TableGrid.mcp-presentation.test.ts",
+                "-t",
+                "matches the live projection and headless capture",
+            ], {
+                cwd: clientDirectory,
+                timeout: 100_000,
+                env: { ...process.env, NODE_OPTIONS: "", GRID_PARITY_EVIDENCE_PATH: evidencePath },
+            });
+            const compared = JSON.parse(await readFile(evidencePath, "utf8"));
+            expect(compared.rendered).to.deep.equal(compared.headless);
+            expect(compared.rendered.rows).to.deep.equal(
+                GRID_OBSERVATION_PARITY.expectedVisibleValues.map(value => [{ value }]),
+            );
+        } finally {
+            await rm(evidencePath, { force: true });
+        }
     });
 });
 
@@ -121,6 +133,25 @@ describe("default saved Grid and Calendar observation producers", function() {
         expect(snapshot.projection).to.deep.equal({
             kind: "grid",
             title: "Relation free",
+            columns: [{ label: "value" }],
+            rows: [[{ value: "2026-11-21" }]],
+        });
+        await handle.close();
+    });
+
+    it("does not fabricate source authority from an unrouted source_kind label", async () => {
+        const service = new ViewObservationService(server.hocuspocus, async () => true);
+        const handle = await service.openViewObservation({
+            uid: UID,
+            target: { projectId: PROJECT, kind: "grid", objectId: "unrouted-label" },
+            context: gridContext,
+        });
+        const snapshot = await handle.readSnapshot({ observedAtUtcMs: 1 });
+        expect(snapshot.status).to.equal("ready");
+        if (snapshot.status !== "ready" || snapshot.projection.kind !== "grid") throw new Error("Grid not ready");
+        expect(snapshot.projection).to.deep.equal({
+            kind: "grid",
+            title: "Unrouted label",
             columns: [{ label: "value" }],
             rows: [[{ value: "2026-11-21" }]],
         });

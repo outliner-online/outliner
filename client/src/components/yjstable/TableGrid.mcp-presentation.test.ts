@@ -1,6 +1,7 @@
 // Saved presentation stays separate from SELECT eligibility and physical write authorization.
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/svelte";
 import { execFile } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -142,7 +143,14 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
             });
             const serialized = stdout.split("\n").find(line => line.startsWith("GRID_PARITY:"));
             expect(serialized, stdout).toBeDefined();
-            expect(JSON.parse(serialized!.slice("GRID_PARITY:".length))).toEqual(initial.projection);
+            const headlessProjection = JSON.parse(serialized!.slice("GRID_PARITY:".length));
+            expect(headlessProjection).toEqual(initial.projection);
+            if (process.env.GRID_PARITY_EVIDENCE_PATH) {
+                writeFileSync(process.env.GRID_PARITY_EVIDENCE_PATH, JSON.stringify({
+                    rendered: initial.projection,
+                    headless: headlessProjection,
+                }));
+            }
 
             // Retain renderer inputs outside equality: an explicit text
             // override changes only the date's displayed normalization.

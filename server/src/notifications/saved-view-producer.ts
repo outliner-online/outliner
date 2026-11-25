@@ -14,7 +14,10 @@ import {
     getGridQuery,
     readGridComponents,
 } from "../../../shared/src/services/gridDefinition.js";
-import { analyzeProjectQueryProvenance } from "../../../shared/src/services/projectQueryProvenance.js";
+import {
+    analyzeProjectQueryProvenance,
+    unambiguousRowSource,
+} from "../../../shared/src/services/projectQueryProvenance.js";
 import {
     embeddableReadOnlySelect,
     parseSqlIdentifiers,
@@ -309,12 +312,17 @@ async function gridProjection(
         context,
         columns: result.fields.map(field => field.name),
         rows: result.rows,
-        rowTargets: result.rows.map((row, index) => ({
-            logicalRowId: `${String(row.source_kind ?? "result")}:${String(row.source_id ?? row.id ?? index)}:${index}`,
-            ...(typeof row.source_kind === "string"
-                ? { source: { sourceKind: row.source_kind, sourceId: String(row.source_id ?? row.id ?? "") } }
-                : {}),
-        })),
+        rowTargets: result.rows.map((row, index) => {
+            const accepted = unambiguousRowSource(analysis, row);
+            return {
+                logicalRowId: `${String(row.source_kind ?? "result")}:${
+                    String(row.source_id ?? row.id ?? index)
+                }:${index}`,
+                ...(accepted?.kind === "source"
+                    ? { source: { sourceKind: accepted.source.sqlName, sourceId: accepted.rowId } }
+                    : {}),
+            };
+        }),
         columnOrder: getGridColumnOrder(grid),
         hiddenColumns: components.hidden,
         columnLabels: components.labels,
