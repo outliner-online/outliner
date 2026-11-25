@@ -302,28 +302,44 @@ function kanbanOpener(
                         await retained.release();
                         return { status: "stale", reason: closed ? "closed" : "incarnation_lost" };
                     }
-                    const candidateDocuments = observationDocuments(candidate);
                     if (
                         closed || lifecycleGeneration !== refreshGeneration
                         || retained.definitionIdentity !== candidate.definitionIdentity
-                        || !authoritiesPreserveContinuity(retainedDocuments, candidateDocuments)
-                        || !documentsRetainIncarnation(host, candidateDocuments)
                     ) {
                         terminalReason = closed ? undefined : "incarnation_lost";
                         await candidate.release();
                         await retained.release();
                         return { status: "stale", reason: closed ? "closed" : "incarnation_lost" };
                     }
+                    // A non-ready observation may stop before opening any of
+                    // its referenced Table rooms (for example, invalid SQL).
+                    // Report that configuration outcome, but never install
+                    // its partial handles in place of retained incarnation
+                    // evidence. A later correction must still be checked
+                    // against every room retained by the last ready capture.
+                    if (candidate.status !== "success") {
+                        const result = observationNonReady(candidate);
+                        await candidate.release();
+                        return result;
+                    }
+                    const candidateDocuments = observationDocuments(candidate);
+                    if (!documentsRetainIncarnation(host, candidateDocuments)) {
+                        terminalReason = "incarnation_lost";
+                        await candidate.release();
+                        await retained.release();
+                        return { status: "stale", reason: terminalReason };
+                    }
+                    if (!authoritiesPreserveContinuity(retainedDocuments, candidateDocuments)) {
+                        terminalReason = "incarnation_lost";
+                        await candidate.release();
+                        await retained.release();
+                        return { status: "stale", reason: terminalReason };
+                    }
                     observed = candidate;
                     documents = candidateDocuments;
                     await retained.release();
                 }
-                if (observed.status !== "success" || !observed.settings) {
-                    return {
-                        status: observed.status === "incomplete" ? "incomplete" : "unavailable",
-                        reason: observed.reason ?? observed.status,
-                    };
-                }
+                if (observed.status !== "success" || !observed.settings) return observationNonReady(observed);
                 if (!observed.isCurrent()) return { status: "stale", reason: "inputs_changed" };
                 const rows = observed.lanes.flatMap(lane => lane.cards.map(card => card.row));
                 const projected = createKanbanVisibleProjection({
@@ -346,6 +362,15 @@ function kanbanOpener(
                 await observed.release();
             },
         };
+    };
+}
+
+function observationNonReady(
+    observed: Awaited<ReturnType<OutlinerKanbanQueryService["openObservation"]>>,
+): { status: "incomplete" | "unavailable"; reason: string; } {
+    return {
+        status: observed.status === "incomplete" ? "incomplete" : "unavailable",
+        reason: observed.reason ?? observed.status,
     };
 }
 

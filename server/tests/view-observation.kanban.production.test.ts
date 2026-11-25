@@ -1,7 +1,7 @@
 import { expect } from "chai";
 import * as Y from "yjs";
 import type { KanbanObservationContextV1 } from "../../shared/src/notifications/kanbanProjection.js";
-import { createKanbanEntry } from "../../shared/src/services/kanbanDefinition.js";
+import { createKanbanEntry, getKanbanRegistry } from "../../shared/src/services/kanbanDefinition.js";
 import { releaseWithoutStore } from "../src/mcp/live-room.js";
 import { ViewObservationService } from "../src/notifications/view-observation.js";
 import { Project } from "../src/schema/app-schema.js";
@@ -156,6 +156,45 @@ describe("retained view observation production refresh", function() {
         });
         await handle.close();
         await Promise.all(held.map(connection => connection.disconnect()));
+    });
+
+    it("retains source incarnation evidence across an invalid query", async () => {
+        const validQuery = "SELECT id, status, title FROM tasks ORDER BY id";
+        const held = await seed(server.hocuspocus, validQuery, { titleField: "title" });
+        const service = new ViewObservationService(server.hocuspocus, async () => true);
+        const handle = await service.openViewObservation({
+            uid: UID,
+            target: { projectId: PROJECT, kind: "kanban", objectId: "board" },
+            context,
+        });
+        const ready = await handle.readSnapshot({ observedAtUtcMs: 1 });
+        expect(ready.status).to.equal("ready");
+
+        const project = held[0].document as unknown as Y.Doc;
+        const definition = getKanbanRegistry(project).get("board")!;
+        definition.set("query", "DELETE FROM tasks");
+        expect(await handle.readSnapshot({ observedAtUtcMs: 2 })).to.deep.equal({
+            status: "unavailable",
+            reason: "invalid_query",
+        });
+
+        const room = `projects/${PROJECT}/tables/tasks`;
+        releaseWithoutStore(held[1]);
+        server.hocuspocus.documents.delete(room);
+        const replacement = await server.hocuspocus.openDirectConnection(room, { context: { uid: UID } });
+        definition.set("query", validQuery);
+        expect(await handle.readSnapshot({ observedAtUtcMs: 3 })).to.deep.equal({
+            status: "stale",
+            reason: "incarnation_lost",
+        });
+        expect(await handle.readSnapshot({ observedAtUtcMs: 4 })).to.deep.equal({
+            status: "stale",
+            reason: "incarnation_lost",
+        });
+
+        await handle.close();
+        await replacement.disconnect();
+        await held[0].disconnect();
     });
 
     it("returns forbidden when access is revoked while a refresh opens its sources", async () => {
