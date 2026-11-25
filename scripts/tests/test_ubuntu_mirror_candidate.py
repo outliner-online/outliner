@@ -84,6 +84,11 @@ class Plan(unittest.TestCase):
     def test_trust_and_expiry_not_relaxed(self):
         for line in ('Trusted: yes','Check-Valid-Until: no','Check-Date: no','Allow-Insecure: yes'):
             with self.assertRaises(ValueError):self.plan(sources=SOURCES+'\n'+line+'\n')
+    def test_later_unsafe_override_is_not_masked_by_earlier_unsupported_layout(self):
+        sources=SOURCES.replace('resolute resolute-updates resolute-backports','resolute-proposed')
+        sources += '\nAllow-Insecure: yes\n'
+        with self.assertRaisesRegex(ValueError, '^unsupported-source-security-override$'):
+            self.plan(sources=sources)
     def test_deadline_not_reset(self):
         for remaining in (0,5000,600000):
             with self.assertRaises(ValueError):self.plan(remaining_ms=remaining)

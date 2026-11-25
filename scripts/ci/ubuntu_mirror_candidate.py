@@ -66,10 +66,13 @@ def fallback_plan(sources, mirrors, failed_uri, native_exit, remaining_ms, nonce
     replaced = 0
     security = 0
     private = '/tmp/outliner-apt-' + nonce
+    parsed_blocks = []
     for i in range(0, len(blocks), 2):
         fields = source_fields(blocks[i])
         if not fields:
             continue
+        parsed_blocks.append((i, fields))
+    for i, fields in parsed_blocks:
         if fields.get('Types') != 'deb' or fields.get('Signed-By') != '/usr/share/keyrings/ubuntu-archive-keyring.gpg':
             raise ValueError('unsupported-ubuntu-source-contract')
         if set(fields.get('Components', '').split()) != COMPONENTS:
