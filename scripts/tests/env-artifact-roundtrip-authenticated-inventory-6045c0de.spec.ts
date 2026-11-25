@@ -106,11 +106,13 @@ test("regression rejects split lookup paths and substituted artifact identities"
 test("unavailable control requires both download failure and authenticated absence evidence", () => {
     expectUnavailableControl(step(artifactJob(), "Reject an unavailable artifact"));
 
-    const verify = (requestExit: string, httpStatus: string): number =>
-        spawnSync(unavailableVerifier, [requestExit, httpStatus, "0"], { encoding: "utf8" }).status ?? -1;
+    const verify = (requestExit: string, httpStatus: string, artifactId = "0"): number =>
+        spawnSync(unavailableVerifier, [requestExit, httpStatus, artifactId], { encoding: "utf8" }).status ?? -1;
 
     expect(verify("1", "404"), "an authenticated not-found response is the required control").toBe(0);
     expect(verify("1", "401"), "authentication failure must not satisfy the control").not.toBe(0);
     expect(verify("1", ""), "a transport failure has no authoritative HTTP response").not.toBe(0);
     expect(verify("0", ""), "an unexpectedly successful download must not satisfy the control").not.toBe(0);
+    expect(verify("invalid", "404"), "an ambiguous request result must not satisfy the control").not.toBe(0);
+    expect(verify("1", "404", "not-an-id"), "a 404 for an invalid identity must not satisfy the control").not.toBe(0);
 });
