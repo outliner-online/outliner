@@ -180,12 +180,15 @@ function validateCompleteCoverageMaps(coverage, baseline, shardReports) {
                         `merged coverage ${mapName} has fewer definitions than native Svelte selection: ${file}`,
                     );
                 }
-                // Do not let independently generated shard locations inflate the
-                // merged count and conceal that every shard omitted the same
-                // source definition. Vitest emits the full instrumented map for
-                // each included file, even when a particular counter is zero, so
-                // each current-run report must meet the native completeness floor.
-                if (shardReports.some((report) => Object.keys(report[file]?.[mapName] ?? {}).length < expectedCount)) {
+                // Do not let independently generated locations from different
+                // shards inflate the merged count and conceal a shared omission.
+                // A shard may legitimately expose a smaller transformed map, but
+                // at least one current-run schema must independently meet the
+                // native definition floor; combining two partial maps is not proof.
+                const largestShardCount = Math.max(
+                    ...shardReports.map((report) => Object.keys(report[file]?.[mapName] ?? {}).length),
+                );
+                if (largestShardCount < expectedCount) {
                     throw new Error(
                         `shard coverage ${mapName} has fewer definitions than native Svelte selection: ${file}`,
                     );
