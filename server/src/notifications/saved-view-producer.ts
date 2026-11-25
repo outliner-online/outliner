@@ -35,6 +35,7 @@ import {
     SYSTEM_SCHEMA,
 } from "../mcp/relation-service.js";
 import { Project } from "../schema/app-schema.js";
+import { observationProjectionLimit, retainedJsonBytes } from "./observation-memory.js";
 import type { CapturedViewProducer, ObservationContext, TargetRef, ViewProducerOpener } from "./view-observation.js";
 
 const LIMITS = { queryBytes: 16 * 1024, rows: 10_000, columns: 100, jsonBytes: 8 * 1024 * 1024 } as const;
@@ -62,12 +63,23 @@ export function savedViewOpener(
     canAccess: (uid: string, projectId: string) => Promise<boolean>,
     kind: Kind,
     options: {
+        maxSourceRooms?: number;
+        maxProjectionBytes?: number;
         beforeFinalCertification?: () => Promise<void>;
         beforeSourceOpen?: (tableId: string, index: number) => Promise<void>;
     } = {},
 ): ViewProducerOpener {
+    const maxSourceRooms = options.maxSourceRooms ?? 32;
+    if (!Number.isInteger(maxSourceRooms) || maxSourceRooms < 0 || maxSourceRooms > 256) {
+        throw new RangeError("observation source room limit must be 0..256");
+    }
     return async input => {
-        let capture = await openCapture(host, canAccess, kind, input, options);
+        const captureOptions = {
+            ...options,
+            maxSourceRooms,
+            maxProjectionBytes: observationProjectionLimit(options.maxProjectionBytes, input.maxProjectionBytes),
+        };
+        let capture = await openCapture(host, canAccess, kind, input, captureOptions);
         let closed = false;
         let terminal: "incarnation_lost" | "not_found" | undefined;
         return {
@@ -81,7 +93,7 @@ export function savedViewOpener(
                     const retained = capture;
                     let candidate: Capture;
                     try {
-                        candidate = await openCapture(host, canAccess, kind, input, options);
+                        candidate = await openCapture(host, canAccess, kind, input, captureOptions);
                     } catch (error) {
                         if (error instanceof McpReadError && error.code === "forbidden") {
                             return { status: "forbidden", reason: "access_revoked" };
@@ -162,6 +174,8 @@ async function openCapture(
     kind: Kind,
     { uid, target, context }: { uid: string; target: TargetRef; context: ObservationContext; },
     options: {
+        maxSourceRooms: number;
+        maxProjectionBytes: number;
         beforeFinalCertification?: () => Promise<void>;
         beforeSourceOpen?: (tableId: string, index: number) => Promise<void>;
     },
@@ -201,10 +215,17 @@ async function openCapture(
                 target, undefined, false);
         }
         const identifiers = parseSqlIdentifiers(normalized);
-        const tables = [...doc.getMap<Y.Map<unknown>>("yjsTables").entries()].map(([id, entry]) => ({
-            id,
-            sqlName: String(entry.get("sqlName") ?? ""),
-        })).filter(value => /^[A-Za-z_][A-Za-z0-9_]*$/.test(value.sqlName));
+        const tables: { id: string; sqlName: string; }[] = [];
+        for (const [id, entry] of doc.getMap<Y.Map<unknown>>("yjsTables").entries()) {
+            const sqlName = String(entry.get("sqlName") ?? "");
+            if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(sqlName)) continue;
+            if (tables.length === options.maxSourceRooms) {
+                transferred = true;
+                return complete(project, sources, definition, { status: "unavailable", reason: "resource_limit" }, host,
+                    target, undefined, false);
+            }
+            tables.push({ id, sqlName });
+        }
         for (const [index, table] of tables.entries()) {
             await options.beforeSourceOpen?.(table.id, index);
             const connection = await openLiveRoom(host, `projects/${target.projectId}/tables/${table.id}`, uid, {
@@ -298,6 +319,11 @@ async function openCapture(
         } finally {
             lease.release();
         }
+        if (projection.status === "ready" && retainedJsonBytes(projection.projection) > options.maxProjectionBytes) {
+            // Refuse before installing the capture; the retained producer
+            // must not keep an oversized result the runtime cannot admit.
+            projection = { status: "unavailable", reason: "resource_limit" };
+        }
         await options.beforeFinalCertification?.();
         if (!await canAccess(uid, target.projectId)) throw new McpReadError("forbidden", "Project is inaccessible");
         if (!isCaptureCurrent(host, target, docs, definition, capturedRevision)) {
@@ -347,6 +373,8 @@ async function gridProjection(
         ? "relation-free" as const
         : analysis.status === "proven"
         ? "resolved" as const
+        : binding.status === "proven" && analysis.status === "unsupported"
+        ? "result-only" as const
         : "unavailable" as const;
     const projected = projectGridTable({
         title: String(definition.get("name") ?? ""),

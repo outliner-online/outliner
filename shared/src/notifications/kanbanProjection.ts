@@ -182,7 +182,9 @@ export function isKanbanObservationContextV1(value: unknown): value is KanbanObs
 }
 
 /** Shared route/producer parser so malformed explicit contexts can never fall back to an ordinary board. */
-export function parseKanbanObservationContext(parameters: URLSearchParams): KanbanObservationContextParseResult {
+export function parseKanbanObservationContext(
+    parameters: Pick<URLSearchParams, "has" | "get">,
+): KanbanObservationContextParseResult {
     const keys = ["surface", "version", "locale", "timeZone"];
     if (!keys.some(key => parameters.has(key))) return Object.freeze({ status: "absent" });
     const candidate = {

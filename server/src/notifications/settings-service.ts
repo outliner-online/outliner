@@ -5,6 +5,7 @@ import type {
     NotificationTarget,
 } from "../../../shared/src/notifications/notification-settings.js";
 import { normalizeNotificationRule } from "../../../shared/src/notifications/notification-settings.js";
+import type { NotificationObservationStatus } from "./observation-runtime.js";
 import { compareRuleIds, NotificationSettingsStore } from "./settings-store.js";
 
 export interface NotificationTargetAuthority {
@@ -20,12 +21,25 @@ export interface NotificationTargetSummary {
 export class NotificationSettingsValidationError extends Error {}
 export class NotificationSettingsService {
     private readonly listeners = new Set<(change: { uid: string; revision: number; }) => void>();
+    private observationStatus?: (uid: string) => readonly NotificationObservationStatus[];
     constructor(readonly store: NotificationSettingsStore, private readonly authority: NotificationTargetAuthority) {}
     get(uid: string): NotificationSettings {
         return this.store.get(uid);
     }
     enabled(uid: string): NotificationRule[] {
         return this.store.enabled(uid);
+    }
+    setObservationStatusProvider(provider: (uid: string) => readonly NotificationObservationStatus[]): void {
+        this.observationStatus = provider;
+    }
+    getObservationStatus(uid: string): readonly NotificationObservationStatus[] {
+        if (this.observationStatus) return this.observationStatus(uid);
+        return this.get(uid).rules.flatMap(rule => (["mcp", "mobile"] as const).map(channel => ({
+            ruleId: rule.ruleId,
+            channel,
+            state: rule.enabled && rule.channels[channel] ? "blocked" as const : "disabled" as const,
+            ...(rule.enabled && rule.channels[channel] ? { reason: "unavailable" as const } : {}),
+        })));
     }
     async listTargets(uid: string, input: { projectId: string; limit: number; cursor?: string; }) {
         let after: { kind: NotificationTargetSummary["kind"]; objectId: string; } | undefined;

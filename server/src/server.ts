@@ -32,10 +32,12 @@ import { OutlinerScheduleService } from "./mcp/schedule-service.js";
 import { OutlinerTableCreationService } from "./mcp/table-creation.js";
 import { UpdateGridPresentationTool } from "./mcp/update-grid-presentation-tool.js";
 import { getMetrics, recordMessage } from "./metrics.js";
+import { NotificationObservationRuntime } from "./notifications/observation-runtime.js";
 import { createPushDeviceRouter } from "./notifications/push-device-api.js";
 import { PushDeviceStore } from "./notifications/push-device-store.js";
 import { NotificationSettingsService } from "./notifications/settings-service.js";
 import { NotificationSettingsStore } from "./notifications/settings-store.js";
+import { ViewObservationService } from "./notifications/view-observation.js";
 import { getOAuthFirebaseWebConfig } from "./oauth/authorize-page.js";
 import { createOAuthRouter } from "./oauth/oauth-api.js";
 import { createDocumentStore, createPersistence } from "./persistence.js";
@@ -547,6 +549,13 @@ export async function startServer(
             listTargets: (uid, projectId) => mcpReads.listNotificationTargets(uid, projectId),
         },
     );
+    const notificationRuntime = new NotificationObservationRuntime(
+        notificationSettings,
+        new ViewObservationService(hocuspocus, checkContainerAccess),
+        checkContainerAccess,
+    );
+    notificationSettings.setObservationStatusProvider(uid => notificationRuntime.status(uid));
+    notificationRuntime.start();
     app.use(createMcpRouter(
         mcpReads,
         undefined,
@@ -835,6 +844,7 @@ export async function startServer(
 
     const shutdown = async () => {
         intervals.forEach(clearInterval);
+        await notificationRuntime.close();
         // Awaited so the scheduler's worker releases its Postgres WASM heap
         // before the process goes down.
         await jobScheduler?.stop();
@@ -860,6 +870,7 @@ export async function startServer(
         mcpRelations,
         kanbanObservations,
         notificationSettings,
+        notificationRuntime,
         shutdown,
     };
 }
