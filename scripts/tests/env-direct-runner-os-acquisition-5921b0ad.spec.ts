@@ -17,6 +17,7 @@ const scenarios = [
     "success",
     "observed-layout-failover",
     "observed-lookalike-rejected",
+    "observed-unsafe-rejected",
     "observed-total-failure-no-legacy",
     "unavailable",
     "slow",
@@ -186,6 +187,16 @@ test("observed lookalike stays on bounded legacy setup without mirror failover",
     expect(log).toContain("profile=unsupported reason=unsupported-suite-source-layout");
     expect(log).toContain("OBSERVED_LOOKALIKE_LEGACY_ONLY");
     expect(log).not.toContain("APT-MIRROR stage=download-retry");
+}, 660000);
+
+test("observed unsafe metadata fails before legacy acquisition or readiness", () => {
+    const { result, elapsed, log } = run("observed-unsafe-rejected", 650000);
+    expect(result.status).toBe(0);
+    expect(elapsed).toBeLessThan(610000);
+    expect(log).toContain("APT-MIRROR unsafe source; refusing acquisition");
+    expect(log).toContain("OBSERVED_UNSAFE_REJECTED");
+    expect(log).not.toContain("APT mirror profile unsupported/target absent; using existing setup.");
+    expect(log).not.toContain("Direct-runner stage: ready");
 }, 660000);
 
 test("observed layout total transport failure cannot enter legacy or readiness", () => {

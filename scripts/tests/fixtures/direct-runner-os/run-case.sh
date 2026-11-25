@@ -110,6 +110,22 @@ NODE
     test "$(dpkg-query -W -f='${Status}' lsof)" = 'install ok installed'
     echo OBSERVED_LOOKALIKE_LEGACY_ONLY
     ;;
+  observed-unsafe-rejected)
+    warm_observed_control
+    write_observed_layout
+    echo 'Allow-Insecure: yes' >> /etc/apt/sources.list.d/ubuntu.sources
+    status=0
+    E2E_BROWSER=firefox bash /fixture/scripts/setup-direct-runner-os.sh 2>&1 | tee /tmp/unsafe-setup.log || status=$?
+    test "$status" = 64
+    grep -q 'APT-MIRROR unsafe source; refusing acquisition' /tmp/unsafe-setup.log
+    grep -q 'Direct-runner setup outcome: stage=mirror-profile-and-acquisition exit=64' /tmp/unsafe-setup.log
+    ! grep -q 'APT mirror profile unsupported/target absent; using existing setup.' /tmp/unsafe-setup.log
+    ! grep -q 'Direct-runner stage: apt-update' /tmp/unsafe-setup.log
+    ! grep -q 'Direct-runner stage: playwright-install-deps' /tmp/unsafe-setup.log
+    ! grep -q 'Direct-runner stage: ready' /tmp/unsafe-setup.log
+    ! dpkg-query -W -f='${Status}' lsof 2>/dev/null | grep -q 'install ok installed'
+    echo OBSERVED_UNSAFE_REJECTED
+    ;;
   observed-total-failure-no-legacy)
     warm_observed_control
     write_observed_layout

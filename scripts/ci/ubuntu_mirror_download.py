@@ -336,7 +336,7 @@ def main(browser, deadline_ms, etc=Path('/etc/apt')):
         sources, mirrors, plan = profile(etc)
     except (OSError, ValueError) as error:
         supported_reasons = {'unsupported-ranked-mirror-metadata', 'not-observed-ec2-pool-with-existing-next-candidate', 'unsupported-deb822-or-folding', 'unsupported-ubuntu-source-contract', 'unsupported-suite-source-layout', 'incomplete-source-layout', 'weakened-source-trust', 'weakened-source-validity', 'duplicate-or-unknown-ubuntu-source'}
-        if isinstance(error, ValueError) and str(error) in {'weakened-source-trust', 'weakened-source-validity', 'nonpublic-source'}:
+        if isinstance(error, ValueError) and str(error) in {'weakened-source-trust', 'weakened-source-validity', 'unsupported-source-security-override', 'nonpublic-source'}:
             print('APT-MIRROR unsafe source; refusing acquisition', flush=True)
             return 64
         reason = str(error) if isinstance(error, ValueError) and str(error) in supported_reasons else 'unsupported-or-unreadable'

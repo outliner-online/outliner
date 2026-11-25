@@ -29,7 +29,7 @@ class SourceCopies(unittest.TestCase):
             self.assertEqual(ubuntu.read_text(),SOURCES)
             self.assertEqual((etc/'apt-mirrors.txt').read_text(),MIRRORS)
     def test_confirmed_unsafe_source_never_runs_apt_or_legacy(self):
-        for field in ('Trusted: yes','Check-Valid-Until: no'):
+        for field in ('Trusted: yes','Check-Valid-Until: no','Allow-Insecure: yes','Valid-Until-Min: 0'):
             with tempfile.TemporaryDirectory() as d,patch.object(m,'pipeline') as pipeline:
                 etc=Path(d);(etc/'sources.list.d').mkdir()
                 (etc/'sources.list.d/ubuntu.sources').write_text(SOURCES+'\n'+field+'\n')
