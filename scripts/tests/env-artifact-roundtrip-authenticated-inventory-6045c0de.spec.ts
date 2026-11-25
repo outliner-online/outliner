@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +12,7 @@ import YAML from "yaml";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const workflowPath = path.join(root, ".github/workflows/ci-test-e2e.yml");
+const unavailableVerifier = path.join(root, "scripts/ci/verify-unavailable-artifact-response.sh");
 
 function artifactJob(): Record<string, any> {
     return YAML.parse(fs.readFileSync(workflowPath, "utf8")).jobs["artifact-roundtrip"];
@@ -36,15 +38,17 @@ function expectAuthenticatedIdentity(
     expect(download.with.name).toBeUndefined();
 }
 
-function expectUnavailableEvidence(confirmation: Record<string, any>): void {
-    expect(confirmation.if).toBe("always()");
-    expect(confirmation.env).toMatchObject({
-        DOWNLOAD_OUTCOME: "${{ steps.unavailable-download.outcome }}",
+function expectUnavailableControl(control: Record<string, any>): void {
+    expect(control["continue-on-error"]).toBeUndefined();
+    expect(control.env).toEqual({
         GH_TOKEN: "${{ github.token }}",
+        UNAVAILABLE_ARTIFACT_ID: "0",
     });
-    expect(confirmation.run).toContain('test "$DOWNLOAD_OUTCOME" = failure');
-    expect(confirmation.run).toContain("repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts");
-    expect(confirmation.run).toContain("! grep -Fxq '0'");
+    expect(control.run).toContain("gh api --include");
+    expect(control.run).toContain(
+        "repos/$GITHUB_REPOSITORY/actions/artifacts/$UNAVAILABLE_ARTIFACT_ID/zip",
+    );
+    expect(control.run).toContain("verify-unavailable-artifact-response.sh");
 }
 
 test("poll and every download use the same authenticated run inventory and upload identities", () => {
@@ -61,7 +65,6 @@ test("poll and every download use the same authenticated run inventory and uploa
         step(job, "Download representative E2E evidence"),
         "${{ steps.representative-upload.outputs.artifact-id }}",
     );
-    expectAuthenticatedIdentity(step(job, "Reject an unavailable artifact"), "0");
     expectAuthenticatedIdentity(
         step(job, "Download wrong-artifact control"),
         "${{ steps.wrong-upload.outputs.artifact-id }}",
@@ -101,14 +104,13 @@ test("regression rejects split lookup paths and substituted artifact identities"
 });
 
 test("unavailable control requires both download failure and authenticated absence evidence", () => {
-    const confirmation = step(artifactJob(), "Confirm unavailable artifact is non-success");
-    expectUnavailableEvidence(confirmation);
+    expectUnavailableControl(step(artifactJob(), "Reject an unavailable artifact"));
 
-    const authFailureAccepted = structuredClone(confirmation);
-    delete authFailureAccepted.env.GH_TOKEN;
-    expect(() => expectUnavailableEvidence(authFailureAccepted)).toThrow();
+    const verify = (requestExit: string, httpStatus: string): number =>
+        spawnSync(unavailableVerifier, [requestExit, httpStatus, "0"], { encoding: "utf8" }).status ?? -1;
 
-    const downloadFailureAlone = structuredClone(confirmation);
-    downloadFailureAlone.run = 'test "$DOWNLOAD_OUTCOME" = failure';
-    expect(() => expectUnavailableEvidence(downloadFailureAlone)).toThrow();
+    expect(verify("1", "404"), "an authenticated not-found response is the required control").toBe(0);
+    expect(verify("1", "401"), "authentication failure must not satisfy the control").not.toBe(0);
+    expect(verify("1", ""), "a transport failure has no authoritative HTTP response").not.toBe(0);
+    expect(verify("0", ""), "an unexpectedly successful download must not satisfy the control").not.toBe(0);
 });

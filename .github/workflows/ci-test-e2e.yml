@@ -374,29 +374,24 @@ jobs:
           scripts/ci/verify-artifact-roundtrip.sh artifact-roundtrip/source artifact-roundtrip/downloaded
 
       - name: Reject an unavailable artifact
-        id: unavailable-download
-        continue-on-error: true
-        uses: actions/download-artifact@v8
-        with:
-          artifact-ids: '0'
-          github-token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          run-id: ${{ github.run_id }}
-          path: artifact-roundtrip/unavailable
-
-      - name: Confirm unavailable artifact is non-success
-        if: always()
         shell: bash
         env:
-          DOWNLOAD_OUTCOME: ${{ steps.unavailable-download.outcome }}
           GH_TOKEN: ${{ github.token }}
+          UNAVAILABLE_ARTIFACT_ID: '0'
         run: |
           set -euo pipefail
-          test "$DOWNLOAD_OUTCOME" = failure
-          artifact_ids="$(gh api \
-            "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" \
-            --jq '.artifacts[].id')"
-          ! grep -Fxq '0' <<<"$artifact_ids"
+          response_file="$(mktemp)"
+          trap 'rm -f "$response_file"' EXIT
+          if gh api --include \
+            "repos/$GITHUB_REPOSITORY/actions/artifacts/$UNAVAILABLE_ARTIFACT_ID/zip" \
+            >"$response_file" 2>/dev/null; then
+            request_exit=0
+          else
+            request_exit=$?
+          fi
+          http_status="$(awk '/^HTTP\/[0-9.]+ [0-9][0-9][0-9]/{status=$2} END{print status}' "$response_file")"
+          scripts/ci/verify-unavailable-artifact-response.sh \
+            "$request_exit" "$http_status" "$UNAVAILABLE_ARTIFACT_ID"
 
       - name: Download wrong-artifact control
         uses: actions/download-artifact@v8
