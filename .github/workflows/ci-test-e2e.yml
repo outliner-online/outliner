@@ -35,11 +35,36 @@ jobs:
         run: npm ci --prefix scripts/tests --include=dev --no-audit --no-fund
       - name: Verify mirror-only control and owned-child cleanup
         run: python3 -m unittest discover -s scripts/tests -p 'test_ubuntu_mirror*.py' -v
+      - name: Enable fixture layer cache
+        uses: docker/setup-buildx-action@v4
+      - name: Start shared fixture provisioning deadline
+        shell: python
+        run: |
+          import os
+          import time
+          deadline = time.monotonic_ns() + 900_000_000_000
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              env.write(f"DIRECT_RUNNER_OS_PROVISIONING_DEADLINE_NS={deadline}\n")
+      - name: Build cached direct-runner fixture
+        id: direct-runner-fixture
+        uses: ./.github/actions/bounded-buildx
+        with:
+          context: .
+          file: scripts/tests/fixtures/direct-runner-os/Dockerfile
+          load: true
+          tags: outliner-direct-os-regression:ci
+          cache-from: type=gha,scope=direct-runner-os-fixture-v1
+          cache-to: type=gha,mode=max,scope=direct-runner-os-fixture-v1
       - name: Exercise real isolated package acquisition
         shell: bash
+        env:
+          # The hosted Buildx cache backend authenticates cache import/export.
+          # The ENV suite still creates one fresh container per scenario.
+          DIRECT_RUNNER_OS_PREBUILT_IMAGE: outliner-direct-os-regression:ci
         run: |
           set -euo pipefail
           mkdir -p job_logs
+          node -e 'const e=require("./job_logs/direct-runner-fixture-build.json"); if(e.outcome!=="success"||e.exitCode!==0) process.exit(1)'
           bash scripts/run-env-tests.sh --isolated env-direct-runner-os-acquisition-5921b0ad.spec.ts 2>&1 | tee job_logs/direct-runner-os-regression.log
       - name: Retain isolated acquisition evidence
         if: always()
@@ -49,11 +74,214 @@ jobs:
           path: job_logs/direct-runner-os-regression.log
           retention-days: 2
 
+  direct-runner-os-provisioning-failure:
+    name: Verify fixture failure blocks scenario acquisition
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+      - name: Enable fixture builder
+        uses: docker/setup-buildx-action@v4
+      - name: Start fixture failure control deadline
+        shell: python
+        run: |
+          import os
+          import time
+          deadline = time.monotonic_ns() + 120_000_000_000
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              env.write(f"DIRECT_RUNNER_OS_PROVISIONING_DEADLINE_NS={deadline}\n")
+      - name: Exercise failing fixture provisioning
+        id: fixture-build
+        continue-on-error: true
+        uses: ./.github/actions/bounded-buildx
+        with:
+          context: scripts/tests/fixtures/direct-runner-os/failure-control
+          load: true
+          tags: outliner-direct-os-regression:failure-control
+      - name: Acquisition must stay blocked
+        if: steps.fixture-build.outcome == 'success'
+        run: |
+          mkdir -p job_logs
+          touch job_logs/unexpected-scenario-launch
+          bash scripts/run-env-tests.sh --isolated env-direct-runner-os-acquisition-5921b0ad.spec.ts
+      - name: Verify provisioning failure propagation
+        if: always()
+        env:
+          BUILD_OUTCOME: ${{ steps.fixture-build.outcome }}
+        run: |
+          set -euo pipefail
+          test "$BUILD_OUTCOME" = failure
+          test ! -e job_logs/unexpected-scenario-launch
+
+  direct-runner-os-provisioning-deadline:
+    name: Verify fixture build shares the provisioning deadline
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+      - name: Use Node.js 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Install ENV test dependencies
+        run: npm ci --prefix scripts/tests --include=dev --no-audit --no-fund
+      - name: Enable fixture builder
+        uses: docker/setup-buildx-action@v4
+      - name: Start controlled shared provisioning deadline
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p job_logs
+          builder_container=$(docker ps --filter name=buildx_buildkit --format '{{.ID}}' | head -1)
+          test -n "$builder_container"
+          observer="direct-runner-deadline-observer-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "$observer" > job_logs/delayed-build-observer-container
+          docker run --detach --rm --name "$observer" --network "container:$builder_container" \
+            --volume "$PWD:/workspace" --workdir /workspace python:3.14-slim \
+            python scripts/tests/fixtures/direct-runner-os/deadline-control/observe-build.py \
+            job_logs/delayed-build-observer.json
+          for attempt in {1..100}; do
+            grep -q '"event": "observer-ready"' job_logs/delayed-build-observer.json && break
+            sleep .1
+          done
+          grep -q '"event": "observer-ready"' job_logs/delayed-build-observer.json
+          python3 - <<'PY'
+          import os
+          import time
+          deadline = time.monotonic_ns() + 5_000_000_000
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              env.write(f"DIRECT_RUNNER_OS_PROVISIONING_DEADLINE_NS={deadline}\n")
+          PY
+      - name: Build deliberately delayed fixture
+        id: delayed-build
+        continue-on-error: true
+        uses: ./.github/actions/bounded-buildx
+        with:
+          context: scripts/tests/fixtures/direct-runner-os/deadline-control
+          load: true
+          tags: outliner-direct-os-regression:deadline-control
+          network: host
+          no-cache: true
+      - name: Acquisition must stay blocked after deadline expiry
+        if: steps.delayed-build.outcome == 'success'
+        run: |
+          touch job_logs/unexpected-scenario-launch
+          DIRECT_RUNNER_OS_PREBUILT_IMAGE=outliner-direct-os-regression:deadline-control \
+            bash scripts/run-env-tests.sh --isolated env-direct-runner-os-acquisition-5921b0ad.spec.ts
+      - name: Verify deadline failure blocked every scenario
+        if: always()
+        env:
+          BUILD_OUTCOME: ${{ steps.delayed-build.outcome }}
+        run: |
+          set -euo pipefail
+          trap 'docker rm --force "$(cat job_logs/delayed-build-observer-container)" >/dev/null 2>&1 || true' EXIT
+          test "$BUILD_OUTCOME" = failure
+          for attempt in {1..100}; do
+            grep -q '"event": "client-closed"' job_logs/delayed-build-observer.json && break
+            sleep .1
+          done
+          node - <<'NODE'
+          const fs = require("node:fs");
+          const evidence = require("./job_logs/direct-runner-fixture-build.json");
+          const eventsText = fs.readFileSync("job_logs/delayed-build-observer.json", "utf8");
+          const events = eventsText.trim().split("\n").map(JSON.parse);
+          const buildStarted = events.find(event => event.event === "build-started");
+          const clientClosed = events.find(event => event.event === "client-closed");
+          const elapsedNs = BigInt(evidence.endedNs) - BigInt(evidence.startedNs);
+          if (evidence.outcome !== "deadline" || evidence.terminated !== true || elapsedNs > 15_000_000_000n) process.exit(1);
+          if (!buildStarted || !clientClosed || clientClosed.at < buildStarted.at || clientClosed.at - buildStarted.at > 15) process.exit(1);
+          if (events.some(event => event.event === "natural-completion")) process.exit(1);
+          NODE
+          test ! -e job_logs/unexpected-scenario-launch
+
+  direct-runner-os-preparation-deadline:
+    name: Verify fixture preparation shares the provisioning deadline
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+      - name: Use Node.js 22
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Install ENV test dependencies
+        run: npm ci --prefix scripts/tests --include=dev --no-audit --no-fund
+      - name: Enable fixture builder
+        uses: docker/setup-buildx-action@v4
+      - name: Start controlled shared provisioning deadline
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p job_logs
+          observer="direct-runner-deadline-observer-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "$observer" > job_logs/delayed-build-observer-container
+          docker run --detach --rm --name "$observer" --network host \
+            --volume "$PWD:/workspace" --workdir /workspace python:3.14-slim \
+            python scripts/tests/fixtures/direct-runner-os/deadline-control/observe-build.py \
+            job_logs/delayed-build-observer.json
+          for attempt in {1..100}; do
+            grep -q '"event": "observer-ready"' job_logs/delayed-build-observer.json && break
+            sleep .1
+          done
+          grep -q '"event": "observer-ready"' job_logs/delayed-build-observer.json
+          python3 - <<'PY'
+          import os
+          import time
+          deadline = time.monotonic_ns() + 5_000_000_000
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              env.write(f"DIRECT_RUNNER_OS_PROVISIONING_DEADLINE_NS={deadline}\n")
+          PY
+      - name: Build deliberately delayed fixture
+        id: delayed-build
+        continue-on-error: true
+        env:
+          DIRECT_RUNNER_OS_FAILURE_CONTROL_CONTEXT: scripts/tests/fixtures/direct-runner-os/deadline-control
+          DIRECT_RUNNER_OS_PREBUILT_IMAGE: outliner-direct-os-regression:deadline-control-unused
+        run: bash scripts/run-env-tests.sh --isolated env-direct-runner-os-acquisition-5921b0ad.spec.ts
+      - name: Acquisition must stay blocked after deadline expiry
+        if: steps.delayed-build.outcome == 'success'
+        run: |
+          touch job_logs/unexpected-scenario-launch
+          DIRECT_RUNNER_OS_PREBUILT_IMAGE=outliner-direct-os-regression:deadline-control \
+            bash scripts/run-env-tests.sh --isolated env-direct-runner-os-acquisition-5921b0ad.spec.ts
+      - name: Verify deadline failure blocked every scenario
+        if: always()
+        env:
+          BUILD_OUTCOME: ${{ steps.delayed-build.outcome }}
+        run: |
+          set -euo pipefail
+          trap 'docker rm --force "$(cat job_logs/delayed-build-observer-container)" >/dev/null 2>&1 || true' EXIT
+          test "$BUILD_OUTCOME" = failure
+          for attempt in {1..100}; do
+            grep -q '"event": "client-closed"' job_logs/delayed-build-observer.json && break
+            sleep .1
+          done
+          node - <<'NODE'
+          const fs = require("node:fs");
+          const eventsText = fs.readFileSync("job_logs/delayed-build-observer.json", "utf8");
+          const events = eventsText.trim().split("\n").map(JSON.parse);
+          const buildStarted = events.find(event => event.event === "build-started");
+          const clientClosed = events.find(event => event.event === "client-closed");
+          if (!buildStarted || !clientClosed || clientClosed.at < buildStarted.at || clientClosed.at - buildStarted.at > 15) process.exit(1);
+          if (events.some(event => event.event === "natural-completion")) process.exit(1);
+          NODE
+          test ! -e job_logs/unexpected-scenario-launch
+
   artifact-roundtrip:
     name: Verify E2E artifact round trip
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      actions: read
       contents: read
     steps:
       - name: Checkout artifact verifier
@@ -106,11 +334,43 @@ jobs:
           printf 'run=%s attempt=%s expected-artifact=%s wrong-artifact=%s sha=%s\n' \
             "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$EXPECTED_ARTIFACT_ID" "$WRONG_ARTIFACT_ID" "$GITHUB_SHA"
 
+      - name: Wait for uploaded artifacts to become discoverable
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_ARTIFACT_ID: ${{ steps.representative-upload.outputs.artifact-id }}
+          WRONG_ARTIFACT_ID: ${{ steps.wrong-upload.outputs.artifact-id }}
+        run: |
+          set -euo pipefail
+          for attempt in {1..30}; do
+            artifact_ids="$(gh api \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" \
+              --jq '.artifacts[].id')"
+            if grep -Fxq "$EXPECTED_ARTIFACT_ID" <<<"$artifact_ids" && \
+              grep -Fxq "$WRONG_ARTIFACT_ID" <<<"$artifact_ids"; then
+              printf 'uploaded artifacts became discoverable after %s check(s)\n' "$attempt"
+              # The REST inventory can precede download-artifact's artifact-service
+              # view. Give that service a bounded propagation window before the
+              # exact-ID positive and negative-control downloads.
+              sleep 30
+              break
+            fi
+            if (( attempt == 30 )); then
+              echo 'uploaded artifacts did not become discoverable before the deadline' >&2
+              exit 1
+            fi
+            sleep 2
+          done
+
       - name: Download representative E2E evidence
-        uses: actions/download-artifact@v8
-        with:
-          artifact-ids: ${{ steps.representative-upload.outputs.artifact-id }}
-          path: artifact-roundtrip/downloaded
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ steps.representative-upload.outputs.artifact-id }}
+        run: |
+          scripts/ci/download-run-artifact-by-id.sh \
+            "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$ARTIFACT_ID" \
+            artifact-roundtrip/downloaded
 
       - name: Verify downloaded E2E evidence
         shell: bash
@@ -119,27 +379,26 @@ jobs:
           scripts/ci/verify-artifact-roundtrip.sh artifact-roundtrip/source artifact-roundtrip/downloaded
 
       - name: Reject an unavailable artifact
-        id: unavailable-download
-        continue-on-error: true
-        uses: actions/download-artifact@v8
-        with:
-          artifact-ids: '0'
-          path: artifact-roundtrip/unavailable
-
-      - name: Confirm unavailable artifact is non-success
-        if: always()
         shell: bash
         env:
-          DOWNLOAD_OUTCOME: ${{ steps.unavailable-download.outcome }}
+          GH_TOKEN: ${{ github.token }}
+          UNAVAILABLE_ARTIFACT_ID: '0'
         run: |
           set -euo pipefail
-          test "$DOWNLOAD_OUTCOME" = failure
+          scripts/ci/reject-unavailable-artifact.sh \
+            "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$UNAVAILABLE_ARTIFACT_ID" \
+            "${{ steps.representative-upload.outputs.artifact-id }}" \
+            "${{ steps.wrong-upload.outputs.artifact-id }}"
 
       - name: Download wrong-artifact control
-        uses: actions/download-artifact@v8
-        with:
-          artifact-ids: ${{ steps.wrong-upload.outputs.artifact-id }}
-          path: artifact-roundtrip/wrong-downloaded
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ steps.wrong-upload.outputs.artifact-id }}
+        run: |
+          scripts/ci/download-run-artifact-by-id.sh \
+            "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$ARTIFACT_ID" \
+            artifact-roundtrip/wrong-downloaded
 
       - name: Confirm wrong, missing, and corrupted evidence are non-success
         shell: bash
@@ -199,7 +458,7 @@ jobs:
         run: |
           set -euo pipefail
           cd scripts/tests
-          npx vitest run env-playwright-collects-every-spec-7d41ae62.spec.ts env-firefox-selection-coverage-78ad2b91.spec.ts env-firefox-ci-promotion-934d0f2a.spec.ts env-new3-shard-partition-8624c6a1.spec.ts env-new2-native-shards-8c3de7a2.spec.ts 2>&1 | tee ../../job_logs/selection-coverage.log
+          npx vitest run env-playwright-collects-every-spec-7d41ae62.spec.ts env-firefox-selection-coverage-78ad2b91.spec.ts env-firefox-ci-promotion-934d0f2a.spec.ts env-new3-shard-partition-8624c6a1.spec.ts env-new2-native-shards-8c3de7a2.spec.ts env-new4-native-shards-5997c1a0.spec.ts env-new4-rerun-provenance-5997c1a0.spec.ts env-new4-required-check-failure-5997c1a0.spec.ts 2>&1 | tee ../../job_logs/selection-coverage.log
           PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s . -p 'test_bounded_e2e*.py' -v 2>&1 | tee ../../job_logs/bounded-e2e-contract.log
 
       - name: Upload collection guard logs
@@ -228,13 +487,17 @@ jobs:
   # later runs; there is no shared mutable state between shards.
   e2e-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The test command remains bounded to 20 minutes below. Allow additional
+    # time for cold dependency/cache restoration, server build, startup,
+    # diagnostics, and artifact retention instead of cancelling the runner
+    # before its bounded command can publish an outcome.
+    timeout-minutes: 45
     permissions:
       contents: read
       pull-requests: write
     env:
       E2E_BROWSER: ${{ startsWith(matrix.project, 'firefox-') && 'firefox' || 'chromium' }}
-      E2E_PROJECT: ${{ startsWith(matrix.project, 'new-2-') && 'new-2' || matrix.project }}
+      E2E_PROJECT: ${{ (startsWith(matrix.project, 'new-2-') && 'new-2') || (startsWith(matrix.project, 'new-4-') && 'new-4') || matrix.project }}
       E2E_EXECUTION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       E2E_EXECUTION_REPORT: ${{ github.workspace }}/job_logs/e2e-${{ matrix.project }}-${{ github.run_id }}-${{ github.run_attempt }}.execution.json
       E2E_EXPECTED_COLLECTION: ${{ github.workspace }}/job_logs/expected-${{ matrix.project }}-${{ github.run_id }}-${{ github.run_attempt }}.json
@@ -243,7 +506,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        project: [basic, core-1, core-2, core-3, core-4, core-4b, core-5, core-6, core-7, core-8, new-1, new-2-1, new-2-2, new-3a, new-3b, new-4, new-5, auth, utils, server, yjs, tables-1, tables-2, schedule, onprem, firefox-selection-core-4, firefox-selection-core-4b, firefox-selection-new, firefox-selection-basic]
+        project: [basic, core-1, core-2, core-3, core-4, core-4b, core-5, core-6, core-7, core-8, new-1, new-2-1, new-2-2, new-3a, new-3b, new-4-1, new-4-2, new-5, auth, utils, server, yjs, tables-1, tables-2, schedule, onprem, firefox-selection-core-4, firefox-selection-core-4b, firefox-selection-new, firefox-selection-basic]
 
     steps:
       - name: Checkout code
@@ -266,6 +529,8 @@ jobs:
             project: process.env.E2E_PROJECT,
             ciShard: '${{ matrix.project }}',
             executionId: process.env.E2E_EXECUTION_ID,
+            runId: process.env.GITHUB_RUN_ID,
+            runAttempt: process.env.GITHUB_RUN_ATTEMPT,
             commit: process.env.GITHUB_SHA,
             status: 'setup',
             testExecution: process.env.E2E_BROWSER === 'firefox'
@@ -344,6 +609,23 @@ jobs:
                 --report="${PLAYWRIGHT_JSON_OUTPUT_NAME}" \
                 --timeout-seconds=1200 --job-budget-seconds=1320 --grace-seconds=10 \
                 -- npm run github:test:e2e -- --project=new-2 --shard="$shard" --reporter=line,list,json,html
+            elif [[ "$project" =~ ^new-4-([12])$ ]]; then
+              shard="${BASH_REMATCH[1]}/2"
+              export NEW4_CI_SHARD="$project" NEW4_NATIVE_SHARD="$shard"
+              PLAYWRIGHT_COLLECTION_E2E_DIR="$PWD/e2e" \
+                PLAYWRIGHT_COLLECTION_OUTPUT="../job_logs/new-4-full-${E2E_EXECUTION_ID}.json" \
+                node node_modules/playwright/cli.js test --list --project=new-4 \
+                --reporter=../scripts/ci/playwright-collection-reporter.mjs
+              PLAYWRIGHT_COLLECTION_E2E_DIR="$PWD/e2e" \
+                PLAYWRIGHT_COLLECTION_OUTPUT="../job_logs/${project}-expected-${E2E_EXECUTION_ID}.json" \
+                node node_modules/playwright/cli.js test --list --project=new-4 --shard="$shard" \
+                --reporter=../scripts/ci/playwright-collection-reporter.mjs
+              # Native Playwright retries must not lose time merely because
+              # the selection is sharded; the outer job retains cleanup time.
+              PLAYWRIGHT_HTML_OPEN=never npm run github:test:e2e -- \
+                --project=new-4 --shard="$shard" \
+                --reporter=line,list,json,html,../scripts/ci/new4-execution-reporter.mjs \
+                2>&1 | tee "../job_logs/e2e-${E2E_BROWSER}-${project}-${E2E_EXECUTION_ID}.log"
             elif [[ "$project" =~ ^new-3[ab]$ ]]; then
               # Bound the command before the job deadline so timeout evidence
               # can upload. Line output identifies started, unfinished cases.
@@ -354,16 +636,14 @@ jobs:
                 --report="${PLAYWRIGHT_JSON_OUTPUT_NAME}" \
                 --timeout-seconds=1200 --job-budget-seconds=1320 --grace-seconds=10 \
                 -- npm run github:test:e2e -- --project="$project" --reporter=line,json,html
-            elif [ "$project" = "tables-1" ]; then
+            elif [[ "$project" =~ ^tables-([12])$ ]]; then
               python3 ../scripts/ci/run-bounded-e2e.py \
                 --context=../job_logs/execution-context.json \
-                --status=../job_logs/tables-1-command-status.json \
+                --status="../job_logs/${project}-command-status.json" \
                 --log="../job_logs/e2e-${E2E_BROWSER}-${project}-${E2E_EXECUTION_ID}.log" \
                 --report="${PLAYWRIGHT_JSON_OUTPUT_NAME}" \
                 --timeout-seconds=1200 --job-budget-seconds=1320 --grace-seconds=10 \
-                -- npm run github:test:e2e -- --project=tables --shard=1/2
-            elif [[ "$project" =~ ^tables-([12])$ ]]; then
-              npm run github:test:e2e -- --project=tables --shard="${BASH_REMATCH[1]}/2" 2>&1 | tee -a "../job_logs/e2e-${E2E_BROWSER}-${project}-${E2E_EXECUTION_ID}.log"
+                -- npm run github:test:e2e -- --project=tables --shard="${BASH_REMATCH[1]}/2"
             else
               npm run github:test:e2e -- --project="$project" 2>&1 | tee -a "../job_logs/e2e-${E2E_BROWSER}-${project}-${E2E_EXECUTION_ID}.log"
             fi
@@ -374,6 +654,7 @@ jobs:
           TEST_ENV: localhost
           DISPLAY: :99
           PLAYWRIGHT_JSON_OUTPUT_NAME: ../job_logs/e2e-${{ env.E2E_BROWSER }}-${{ matrix.project }}-${{ github.run_id }}-${{ github.run_attempt }}.json
+          NEW4_EXECUTION_REPORT: ../job_logs/${{ matrix.project }}-execution-${{ github.run_id }}-${{ github.run_attempt }}.json
           E2E_ATTACH_BROWSER_CONSOLE: '1'
           DISABLE_POSTHOG: true
           VITE_DISABLE_FLUID_TELEMETRY: true
@@ -521,7 +802,7 @@ jobs:
         # Retain Playwright command evidence, reports and attachments. Raw service
         # files may still contain startup-origin bytes after readiness succeeds;
         # omit them entirely rather than infer a safe byte boundary or mutate logs.
-        if: steps.tests.outputs.startup_verified == 'true' && (failure() || startsWith(matrix.project, 'firefox-') || startsWith(matrix.project, 'new-2-') || startsWith(matrix.project, 'new-3') || matrix.project == 'tables-1' || matrix.project == 'utils')
+        if: steps.tests.outputs.startup_verified == 'true' && (failure() || cancelled() || startsWith(matrix.project, 'firefox-') || startsWith(matrix.project, 'new-2-') || startsWith(matrix.project, 'new-3') || startsWith(matrix.project, 'new-4-') || startsWith(matrix.project, 'tables-') || matrix.project == 'utils')
         uses: actions/upload-artifact@v7
         with:
           name: e2e-artifacts-${{ env.E2E_BROWSER }}-${{ matrix.project }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -530,7 +811,7 @@ jobs:
             client/test-results/
             client/playwright-report/
           archive: true
-          if-no-files-found: ${{ (startsWith(matrix.project, 'new-2-') || startsWith(matrix.project, 'new-3') || matrix.project == 'tables-1' || matrix.project == 'utils') && 'error' || 'warn' }}
+          if-no-files-found: ${{ (startsWith(matrix.project, 'new-2-') || startsWith(matrix.project, 'new-3') || startsWith(matrix.project, 'new-4-') || startsWith(matrix.project, 'tables-') || matrix.project == 'utils') && 'error' || 'warn' }}
           retention-days: 2
 
       - name: Upload safe startup diagnostics
@@ -571,3 +852,39 @@ jobs:
           E2E_RESULT: ${{ needs.e2e-test.result }}
           COLLECTION_RESULT: ${{ needs.selection-coverage.result }}
         run: test "$E2E_RESULT" = success && test "$COLLECTION_RESULT" = success
+
+  new-4-complete:
+    # Preserve the required check while both native shards and the exact
+    # selection-coverage guard independently prove complete execution.
+    name: e2e-test (new-4)
+    needs: [e2e-test, selection-coverage]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout verifier
+        uses: actions/checkout@v7
+      - name: Download new-4 execution evidence
+        uses: actions/download-artifact@v8
+        with:
+          pattern: e2e-artifacts-chromium-new-4-*-${{ github.run_id }}-*
+          path: new-4-evidence
+      - name: Record native shard outcomes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/ci/collect-new4-shard-outcomes.mjs \
+            "${{ github.repository }}" "${{ github.run_id }}" "${{ github.run_attempt }}" \
+            new-4-evidence/outcomes.json
+      - name: Require exact successful execution and collection
+        env:
+          COLLECTION_RESULT: ${{ needs.selection-coverage.result }}
+        run: |
+          set -euo pipefail
+          test "$COLLECTION_RESULT" = success
+          node scripts/ci/verify-new4-shards.mjs \
+            new-4-evidence new-4-evidence/outcomes.json \
+            "${{ github.run_id }}" "${{ github.run_attempt }}" "${{ github.sha }}"

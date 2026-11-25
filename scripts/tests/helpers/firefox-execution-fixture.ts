@@ -69,7 +69,7 @@ export default defineConfig({
         const collection = spawnSync("npm", [
             ...args,
             "--list",
-            "--reporter=../scripts/tests/helpers/playwright-collection-reporter.mjs",
+            "--reporter=../scripts/ci/playwright-collection-reporter.mjs",
         ], {
             cwd: client,
             env: { ...environment, PLAYWRIGHT_COLLECTION_E2E_DIR: directory, PLAYWRIGHT_COLLECTION_OUTPUT: inventory },

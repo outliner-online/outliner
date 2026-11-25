@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { CalendarEntry } from "./calendarEntries";
 import {
     assignOverlapLanes,
@@ -105,6 +105,21 @@ describe("layoutHourMinuteGrid: fragmentation", () => {
 });
 
 describe("layoutHourMinuteGrid: overlap lanes", () => {
+    it("uses locale-independent title ordering for equal-time lanes", () => {
+        const localeCompare = vi.spyOn(String.prototype, "localeCompare").mockImplementation(() => {
+            throw new Error("ambient locale comparator must not be used");
+        });
+        const row = layout([
+            timed("angstrom", "10:00", 60, "Ångström"),
+            timed("zebra", "10:00", 60, "Zebra"),
+        ]).rows[10];
+        expect(row.fragments.map(fragment => [fragment.entry.title, fragment.laneIndex])).toEqual([
+            ["Zebra", 0],
+            ["Ångström", 1],
+        ]);
+        localeCompare.mockRestore();
+    });
+
     it("stacks overlapping events into vertical sub-lanes without narrowing either one", () => {
         const l = layout([timed("a", "10:00", 60), timed("b", "10:10", 40)]);
         const row = l.rows[10];

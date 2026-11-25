@@ -44,6 +44,8 @@ class PolicyTests(unittest.TestCase):
         # These exact API intervals are applied to the reviewed current separated
         # execution contract. Historical server wrapper timing is not retroactively
         # certified as pure test time: live provenance still requires that contract.
+        # The historical new-4 execution is now an aggregate check; retain that
+        # sample as diagnostic rather than treating the aggregate as a test shard.
         for row in records:
             run = copy.deepcopy(row['run'])
             run.update(repository={'full_name':REPOSITORY}, head_repository={'full_name':REPOSITORY})
@@ -56,11 +58,13 @@ class PolicyTests(unittest.TestCase):
         with patch.object(monitor, 'logger'):
             report = monitor.run_monitor(self.github, (workflow,), REPOSITORY, 'ignored', now=now, lookback_hours=48, publish=False)
         admitted = {a['family']: a for a in report['admission'] if a['qualifying_job_ids']}
-        self.assertEqual(set(admitted), {'unit-tests','server-tests','e2e-chromium'})
-        self.assertEqual(report['admission_summary']['qualifying_candidates'],3)
-        self.assertEqual(report['admission_summary']['qualifying_families_new'],3)
+        # The fixture predates the sharded server entrypoint. Its old server and
+        # aggregate E2E evidence must not be certified against the new workflow.
+        self.assertEqual(set(admitted), {'unit-tests'})
+        self.assertEqual(report['admission_summary']['qualifying_candidates'],1)
+        self.assertEqual(report['admission_summary']['qualifying_families_new'],1)
         measured = {s['job_id']:s['qualifying_test_step_seconds'] for o in report['observations'] for s in o['samples'] if s['diagnostic_reason'] is None}
-        self.assertEqual(measured, {136731411619:721,136731411435:802,136798530012:1003})
+        self.assertEqual(measured, {136731411619:721})
         observations = [o for o in monitor.collect(self.github,(workflow,),NOW-timedelta(days=2),monitor.CurrentSource(self.github,monitor._call,REPOSITORY))[0] if o.samples]
         for row in records:
             observation = next(o for o in observations if o.family.key==row['family'])
@@ -92,7 +96,7 @@ class PolicyTests(unittest.TestCase):
         with patch.object(self.github,'request',side_effect=historical), patch.object(monitor,'logger'):
             report=monitor.run_monitor(self.github,(workflow,),REPOSITORY,'ignored',now=NOW+timedelta(hours=10),lookback_hours=48,publish=False)
         self.assertEqual(report['admission_summary']['qualifying_candidates'],0)
-        self.assertEqual(report['observations'][2]['samples'][0]['diagnostic_reason'],'workflow/test entrypoint differs from current default branch')
+        self.assertEqual(report['observations'][2]['samples'][0]['diagnostic_reason'],'configured test step is absent from the current job entrypoint')
         self.assertEqual(self.github.mutations,[])
 
     def test_all_five_owner_closed_false_shapes_remain_nonpublished(self):
@@ -136,7 +140,7 @@ class PolicyTests(unittest.TestCase):
 
     def test_current_browser_variants_use_steps_not_reporter_format(self):
         workflows=self.repository_sources();workflow=next(w for w in workflows if w.path.endswith('/ci.yml'))
-        for variant in ['new-4','new-3a','new-3b','firefox-selection-new','onprem']:
+        for variant in ['new-4-1','new-4-2','new-4','new-3a','new-3b','firefox-selection-new','onprem']:
             self.github.runs=[{**GitHub().runs[0],'path':workflow.path}]
             candidate=job(seconds=900,name='e2e-test / e2e-test ('+variant+')')
             candidate['steps'][0]['name']='Run E2E tests ('+variant+')'
@@ -144,7 +148,12 @@ class PolicyTests(unittest.TestCase):
             with patch.object(monitor,'logger'):
                 result=monitor.run_monitor(self.github,(workflow,),REPOSITORY,'ignored',now=NOW,lookback_hours=48,publish=False)
             admitted=[a for a in result['admission'] if a['qualifying_job_ids']]
-            self.assertEqual(len(admitted),0 if variant=='onprem' else 1)
+            # new-4's aggregate entrypoint changed with the current orchestration;
+            # the unchanged native variants remain independently admissible.
+            self.assertEqual(len(admitted),0 if variant in {'new-4','onprem'} else 1)
+            if variant == 'new-4':
+                sample = next(s for o in result['observations'] for s in o['samples'])
+                self.assertEqual(sample['diagnostic_reason'], 'configured test step is absent from the current job entrypoint')
 
     def test_unknown_branch_fork_base_variant_and_source_are_diagnostic(self):
         for mode in ['branch','unverified-pr','foreign-base','retired','source','inactive','wrong-step','step-failed','step-short','setup-dominates']:
@@ -180,7 +189,7 @@ class PolicyTests(unittest.TestCase):
 class ServerBoundaryTest(unittest.TestCase):
     def test_exact_preparation_and_execution_contract(self):
         workflow=yaml.safe_load((ROOT/'.github/workflows/ci-test-server.yml').read_text())
-        steps=workflow['jobs']['server-test']['steps'];prep=next(s for s in steps if s.get('name')=='Prepare server test runtime');execution=next(s for s in steps if s.get('name')=='Run server tests')
+        steps=workflow['jobs']['server-test-shard']['steps'];prep=next(s for s in steps if s.get('name')=='Prepare server test runtime');execution=next(s for s in steps if s.get('name')=='Run server tests')
         self.assertEqual(prep['run'].splitlines()[0],'SKIP_SERVER_START=1 SKIP_PORT_WAIT=1 bash scripts/setup.sh')
         self.assertIn('test -x server/node_modules/.bin/mocha',prep['run'])
         self.assertIn('test -f server/node_modules/ts-node/esm.mjs',prep['run'])
@@ -191,10 +200,12 @@ class ServerBoundaryTest(unittest.TestCase):
         self.assertEqual(package['scripts']['test:prepared'],'bash ../scripts/run-server-test-command.sh')
         self.assertNotIn('pretest',package['scripts'])
         self.assertNotIn('posttest',package['scripts'])
-        self.assertIn('npm run test:prepared',execution['run'])
+        self.assertIn('scripts/ci/run-server-test-shard.sh',execution['run'])
         old=(ROOT/'scripts/tests/fixtures/ci-duration/server-command-baseline.sh').read_text()
         actual=(ROOT/'scripts/run-server-test-command.sh').read_text()
-        self.assertEqual(old[old.index('cd "$ROOT_DIR/server"'):],actual[actual.index('cd "$ROOT_DIR/server"'):])
+        self.assertIn('"tests/**/*.test.{js,cjs,ts}"',actual)
+        for exclusion in old.split('--exclude ')[1:]:
+            self.assertIn('--exclude '+exclusion.split(' --')[0].strip(),actual)
         self.assertNotIn('bash scripts/setup.sh',actual)
         self.assertIn('Server test runtime is not prepared',actual)
         self.assertIn('SKIP_SERVER_START=1 SKIP_PORT_WAIT=1 bash "$ROOT_DIR/scripts/setup.sh"',(ROOT/'scripts/run-server-tests.sh').read_text())

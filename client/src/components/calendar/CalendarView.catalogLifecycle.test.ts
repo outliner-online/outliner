@@ -1,3 +1,4 @@
+import type { CalendarProjectionResult } from "$shared/notifications/calendarProjection";
 import { createSqlCatalogObject, replaceSqlCatalogSource, SQL_CATALOG_KEY } from "$shared/services/sqlCatalog";
 import { configure, render, waitFor } from "@testing-library/svelte";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
@@ -34,9 +35,14 @@ describe("CalendarView catalog lifecycle", { timeout: 120_000 }, () => {
             roleTitle: "title",
             roleStart: "start_at",
             roleAllDay: "all_day",
+            viewType: "day",
         });
-        const component = render(CalendarView, { props: { project, projectId, calendarId } });
+        const projections: CalendarProjectionResult[] = [];
+        const component = render(CalendarView, {
+            props: { project, projectId, calendarId, onVisibleProjection: result => projections.push(result) },
+        });
         await waitFor(() => expect(component.getByText("Catalog event")).toBeTruthy());
+        await waitFor(() => expect(projections.at(-1)?.ready).toBe(true));
 
         // Model an invalid source received from synchronization. Local source
         // commands remain validated; the runtime must nevertheless surface
@@ -44,6 +50,11 @@ describe("CalendarView catalog lifecycle", { timeout: 120_000 }, () => {
         const entry = doc.getMap<unknown>(SQL_CATALOG_KEY).get(objectId) as Y.Map<unknown>;
         entry.set("source", "CREATE TYPE task_state AS ENUM (");
         await waitFor(() => expect(component.getByTestId("calendar-query-error").textContent).toBeTruthy());
+        await waitFor(() => expect(projections.at(-1)).toEqual({
+            ready: false,
+            reason: "Accepted Calendar SQL evidence is stale or unavailable.",
+        }));
+        expect(component.getByText("Catalog event")).toBeTruthy();
         expect(component.getByTestId("calendar-stale-result").textContent).toMatch(/editing is unavailable/i);
         expect(component.queryByTestId("calendar-entry-context-menu")).toBeNull();
         expect(item.start).toBeDefined();

@@ -94,11 +94,206 @@ test("representative PR CI retains its trigger, permissions, guards, and failure
     expect(workflow.jobs["unit-test"]["continue-on-error"]).toBeUndefined();
 });
 
+test("direct-runner fixture uses the authenticated action cache and passes its loaded image to the regression", () => {
+    const e2e = parseWorkflow("ci-test-e2e.yml");
+    const job = e2e.jobs["direct-runner-os-regression"];
+    const mirror = findStep(e2e, "direct-runner-os-regression", "Verify mirror-only control and owned-child cleanup");
+    const deadline = findStep(e2e, "direct-runner-os-regression", "Start shared fixture provisioning deadline");
+    const build = findStep(e2e, "direct-runner-os-regression", "Build cached direct-runner fixture");
+    const regression = findStep(e2e, "direct-runner-os-regression", "Exercise real isolated package acquisition");
+
+    expect(build.uses).toBe("./.github/actions/bounded-buildx");
+    expect(build.with).toMatchObject({
+        context: ".",
+        file: "scripts/tests/fixtures/direct-runner-os/Dockerfile",
+        load: true,
+        tags: "outliner-direct-os-regression:ci",
+        "cache-from": "type=gha,scope=direct-runner-os-fixture-v1",
+        "cache-to": "type=gha,mode=max,scope=direct-runner-os-fixture-v1",
+    });
+    expect(job.steps.indexOf(mirror)).toBeLessThan(job.steps.indexOf(deadline));
+    expect(job.steps.indexOf(deadline)).toBeLessThan(job.steps.indexOf(build));
+    expect(deadline.run).toContain("time.monotonic_ns() + 900_000_000_000");
+    expect(deadline.run).toContain("DIRECT_RUNNER_OS_PROVISIONING_DEADLINE_NS");
+    expect(regression.env.DIRECT_RUNNER_OS_PREBUILT_IMAGE).toBe(build.with.tags);
+    expect(regression["continue-on-error"]).toBeUndefined();
+    expect(regression.run).toContain('e.outcome!=="success"||e.exitCode!==0');
+});
+
+test("the hosted delayed real build exercises the bounded Buildx entry point", () => {
+    const e2e = parseWorkflow("ci-test-e2e.yml");
+    const job = e2e.jobs["direct-runner-os-provisioning-deadline"];
+    const deadline = findStep(
+        e2e,
+        "direct-runner-os-provisioning-deadline",
+        "Start controlled shared provisioning deadline",
+    );
+    const build = findStep(e2e, "direct-runner-os-provisioning-deadline", "Build deliberately delayed fixture");
+    const acquisition = findStep(
+        e2e,
+        "direct-runner-os-provisioning-deadline",
+        "Acquisition must stay blocked after deadline expiry",
+    );
+    const verification = findStep(
+        e2e,
+        "direct-runner-os-provisioning-deadline",
+        "Verify deadline failure blocked every scenario",
+    );
+
+    expect(job.steps.indexOf(deadline)).toBeLessThan(job.steps.indexOf(build));
+    expect(deadline.run).toContain("time.monotonic_ns() + 5_000_000_000");
+    expect(deadline.run).toContain("observe-build.py");
+    expect(deadline.run).toContain('--network "container:$builder_container"');
+    expect(build.uses).toBe("./.github/actions/bounded-buildx");
+    expect(build.with.context).toBe("scripts/tests/fixtures/direct-runner-os/deadline-control");
+    expect(build.with.network).toBe("host");
+    expect(build.with["no-cache"]).toBe(true);
+    expect(build["continue-on-error"]).toBe(true);
+    expect(acquisition.if).toBe("steps.delayed-build.outcome == 'success'");
+    expect(acquisition.run).toContain("unexpected-scenario-launch");
+    expect(acquisition.run).toContain("env-direct-runner-os-acquisition-5921b0ad.spec.ts");
+    expect(verification.env.BUILD_OUTCOME).toBe("${{ steps.delayed-build.outcome }}");
+    expect(verification.run).toContain('test "$BUILD_OUTCOME" = failure');
+    expect(verification.run).toContain('evidence.outcome !== "deadline"');
+    expect(verification.run).toContain('event.event === "client-closed"');
+    expect(verification.run).toContain("clientClosed.at < buildStarted.at");
+    expect(verification.run).toContain("clientClosed.at - buildStarted.at > 15");
+    expect(verification.run).toContain('event.event === "natural-completion"');
+    expect(verification.run).toContain("test ! -e job_logs/unexpected-scenario-launch");
+});
+
+test("the acquisition preparation control build preserves its local cap within the shared deadline", () => {
+    const e2e = parseWorkflow("ci-test-e2e.yml");
+    const acquisitionSource = fs.readFileSync(
+        path.join(root, "scripts/tests/env-direct-runner-os-acquisition-5921b0ad.spec.ts"),
+        "utf8",
+    );
+    const deadline = findStep(
+        e2e,
+        "direct-runner-os-preparation-deadline",
+        "Start controlled shared provisioning deadline",
+    );
+    const build = findStep(e2e, "direct-runner-os-preparation-deadline", "Build deliberately delayed fixture");
+    const acquisition = findStep(
+        e2e,
+        "direct-runner-os-preparation-deadline",
+        "Acquisition must stay blocked after deadline expiry",
+    );
+    const verification = findStep(
+        e2e,
+        "direct-runner-os-preparation-deadline",
+        "Verify deadline failure blocked every scenario",
+    );
+
+    expect(deadline.run).toContain("time.monotonic_ns() + 5_000_000_000");
+    expect(deadline.run).toContain("--network host");
+    expect(build.env.DIRECT_RUNNER_OS_FAILURE_CONTROL_CONTEXT).toBe(
+        "scripts/tests/fixtures/direct-runner-os/deadline-control",
+    );
+    expect(build.run).toContain("env-direct-runner-os-acquisition-5921b0ad.spec.ts");
+    expect(build["continue-on-error"]).toBe(true);
+    expect(acquisitionSource).toContain("const failureControlTimeoutMs = 30_000");
+    expect(acquisitionSource).toContain("timeout: Math.min(failureControlTimeoutMs, remainingProvisioningMs)");
+    expect(acquisitionSource).toContain("DIRECT_RUNNER_OS_FAILURE_CONTROL_CONTEXT");
+    expect(acquisitionSource).toContain("Fixture provisioning deadline exceeded during the failure-control build");
+    expect(acquisitionSource).toContain("Failure-control build exceeded its 30000ms local timeout");
+    expect(acquisition.if).toBe("steps.delayed-build.outcome == 'success'");
+    expect(verification.run).toContain('event.event === "client-closed"');
+    expect(verification.run).toContain('event.event === "natural-completion"');
+    expect(verification.run).toContain("test ! -e job_logs/unexpected-scenario-launch");
+});
+
+test("a hosted fixture failure cannot enter the scenario acquisition caller", () => {
+    const e2e = parseWorkflow("ci-test-e2e.yml");
+    const job = e2e.jobs["direct-runner-os-provisioning-failure"];
+    const build = findStep(e2e, "direct-runner-os-provisioning-failure", "Exercise failing fixture provisioning");
+    const acquisition = findStep(e2e, "direct-runner-os-provisioning-failure", "Acquisition must stay blocked");
+    const verification = findStep(
+        e2e,
+        "direct-runner-os-provisioning-failure",
+        "Verify provisioning failure propagation",
+    );
+
+    expect(job["continue-on-error"]).toBeUndefined();
+    expect(build).toMatchObject({
+        uses: "./.github/actions/bounded-buildx",
+        "continue-on-error": true,
+        with: {
+            context: "scripts/tests/fixtures/direct-runner-os/failure-control",
+            load: true,
+            tags: "outliner-direct-os-regression:failure-control",
+        },
+    });
+    expect(acquisition.if).toBe("steps.fixture-build.outcome == 'success'");
+    expect(acquisition.run).toContain("unexpected-scenario-launch");
+    expect(acquisition.run).toContain("env-direct-runner-os-acquisition-5921b0ad.spec.ts");
+    expect(verification.if).toBe("always()");
+    expect(verification.env.BUILD_OUTCOME).toBe("${{ steps.fixture-build.outcome }}");
+    expect(verification.run).toContain('test "$BUILD_OUTCOME" = failure');
+    expect(verification.run).toContain("test ! -e job_logs/unexpected-scenario-launch");
+});
+
+test("bounded hosted fixture entry point terminates its owned process group at the shared deadline", () => {
+    const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "bounded-buildx-"));
+    const bin = path.join(temporary, "bin");
+    const evidence = path.join(temporary, "evidence.json");
+    const terminated = path.join(temporary, "terminated");
+    const scenario = path.join(temporary, "scenario-launched");
+    const argumentsFile = path.join(temporary, "arguments");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(
+        path.join(bin, "docker"),
+        `#!/usr/bin/env bash
+printf '%s\n' "$@" > "${argumentsFile}"
+trap 'printf terminated > "${terminated}"; exit 143' TERM
+sleep 30 &
+wait
+printf launched > "${scenario}"
+`,
+        { mode: 0o755 },
+    );
+
+    const started = process.hrtime.bigint();
+    let status = 0;
+    try {
+        execFileSync(process.execPath, [path.join(actionDirectory, "bounded-buildx/index.mjs")], {
+            env: {
+                ...process.env,
+                PATH: `${bin}:${process.env.PATH}`,
+                DIRECT_RUNNER_OS_PROVISIONING_DEADLINE_NS: (started + 250_000_000n).toString(),
+                INPUT_CONTEXT: ".",
+                INPUT_TAGS: "bounded-control:test",
+                INPUT_LOAD: "true",
+                "INPUT_CACHE-FROM": "type=gha,scope=bounded-control",
+                "INPUT_CACHE-TO": "type=gha,mode=max,scope=bounded-control",
+                "INPUT_EVIDENCE-FILE": evidence,
+                "INPUT_CLEANUP-GRACE-SECONDS": "1",
+            },
+            stdio: "pipe",
+        });
+    } catch (error) {
+        status = (error as { status?: number; }).status ?? 0;
+    }
+
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1_000_000;
+    expect(status).not.toBe(0);
+    expect(elapsedMs).toBeLessThan(2_000);
+    expect(fs.readFileSync(terminated, "utf8")).toBe("terminated");
+    expect(fs.readFileSync(argumentsFile, "utf8")).toContain("type=gha,scope=bounded-control");
+    expect(fs.readFileSync(argumentsFile, "utf8")).toContain("type=gha,mode=max,scope=bounded-control");
+    expect(fs.existsSync(scenario), "a terminated fixture build must never launch a scenario").toBe(false);
+    expect(JSON.parse(fs.readFileSync(evidence, "utf8"))).toMatchObject({
+        outcome: "deadline",
+        buildStarted: true,
+        terminated: true,
+    });
+});
+
 test("artifact and Pages deployment producers retain their consumer-facing contracts", () => {
     const e2e = parseWorkflow("ci-test-e2e.yml");
     const artifact = findStep(e2e, "e2e-test", "Upload Logs & Artifacts");
     expect(artifact.if).toBe(
-        "steps.tests.outputs.startup_verified == 'true' && (failure() || startsWith(matrix.project, 'firefox-') || startsWith(matrix.project, 'new-2-') || startsWith(matrix.project, 'new-3') || matrix.project == 'tables-1' || matrix.project == 'utils')",
+        "steps.tests.outputs.startup_verified == 'true' && (failure() || cancelled() || startsWith(matrix.project, 'firefox-') || startsWith(matrix.project, 'new-2-') || startsWith(matrix.project, 'new-3') || startsWith(matrix.project, 'new-4-') || startsWith(matrix.project, 'tables-') || matrix.project == 'utils')",
     );
     expect(artifact.with.name).toBe(
         "e2e-artifacts-${{ env.E2E_BROWSER }}-${{ matrix.project }}-${{ github.run_id }}-${{ github.run_attempt }}",
@@ -121,19 +316,27 @@ test("artifact and Pages deployment producers retain their consumer-facing contr
             .replace("${{ matrix.project }}", "artifact-roundtrip"),
     );
     expect(roundtripUpload.id).toBe("representative-upload");
-    expect(roundtripDownload.with["artifact-ids"]).toBe(
+    expect(roundtripDownload.env.ARTIFACT_ID).toBe(
         "${{ steps.representative-upload.outputs.artifact-id }}",
     );
-    expect(roundtripDownload.with.name).toBeUndefined();
+    expect(roundtripDownload.env.GH_TOKEN).toBe("${{ github.token }}");
+    expect(roundtripDownload.run).toContain("download-run-artifact-by-id.sh");
     expect(wrongUpload.id).toBe("wrong-upload");
     expectMultiFileArtifactArchive(wrongUpload);
+    const discoverability = findStep(
+        e2e,
+        "artifact-roundtrip",
+        "Wait for uploaded artifacts to become discoverable",
+    ).run;
+    expect(discoverability).toContain('grep -Fxq "$EXPECTED_ARTIFACT_ID"');
+    expect(discoverability).toContain('grep -Fxq "$WRONG_ARTIFACT_ID"');
+    expect(discoverability).toContain("sleep 30");
     expect(findStep(e2e, "artifact-roundtrip", "Verify downloaded E2E evidence").run).toContain(
         "scripts/ci/verify-artifact-roundtrip.sh artifact-roundtrip/source artifact-roundtrip/downloaded",
     );
-    expect(findStep(e2e, "artifact-roundtrip", "Reject an unavailable artifact")["continue-on-error"]).toBe(true);
-    expect(findStep(e2e, "artifact-roundtrip", "Confirm unavailable artifact is non-success").run).toContain(
-        'test "$DOWNLOAD_OUTCOME" = failure',
-    );
+    const unavailableControl = findStep(e2e, "artifact-roundtrip", "Reject an unavailable artifact");
+    expect(unavailableControl["continue-on-error"]).toBeUndefined();
+    expect(unavailableControl.run).toContain("reject-unavailable-artifact.sh");
     const negativeControls = findStep(
         e2e,
         "artifact-roundtrip",

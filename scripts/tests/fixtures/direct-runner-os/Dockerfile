@@ -17,5 +17,6 @@ RUN useradd --create-home --shell /bin/bash runner \
     && chmod 440 /etc/sudoers.d/fixture-runner
 COPY client/package-lock.json /fixture/client/package-lock.json
 RUN version=$(node -p "require('/fixture/client/package-lock.json').packages['node_modules/@playwright/test'].version") \
-    && npm install --prefix /runtime --no-save "@playwright/test@$version" \
+    && typescript_version=$(node -p "require('/fixture/client/package-lock.json').packages['node_modules/typescript'].version") \
+    && npm install --prefix /runtime --no-save "@playwright/test@$version" "typescript@$typescript_version" \
     && ln -s /runtime/node_modules /fixture/client/node_modules

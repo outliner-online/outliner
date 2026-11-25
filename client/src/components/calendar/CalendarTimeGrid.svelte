@@ -20,11 +20,11 @@
 // implement cross-lane drops with native DnD (mirroring `CalendarMonthGrid`'s
 // existing pattern) without touching reschedule at all.
 
-import { onMount } from "svelte";
+import { onMount, tick } from "svelte";
 import type { DayHeader } from "../../services/calendar/calendarDayHeaders";
 import { formatDragMoveLabel, formatDragResizeLabel, formatDuration } from "../../services/calendar/calendarDragLabel";
 import type { CalendarEntry } from "../../services/calendar/calendarEntries";
-import type { TimeGridLayout } from "../../services/calendar/calendarTimeGridLayout";
+import { TIME_GRID_HOUR_LABELS, type TimeGridLayout, timeGridMilestoneLabel } from "../../services/calendar/calendarTimeGridLayout";
 import CalendarDragTooltip from "./CalendarDragTooltip.svelte";
 
 const DAY_MS = 86_400_000;
@@ -32,7 +32,6 @@ const MIN_DURATION_MS = 5 * 60 * 1000;
 const ROW_HEIGHT_PX = 48; // pixels per hour
 /** Pointer travel below this is a click, not a drag (#4982). */
 const CLICK_TOLERANCE_PX = 4;
-const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 interface Props {
     layout: TimeGridLayout;
@@ -92,10 +91,58 @@ let {
 }: Props = $props();
 
 const dayHeightPx = 24 * ROW_HEIGHT_PX;
-const hours = Array.from({ length: 24 }, (_, i) => i);
 
 let gridEl: HTMLDivElement | undefined = $state();
 let scrollEl: HTMLDivElement | undefined = $state();
+let focusedResizeRenderKey: string | undefined;
+let focusedEntryAnchor: {
+    renderKey: string
+    sourceKind?: string
+    sourceId?: string
+    title: string
+    expectedStartMs?: number
+} | undefined;
+
+const baseRenderKey = (entry: CalendarEntry) => entry.renderKey ?? entry.key;
+const renderKey = (entry: CalendarEntry) =>
+    focusedEntryAnchor
+        && entry.sourceKind === focusedEntryAnchor.sourceKind
+        && entry.sourceId === focusedEntryAnchor.sourceId
+        && entry.title === focusedEntryAnchor.title
+        && entry.startMs === focusedEntryAnchor.expectedStartMs
+        ? focusedEntryAnchor.renderKey
+        : baseRenderKey(entry);
+const focusEntry = (entry: CalendarEntry) => {
+    focusedEntryAnchor = {
+        renderKey: renderKey(entry),
+        sourceKind: entry.sourceKind,
+        sourceId: entry.sourceId,
+        title: entry.title,
+        expectedStartMs: entry.startMs,
+    };
+};
+const currentEntry = (entry: CalendarEntry) => {
+    const key = renderKey(entry);
+    return layout.timed.find(placement => renderKey(placement.entry) === key)?.entry
+        ?? layout.allDay.find(placement => renderKey(placement.entry) === key)?.entry
+        ?? layout.milestones.find(placement => renderKey(placement.entry) === key)?.entry
+        ?? entry;
+};
+
+function restoreFocusedResize() {
+    if (!focusedResizeRenderKey || !gridEl || document.activeElement !== document.body) return;
+    const handle = [...gridEl.querySelectorAll<HTMLElement>(".resize-handle")]
+        .find(element => element.dataset.renderKey === focusedResizeRenderKey);
+    if (handle) handle.focus();
+    else focusedResizeRenderKey = undefined;
+}
+
+$effect(() => {
+    const pendingLayout = layout;
+    void tick().then(() => {
+        if (layout === pendingLayout) restoreFocusedResize();
+    });
+});
 
 let drag = $state<{
     kind: "move" | "resize"
@@ -248,7 +295,10 @@ function onEntryKeydown(entry: CalendarEntry, e: KeyboardEvent) {
     const deltaMs = keyToDeltaMs(e.key);
     if (deltaMs === undefined) return;
     e.preventDefault();
-    onKeyboardMove(entry, entry.startMs + deltaMs);
+    const nextStartMs = entry.startMs + deltaMs;
+    focusEntry(entry);
+    focusedEntryAnchor!.expectedStartMs = nextStartMs;
+    onKeyboardMove(entry, nextStartMs);
 }
 
 function onResizeKeydown(entry: CalendarEntry, e: KeyboardEvent) {
@@ -286,7 +336,7 @@ onMount(() => {
                         data-testid={`calendar-day-header-${header.dayIndex}`}
                         data-date={header.isoDate}
                     >
-                        {WEEKDAY_LABELS[header.weekday]} {header.dayOfMonth}
+                        {header.label}
                     </div>
                 {/each}
             </div>
@@ -295,7 +345,7 @@ onMount(() => {
 
     {#if layout.allDay.length > 0 || layout.milestones.length > 0}
         <div class="band-row" data-testid="calendar-all-day-band" style={`grid-template-columns: repeat(${layout.dayCount}, 1fr)`}>
-            {#each layout.allDay as p (p.entry.key)}
+            {#each layout.allDay as p (renderKey(p.entry))}
                 <div
                     role="group"
                     aria-label={p.entry.title}
@@ -316,6 +366,7 @@ onMount(() => {
                         tabindex="0"
                         class="entry-title"
                         data-testid="calendar-entry-title"
+                        onfocus={() => focusEntry(p.entry)}
                         onkeydown={(e) => onEntryKeydown(p.entry, e)}
                     >{p.entry.title}</div>
                     {#if isDeletable(p.entry)}
@@ -332,7 +383,7 @@ onMount(() => {
                     {/if}
                 </div>
             {/each}
-            {#each layout.milestones as m (m.entry.key)}
+            {#each layout.milestones as m (renderKey(m.entry))}
                 <div
                     role="group"
                     aria-label={m.entry.title}
@@ -353,7 +404,7 @@ onMount(() => {
                         class="entry-title"
                         data-testid="calendar-entry-title"
                         onkeydown={(e) => onEntryKeydown(m.entry, e)}
-                    >◆ {m.entry.title}</div>
+                    >{timeGridMilestoneLabel(m.entry.title)}</div>
                     {#if isDeletable(m.entry)}
                         <button
                             type="button"
@@ -373,8 +424,8 @@ onMount(() => {
 
     <div class="scroll-area" bind:this={scrollEl} data-testid="calendar-time-grid-scroll">
         <div class="hour-gutter">
-            {#each hours as h (h)}
-                <div class="hour-label" style={`height: ${ROW_HEIGHT_PX}px`}>{String(h).padStart(2, "0")}:00</div>
+            {#each TIME_GRID_HOUR_LABELS as label (label)}
+                <div class="hour-label" style={`height: ${ROW_HEIGHT_PX}px`}>{label}</div>
             {/each}
         </div>
         <div class="day-columns" bind:this={gridEl} style={`height: ${dayHeightPx}px`}>
@@ -392,7 +443,7 @@ onMount(() => {
                     ></div>
                 </div>
             {/each}
-            {#each layout.timed as p (p.entry.key)}
+            {#each layout.timed as p (renderKey(p.entry))}
                 <div
                     role="group"
                     aria-label={p.entry.title}
@@ -444,8 +495,13 @@ onMount(() => {
                             aria-label={`Resize ${p.entry.title}`}
                             class="resize-handle"
                             data-testid={`calendar-entry-resize-${p.entry.key}`}
-                            onpointerdown={(e) => beginDrag("resize", p.entry, e)}
-                            onkeydown={(e) => onResizeKeydown(p.entry, e)}
+                            data-render-key={renderKey(p.entry)}
+                            onfocus={() => {
+                                focusEntry(p.entry);
+                                focusedResizeRenderKey = renderKey(p.entry);
+                            }}
+                            onpointerdown={(e) => beginDrag("resize", currentEntry(p.entry), e)}
+                            onkeydown={(e) => onResizeKeydown(currentEntry(p.entry), e)}
                         ></div>
                     {/if}
                     {#if isLaneWritable?.(p.entry)}

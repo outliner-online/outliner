@@ -19,7 +19,7 @@ import sys
 import tempfile
 import time
 from urllib.parse import urlsplit
-from ubuntu_mirror_candidate import fallback_plan, source_fields
+from ubuntu_mirror_candidate import COMPONENTS, fallback_plan, source_fields
 
 ROOT = Path(__file__).resolve().parents[2]
 FIRST_SECONDS = 150
@@ -113,15 +113,22 @@ def source_shape_summary(sources):
         public_uris['http://us-east-2.ec2.archive.ubuntu.com' + suffix] = 'ec2-http'
     blocks = [block for block in re.split(r'\n[ \t]*\n', sources) if block.strip()]
     rows = []
-    unknown = max(0, len(blocks) - 3)
-    for block in blocks[:3]:
+    unknown = max(0, len(blocks) - 8)
+    for block in blocks[:8]:
         try:
             fields = source_fields(block)
         except ValueError:
             fields = {}
         suite = suite_sets.get(frozenset(fields.get('Suites', '').split()), 'other')
         uri = public_uris.get(fields.get('URIs'), 'other')
-        rows.append({'suites': suite, 'uri': uri})
+        rows.append({
+            'components': 'ubuntu-four' if set(fields.get('Components', '').split()) == COMPONENTS else 'other',
+            'enabled': {'': 'default', 'yes': 'yes', 'no': 'no'}.get(fields.get('Enabled', '').lower(), 'other'),
+            'signed_by': 'ubuntu-archive-keyring' if fields.get('Signed-By') == '/usr/share/keyrings/ubuntu-archive-keyring.gpg' else 'other',
+            'suites': suite,
+            'types': 'deb' if fields.get('Types') == 'deb' else 'other',
+            'uri': uri,
+        })
         unknown += suite == 'other' or uri == 'other'
     return {'paragraphs': rows, 'unknown_count': unknown}
 
@@ -329,7 +336,7 @@ def main(browser, deadline_ms, etc=Path('/etc/apt')):
         sources, mirrors, plan = profile(etc)
     except (OSError, ValueError) as error:
         supported_reasons = {'unsupported-ranked-mirror-metadata', 'not-observed-ec2-pool-with-existing-next-candidate', 'unsupported-deb822-or-folding', 'unsupported-ubuntu-source-contract', 'unsupported-suite-source-layout', 'incomplete-source-layout', 'weakened-source-trust', 'weakened-source-validity', 'duplicate-or-unknown-ubuntu-source'}
-        if isinstance(error, ValueError) and str(error) in {'weakened-source-trust', 'weakened-source-validity', 'nonpublic-source'}:
+        if isinstance(error, ValueError) and str(error) in {'weakened-source-trust', 'weakened-source-validity', 'unsupported-source-security-override', 'nonpublic-source'}:
             print('APT-MIRROR unsafe source; refusing acquisition', flush=True)
             return 64
         reason = str(error) if isinstance(error, ValueError) and str(error) in supported_reasons else 'unsupported-or-unreadable'

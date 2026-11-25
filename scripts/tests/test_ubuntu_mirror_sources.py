@@ -29,13 +29,29 @@ class SourceCopies(unittest.TestCase):
             self.assertEqual(ubuntu.read_text(),SOURCES)
             self.assertEqual((etc/'apt-mirrors.txt').read_text(),MIRRORS)
     def test_confirmed_unsafe_source_never_runs_apt_or_legacy(self):
-        for field in ('Trusted: yes','Check-Valid-Until: no'):
+        for field in ('Trusted: yes','Check-Valid-Until: no','Allow-Insecure: yes','Valid-Until-Min: 0'):
             with tempfile.TemporaryDirectory() as d,patch.object(m,'pipeline') as pipeline:
                 etc=Path(d);(etc/'sources.list.d').mkdir()
                 (etc/'sources.list.d/ubuntu.sources').write_text(SOURCES+'\n'+field+'\n')
                 (etc/'apt-mirrors.txt').write_text(MIRRORS)
                 self.assertEqual(m.main('firefox',int(time.time()*1000)+500000,etc),64)
                 pipeline.assert_not_called()
+    def test_later_unsafe_source_wins_over_earlier_unsupported_layout(self):
+        with tempfile.TemporaryDirectory() as d,patch.object(m,'pipeline') as pipeline:
+            etc=Path(d);(etc/'sources.list.d').mkdir()
+            sources=SOURCES.replace('resolute resolute-updates resolute-backports','resolute-proposed')
+            (etc/'sources.list.d/ubuntu.sources').write_text(sources+'\nAllow-Insecure: yes\n')
+            (etc/'apt-mirrors.txt').write_text(MIRRORS)
+            self.assertEqual(m.main('firefox',int(time.time()*1000)+500000,etc),64)
+            pipeline.assert_not_called()
+    def test_later_unsafe_source_wins_over_earlier_deb822_folding(self):
+        with tempfile.TemporaryDirectory() as d,patch.object(m,'pipeline') as pipeline:
+            etc=Path(d);(etc/'sources.list.d').mkdir()
+            sources=SOURCES.replace('Types: deb','Types: deb\n folded-value',1)
+            (etc/'sources.list.d/ubuntu.sources').write_text(sources+'\nAllow-Insecure: yes\n')
+            (etc/'apt-mirrors.txt').write_text(MIRRORS)
+            self.assertEqual(m.main('firefox',int(time.time()*1000)+500000,etc),64)
+            pipeline.assert_not_called()
     def test_duplicate_ubuntu_source_preserves_legacy_instead_of_partial_override(self):
         with tempfile.TemporaryDirectory() as d,patch.object(m,'pipeline') as pipeline:
             etc=Path(d);(etc/'sources.list.d').mkdir()

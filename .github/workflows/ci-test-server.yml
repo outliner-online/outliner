@@ -9,7 +9,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  server-test:
+  server-test-shard:
+    name: server-test shard ${{ matrix.shard }}/2
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/${{ github.repository }}:latest
@@ -45,16 +50,14 @@ jobs:
           DISABLE_POSTHOG: true
           VITE_DISABLE_FLUID_TELEMETRY: true
 
-      - name: Verify prepared server execution boundary
-        run: python3 -m unittest discover -s scripts/tests -p test_server_test_boundary.py -v
-
       - name: Run server tests
         shell: bash
         run: |
           set -o pipefail
           mkdir -p job_logs
-          cd server
-          npm run test:prepared 2>&1 | tee -a ../job_logs/server-test.log
+          SERVER_TEST_SHARD="${{ matrix.shard }}/2" \
+            SERVER_TEST_RESULT_DIR="server-test-results/shard-${{ matrix.shard }}" \
+            bash scripts/ci/run-server-test-shard.sh 2>&1 | tee -a "job_logs/server-test-${{ matrix.shard }}.log"
         env:
           CI: true
           NODE_ENV: test
@@ -63,20 +66,85 @@ jobs:
           DISABLE_POSTHOG: true
           VITE_DISABLE_FLUID_TELEMETRY: true
 
+      - name: Prove native failure propagation
+        if: matrix.shard == 1
+        shell: bash
+        run: |
+          SERVER_TEST_NATIVE_FAILURE_EVIDENCE="server-test-results/shard-1/native-failure.json" \
+            python3 -m unittest \
+              scripts.tests.test_server_test_boundary.ServerExecutionBoundaryTest.test_prepared_workflow_native_failure_evidence \
+              -v
+        env:
+          CI: true
+          NODE_ENV: test
+          TEST_ENV: localhost
+
+      - name: Upload shard result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: server-test-shard-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            server-test-results/shard-${{ matrix.shard }}/
+            job_logs/
+          retention-days: 2
+
+  server-test:
+    name: server-test
+    if: always()
+    needs: server-test-shard
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      packages: read
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          clean: true
+
+      - name: Download current shard results
+        uses: actions/download-artifact@v8
+        with:
+          pattern: server-test-shard-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: downloaded-server-tests
+          merge-multiple: true
+
+      - name: Verify calling workflow boundary
+        env:
+          SERVER_TEST_WORKFLOW_RESULTS: downloaded-server-tests/server-test-results
+          CI: true
+          NODE_ENV: test
+          TEST_ENV: localhost
+        run: |
+          python3 -m unittest \
+            scripts.tests.test_server_test_boundary.ServerExecutionBoundaryTest.test_current_checkout_workflow_artifacts_and_native_failure \
+            -v
+
+      - name: Verify complete server test result
+        run: |
+          bash scripts/ci/verify-server-test-job.sh \
+            "${{ needs.server-test-shard.result }}" \
+            downloaded-server-tests/server-test-results 2
+
       - name: Summarise failures
         if: failure()
         run: |
-          echo "## ❌ Server Test Failed" >> $GITHUB_STEP_SUMMARY
-          if [ -f "job_logs/server-test.log" ]; then
-            grep -E -A1 -B0 "failing|FAIL|FAILED" "job_logs/server-test.log" >> $GITHUB_STEP_SUMMARY || true
-          fi
+          echo "## ❌ Server Test Failed" >> "$GITHUB_STEP_SUMMARY"
+          find downloaded-server-tests/job_logs -type f -print0 2>/dev/null \
+            | xargs -0 grep -E -A1 -B0 "failing|FAIL|FAILED" >> "$GITHUB_STEP_SUMMARY" || true
 
-      - name: Upload logs
+      - name: Upload failure logs
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: server-test-logs
-          path: job_logs/
+          path: downloaded-server-tests/job_logs/
           retention-days: 2
 
   project-directory-test:

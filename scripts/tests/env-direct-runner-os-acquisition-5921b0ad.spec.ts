@@ -4,49 +4,125 @@
  */
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, expect, test } from "vitest";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
-const image = `outliner-direct-os-regression:${process.pid}`;
+const image = process.env.DIRECT_RUNNER_OS_PREBUILT_IMAGE ?? `outliner-direct-os-regression:${process.pid}`;
 const owner = randomUUID().slice(0, 8);
-const scenarios = ["success", "unavailable", "slow", "missing", "nonroot-success", "nonroot-playwright-slow"];
+const scenarios = [
+    "success",
+    "observed-layout-failover",
+    "observed-lookalike-rejected",
+    "observed-unsafe-rejected",
+    "observed-total-failure-no-legacy",
+    "unavailable",
+    "slow",
+    "missing",
+    "nonroot-success",
+    "nonroot-playwright-slow",
+];
 const preparedContainers = new Set<string>();
 const containerName = (scenario: string) => `outliner-direct-os-${process.pid}-${owner}-${scenario}`;
 let buildContext: string | undefined;
 const output = (result: ReturnType<typeof spawnSync>) => `${result.stdout ?? ""}${result.stderr ?? ""}`;
+const builder = join(root, "scripts/tests/fixtures/direct-runner-os/build-fixture.sh");
+const suppliedProvisioningDeadline = process.env.DIRECT_RUNNER_OS_PROVISIONING_DEADLINE_NS;
+const failureControlTimeoutMs = 30_000;
+const provisioningDeadline = suppliedProvisioningDeadline
+    ? BigInt(suppliedProvisioningDeadline)
+    : process.hrtime.bigint() + 900_000_000_000n;
+
+function remainingProvisioning(): number {
+    const remaining = Number((provisioningDeadline - process.hrtime.bigint()) / 1_000_000n);
+    if (remaining <= 0) throw new Error("Fixture provisioning deadline exceeded");
+    return remaining;
+}
+
+function expectNoScenarioContainers(): void {
+    const listed = spawnSync("docker", [
+        "ps",
+        "--all",
+        "--filter",
+        `name=outliner-direct-os-${process.pid}-${owner}-`,
+        "--format",
+        "{{.Names}}",
+    ], { encoding: "utf8", timeout: 10000 });
+    expect(listed.error, output(listed)).toBeUndefined();
+    expect(listed.status, output(listed)).toBe(0);
+    expect(listed.stdout.trim(), "A failed fixture build must not start a scenario container").toBe("");
+}
 
 beforeAll(() => {
+    remainingProvisioning();
     const docker = spawnSync("docker", ["info"], { encoding: "utf8", timeout: 10000 });
     expect(docker.error, "Docker control is required; this suite must never silently skip").toBeUndefined();
     expect(docker.status, output(docker)).toBe(0);
-    buildContext = mkdtempSync(join(tmpdir(), "direct-runner-os-"));
-    mkdirSync(join(buildContext, "client"));
-    copyFileSync(join(root, "client/package-lock.json"), join(buildContext, "client/package-lock.json"));
-    copyFileSync(join(root, "scripts/tests/fixtures/direct-runner-os/Dockerfile"), join(buildContext, "Dockerfile"));
-    // Honor a managed environment's trusted CA without disabling TLS checks.
-    const ca = process.env.NODE_EXTRA_CA_CERTS;
-    const trust = ca ? ["--secret", `id=environment-ca,src=${ca}`] : [];
-    // Image construction and fresh, unstarted containers share the original
-    // provisioning budget. No acquisition runs before the per-case clock.
-    const provisioningDeadline = performance.now() + 900000;
-    const remainingProvisioning = () => {
-        const remaining = Math.floor(provisioningDeadline - performance.now());
-        if (remaining <= 0) throw new Error("Fixture provisioning deadline exceeded");
-        return remaining;
-    };
-    const build = spawnSync("docker", ["build", ...trust, "-t", image, buildContext], {
-        cwd: root,
-        encoding: "utf8",
-        timeout: remainingProvisioning(),
-        maxBuffer: 20 * 1024 * 1024,
-    });
-    console.log(output(build));
-    expect(build.error).toBeUndefined();
-    expect(build.status).toBe(0);
+
+    // Negative control at the real provisioning boundary: the actual builder
+    // must propagate a native failure before any scenario container can start.
+    const suppliedFailureContext = process.env.DIRECT_RUNNER_OS_FAILURE_CONTROL_CONTEXT;
+    const failingContext = suppliedFailureContext ?? mkdtempSync(join(tmpdir(), "direct-runner-os-failing-"));
+    if (!suppliedFailureContext) {
+        writeFileSync(join(failingContext, "Dockerfile"), "FROM scratch\nCOPY absent-file /must-not-exist\n");
+    }
+    try {
+        const controlArguments = suppliedFailureContext ? ["--network", "host", "--no-cache"] : [];
+        const remainingProvisioningMs = remainingProvisioning();
+        const provisioningDeadlineIsTighter = remainingProvisioningMs <= failureControlTimeoutMs;
+        const failedBuild = spawnSync("bash", [builder, `${image}-failure-control`, failingContext,
+            ...controlArguments], {
+            cwd: root,
+            encoding: "utf8",
+            timeout: Math.min(failureControlTimeoutMs, remainingProvisioningMs),
+            maxBuffer: 5 * 1024 * 1024,
+        });
+        if ((failedBuild.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") {
+            expectNoScenarioContainers();
+            if (provisioningDeadlineIsTighter) {
+                throw new Error("Fixture provisioning deadline exceeded during the failure-control build");
+            }
+            throw new Error("Failure-control build exceeded its 30000ms local timeout");
+        }
+        expect(failedBuild.error, output(failedBuild)).toBeUndefined();
+        expect(failedBuild.status, output(failedBuild)).not.toBe(0);
+        expectNoScenarioContainers();
+    } finally {
+        if (!suppliedFailureContext) rmSync(failingContext, { recursive: true, force: true });
+    }
+
+    if (process.env.DIRECT_RUNNER_OS_PREBUILT_IMAGE) {
+        const inspect = spawnSync("docker", ["image", "inspect", image], { encoding: "utf8", timeout: 10000 });
+        expect(inspect.error, output(inspect)).toBeUndefined();
+        expect(inspect.status, output(inspect)).toBe(0);
+    } else {
+        buildContext = mkdtempSync(join(tmpdir(), "direct-runner-os-"));
+        mkdirSync(join(buildContext, "client"));
+        copyFileSync(join(root, "client/package-lock.json"), join(buildContext, "client/package-lock.json"));
+        copyFileSync(join(root, "scripts/tests/fixtures/direct-runner-os/Dockerfile"),
+            join(buildContext, "Dockerfile"));
+        // Honor a managed environment's trusted CA without disabling TLS checks.
+        const ca = process.env.NODE_EXTRA_CA_CERTS;
+        const trust = ca ? ["--secret", `id=environment-ca,src=${ca}`] : [];
+        const build = spawnSync("bash", [
+            builder,
+            image,
+            buildContext,
+            ...trust,
+        ], {
+            cwd: root,
+            encoding: "utf8",
+            timeout: remainingProvisioning(),
+            maxBuffer: 20 * 1024 * 1024,
+        });
+        console.log(output(build));
+        expect(build.error).toBeUndefined();
+        expect(build.status).toBe(0);
+        expect(output(build)).toContain("fixture-build cache=local-default");
+    }
     for (const scenario of scenarios) {
         const name = containerName(scenario);
         preparedContainers.add(name); // Reclaim our uniquely named partial create on failure, too.
@@ -109,6 +185,42 @@ test("required packages are acquired and an independent browser actually execute
     expect(elapsed).toBeLessThan(610000);
     expect(log).toContain("stage=ready exit=0");
     expect(log).toContain("INDEPENDENT_BROWSER_EXECUTED");
+}, 660000);
+
+test("observed runner layout uses authenticated failover and executes Firefox", () => {
+    const { result, elapsed, log } = run("observed-layout-failover", 650000);
+    expect(result.status).toBe(0);
+    expect(elapsed).toBeLessThan(610000);
+    expect(log).toContain("APT-MIRROR stage=download-retry exit=0");
+    expect(log).toContain("OBSERVED_FAILOVER_FIREFOX_EXECUTED");
+}, 660000);
+
+test("observed lookalike stays on bounded legacy setup without mirror failover", () => {
+    const { result, elapsed, log } = run("observed-lookalike-rejected", 650000);
+    expect(result.status).toBe(0);
+    expect(elapsed).toBeLessThan(610000);
+    expect(log).toContain("profile=unsupported reason=unsupported-suite-source-layout");
+    expect(log).toContain("OBSERVED_LOOKALIKE_LEGACY_ONLY");
+    expect(log).not.toContain("APT-MIRROR stage=download-retry");
+}, 660000);
+
+test("observed unsafe metadata fails before legacy acquisition or readiness", () => {
+    const { result, elapsed, log } = run("observed-unsafe-rejected", 650000);
+    expect(result.status).toBe(0);
+    expect(elapsed).toBeLessThan(610000);
+    expect(log).toContain("APT-MIRROR unsafe source; refusing acquisition");
+    expect(log).toContain("OBSERVED_UNSAFE_REJECTED");
+    expect(log).not.toContain("APT mirror profile unsupported/target absent; using existing setup.");
+    expect(log).not.toContain("Direct-runner stage: ready");
+}, 660000);
+
+test("observed layout total transport failure cannot enter legacy or readiness", () => {
+    const { result, elapsed, log } = run("observed-total-failure-no-legacy", 650000);
+    expect(result.status).toBe(0);
+    expect(elapsed).toBeLessThan(610000);
+    expect(log).toMatch(/OBSERVED_TOTAL_FAILURE_VERIFIED exit=(100|124)/);
+    expect(log).toContain("OBSERVED_ALTERNATIVE_BLOCKED");
+    expect(log).not.toContain("OBSERVED_FAILOVER_FIREFOX_EXECUTED");
 }, 660000);
 
 for (const scenario of ["unavailable", "slow"]) {

@@ -23,9 +23,9 @@ export const DEFAULT_CALENDAR_VIEW_TYPE = "week";
 export type CalendarRoleKey = "roleTitle" | "roleStart" | "roleAllDay" | "roleDuration";
 
 /** Wall-clock minutes-from-midnight default for the grid's working-hours band: 09:00. */
-export const DEFAULT_WORKING_HOURS_START_MINUTES = 9 * 60;
+export { DEFAULT_WORKING_HOURS_START_MINUTES } from "$shared/services/calendarHourMinuteLayout";
 /** Wall-clock minutes-from-midnight default for the grid's working-hours band: 18:00. */
-export const DEFAULT_WORKING_HOURS_END_MINUTES = 18 * 60;
+export { DEFAULT_WORKING_HOURS_END_MINUTES } from "$shared/services/calendarHourMinuteLayout";
 
 export interface CalendarSettings {
     name: string;

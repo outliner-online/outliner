@@ -12,6 +12,25 @@ COMPONENTS = {'main', 'restricted', 'universe', 'multiverse'}
 MIRROR_URI = 'mirror+file:/etc/apt/apt-mirrors.txt'
 
 
+def reject_unsafe_source_metadata(text):
+    """Reject explicit trust relaxations before structural Deb822 parsing.
+
+    A malformed earlier paragraph must not prevent inspection of a later,
+    independently parseable security field.
+    """
+    for line in text.splitlines():
+        match = re.fullmatch(r'([A-Za-z-]+):[ \t]+([^\n]+)', line)
+        if not match:
+            continue
+        key, value = match[1], match[2].strip()
+        if key == 'Trusted' and value.lower() in ('yes', 'true', '1'):
+            raise ValueError('weakened-source-trust')
+        if key in ('Check-Date', 'Check-Valid-Until') and value.lower() not in ('yes', 'true', '1'):
+            raise ValueError('weakened-source-validity')
+        if key.startswith(('Allow-', 'Valid-Until-')):
+            raise ValueError('unsupported-source-security-override')
+
+
 def parse_mirrors(text):
     if len(text.encode()) > 4096:
         raise ValueError('mirrorlist-bound')
@@ -50,6 +69,7 @@ def source_fields(block):
 def fallback_plan(sources, mirrors, failed_uri, native_exit, remaining_ms, nonce, failure_kind):
     if len(sources.encode()) > 16384 or not re.fullmatch('[a-f0-9]{32}', nonce):
         raise ValueError('scope-bound')
+    reject_unsafe_source_metadata(sources)
     failed = urlsplit(failed_uri)
     if (failed.scheme != 'http' or failed.hostname != 'us-east-2.ec2.archive.ubuntu.com'
             or failed.port is not None or failed.username or failed.password or failed.query or failed.fragment
@@ -66,10 +86,13 @@ def fallback_plan(sources, mirrors, failed_uri, native_exit, remaining_ms, nonce
     replaced = 0
     security = 0
     private = '/tmp/outliner-apt-' + nonce
+    parsed_blocks = []
     for i in range(0, len(blocks), 2):
         fields = source_fields(blocks[i])
         if not fields:
             continue
+        parsed_blocks.append((i, fields))
+    for i, fields in parsed_blocks:
         if fields.get('Types') != 'deb' or fields.get('Signed-By') != '/usr/share/keyrings/ubuntu-archive-keyring.gpg':
             raise ValueError('unsupported-ubuntu-source-contract')
         if set(fields.get('Components', '').split()) != COMPONENTS:
@@ -81,8 +104,9 @@ def fallback_plan(sources, mirrors, failed_uri, native_exit, remaining_ms, nonce
             if count != 1:
                 raise ValueError('ambiguous-source-uri')
             replaced += 1
-        elif suites == {'resolute-security'} and fields.get('URIs') in ('http://security.ubuntu.com/ubuntu', 'http://security.ubuntu.com/ubuntu/',
-                                                                               'https://security.ubuntu.com/ubuntu', 'https://security.ubuntu.com/ubuntu/'):
+        elif suites == {'resolute-security'} and fields.get('URIs') in (MIRROR_URI,
+                'http://security.ubuntu.com/ubuntu', 'http://security.ubuntu.com/ubuntu/',
+                'https://security.ubuntu.com/ubuntu', 'https://security.ubuntu.com/ubuntu/'):
             security += 1  # Entire original security paragraph remains byte-identical.
         else:
             raise ValueError('unsupported-suite-source-layout')

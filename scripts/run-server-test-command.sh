@@ -12,6 +12,27 @@ fi
 
 cd "$ROOT_DIR/server"
 
+MOCHA_ARGS=(
+    --exclude "tests/cloud-production-entrypoint.test.ts"
+    --exclude "tests/metrics.test.ts"
+    --exclude "tests/metrics-endpoint.test.ts"
+    --exclude "tests/idle-timeout-reconnect.test.ts"
+    --exclude "tests/hocuspocus-server.test.ts"
+    --exclude "tests/log-service.test.ts"
+    --exclude "tests/hocuspocus-auth-bypass.test.ts"
+    --exclude "tests/connection-limits.test.ts"
+    --exclude "tests/security.test.ts"
+    --exclude "tests/seed-api-validation.test.ts"
+    --exclude "tests/project-directory.test.ts"
+    --exclude "tests/project-directory-provider.test.ts"
+    --exclude "tests/project-directory-websocket.test.ts"
+    --timeout 10000
+    --exit
+)
+if [ "${SERVER_TEST_FILES_ONLY:-0}" != "1" ]; then
+    MOCHA_ARGS=("tests/**/*.test.{js,cjs,ts}" "${MOCHA_ARGS[@]}")
+fi
+
 # Use ts-node/esm loader to handle TypeScript imports in ESM environment.
 # pin-server-deps.mjs additionally forces bare `yjs` imports (server/src and the
 # co-compiled ../shared/src both use them) onto server/node_modules, so the two
@@ -23,4 +44,4 @@ cd "$ROOT_DIR/server"
 # tests or shorten their timeout.
 TS_NODE_TRANSPILE_ONLY=1 \
     NODE_OPTIONS="--loader ts-node/esm --loader ./tests/loaders/pin-server-deps.mjs --no-warnings" \
-    npx mocha "tests/**/*.test.{js,cjs,ts}" --exclude "tests/cloud-production-entrypoint.test.ts" --exclude "tests/metrics.test.ts" --exclude "tests/metrics-endpoint.test.ts" --exclude "tests/idle-timeout-reconnect.test.ts" --exclude "tests/hocuspocus-server.test.ts" --exclude "tests/log-service.test.ts" --exclude "tests/hocuspocus-auth-bypass.test.ts" --exclude "tests/connection-limits.test.ts" --exclude "tests/security.test.ts" --exclude "tests/seed-api-validation.test.ts" --exclude "tests/project-directory.test.ts" --exclude "tests/project-directory-provider.test.ts" --exclude "tests/project-directory-websocket.test.ts" --timeout 10000 --exit
+    npx mocha "${MOCHA_ARGS[@]}" "$@"

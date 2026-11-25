@@ -177,3 +177,9 @@ jobs:
       head_ref: ${{ needs.pr-guards.outputs.head_ref }}
       head_sha: ${{ needs.pr-guards.outputs.head_sha }}
     secrets: inherit
+
+  dependabot-docker-selection:
+    name: Dependabot Docker Selection
+    needs: [pr-guards, format]
+    if: needs.format.outputs.changes_pushed != 'true'
+    uses: ./.github/workflows/ci-dependabot-docker-selection.yml

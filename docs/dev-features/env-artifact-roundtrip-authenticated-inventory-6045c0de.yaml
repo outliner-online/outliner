@@ -1,0 +1,13 @@
+id: ENV-6045c0de
+title: Authenticated artifact round-trip inventory
+title-ja: 認証済みアーティファクト往復インベントリ
+description: >-
+  Keeps the E2E artifact round-trip poll and downloads on the same authenticated
+  workflow-run inventory while requiring exact upload identities and observable
+  negative controls.
+category: environment
+status: implemented
+components:
+  - .github/workflows
+tests:
+  - scripts/tests/env-artifact-roundtrip-authenticated-inventory-6045c0de.spec.ts

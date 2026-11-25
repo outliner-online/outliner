@@ -22,9 +22,10 @@ if (!process.argv[2]) {
 } else {
     const state = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
     const selected = uploads.filter(step =>
-        Function("always", "failure", "startsWith", "matrix", "steps", `return (${step.if})`)(
+        Function("always", "failure", "cancelled", "startsWith", "matrix", "steps", `return (${step.if})`)(
             () => true,
             () => state.failure,
+            () => state.cancelled,
             (value, prefix) => value.startsWith(prefix),
             { project: state.project },
             state.steps,
