@@ -142,6 +142,7 @@ export interface PushBrowserFixture {
     page: Page;
     cdp: CDPSession;
     registrationId: string;
+    workerVersion(): { versionId: string; runningStatus: string; } | undefined;
     cleanupFails: boolean;
     registrationDelay?: { started(generation: string): void; release: Promise<void>; };
     close(): Promise<void>;
@@ -157,6 +158,10 @@ export async function startPushBrowser(): Promise<PushBrowserFixture> {
             res.writeHead(status, { "content-type": "application/json" });
             res.end(JSON.stringify(body));
         };
+        if (pathname === "/api/deployment") {
+            json(200, { deploymentMode: "cloud" });
+            return;
+        }
         if (pathname === "/api/notifications/push/config") {
             json(200, {
                 available: true,
@@ -233,6 +238,10 @@ export async function startPushBrowser(): Promise<PushBrowserFixture> {
             });
             return;
         }
+        if (pathname.startsWith("/api/")) {
+            json(404, { error: "unavailable_fixture_resource" });
+            return;
+        }
         let filename = path.join(build, decodeURIComponent(pathname));
         if (!filename.startsWith(build) || !fs.existsSync(filename) || fs.statSync(filename).isDirectory()) {
             filename = path.join(build, "index.html");
@@ -248,10 +257,53 @@ export async function startPushBrowser(): Promise<PushBrowserFixture> {
     const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
     const browser = await chromium.launch({ args: ["--no-sandbox"], ...(executablePath ? { executablePath } : {}) });
     const context = await browser.newContext({ permissions: ["notifications"] });
+    // Production keeps its configured API origin. Only the external HTTP boundary is redirected into this fixture.
+    await context.route("**/*", async route => {
+        const request = route.request();
+        const url = new URL(request.url());
+        if (url.pathname.startsWith("/api/notifications/push/")) {
+            const response = await context.request.fetch(`${base}${url.pathname}${url.search}`, {
+                method: request.method(),
+                headers: {
+                    authorization: request.headers().authorization ?? "",
+                    "content-type": "application/json",
+                },
+                data: request.postData() ?? undefined,
+            });
+            await route.fulfill({
+                response,
+                headers: {
+                    ...response.headers(),
+                    "access-control-allow-origin": base,
+                    "access-control-allow-headers": "authorization,content-type",
+                    "access-control-allow-methods": "GET,POST,PUT,OPTIONS",
+                },
+            });
+        } else if (url.origin === base) await route.continue();
+        else await route.fulfill({ status: 503, body: '{"error":"external_fixture_resource_unavailable"}' });
+    });
+    await context.routeWebSocket("**", socket => socket.close());
     const page = await context.newPage();
+    const pageErrors: string[] = [];
+    const recordError = (message: string) => {
+        pageErrors.push(message.slice(0, 1000));
+        if (pageErrors.length > 8) pageErrors.shift();
+    };
+    page.on("pageerror", error => recordError(error.message));
+    page.on("console", message => {
+        if (message.type() === "error") recordError(message.text());
+    });
     await installPushBrowserPage(page);
     const cdp = await context.newCDPSession(page);
     const registrationIds = new Map<string, string>();
+    const versions = new Map<
+        string,
+        { versionId: string; registrationId: string; runningStatus: string; status: string; }
+    >();
+    cdp.on("ServiceWorker.workerErrorReported", event => recordError(event.errorMessage.errorMessage));
+    cdp.on("ServiceWorker.workerVersionUpdated", event => {
+        for (const version of event.versions) versions.set(version.versionId, version);
+    });
     cdp.on("ServiceWorker.workerRegistrationUpdated", event => {
         for (const registration of event.registrations) {
             registrationIds.set(registration.scopeURL, registration.registrationId);
@@ -265,16 +317,26 @@ export async function startPushBrowser(): Promise<PushBrowserFixture> {
         page,
         cdp,
         registrationId: "",
+        workerVersion: () =>
+            [...versions.values()].find(version =>
+                version.registrationId === fixture.registrationId && version.status === "activated"
+            ),
         cleanupFails: false,
         close: async () => {
             await browser.close();
             await new Promise<void>(resolve => server.close(() => resolve()));
         },
     };
-    await page.goto(base);
-    await page.evaluate(async () => {
-        await navigator.serviceWorker.ready;
-    });
+    try {
+        await page.goto(base, { waitUntil: "domcontentloaded", timeout: 30_000 });
+        await expect.poll(
+            () => page.evaluate(async () => (await navigator.serviceWorker.getRegistration("/"))?.active?.state),
+            { timeout: 30_000 },
+        ).toBe("activated");
+    } catch (error) {
+        await fixture.close();
+        throw new Error(`Production worker startup failed: ${String(error)}; page errors: ${pageErrors.join("; ")}`);
+    }
     await expect.poll(() => registrationIds.get(`${base}/`)).toBeTruthy();
     fixture.registrationId = registrationIds.get(`${base}/`)!;
     return fixture;
@@ -282,17 +344,30 @@ export async function startPushBrowser(): Promise<PushBrowserFixture> {
 
 export async function loginAccount(fixture: PushBrowserFixture, email: string, navigate = true): Promise<void> {
     const { page, base } = fixture;
-    if (navigate) await page.goto(base);
+    if (navigate) await page.goto(`${base}/projects/new`);
     await page.locator("#email").fill(email);
     await page.locator("#password").fill("isolated-password");
     await page.locator("button.email-login-btn").click();
     await expect.poll(() => page.locator("button.logout-btn").isVisible()).toBe(true);
 }
-export async function enrollCurrentDevice(fixture: PushBrowserFixture): Promise<string> {
+export async function openNotificationSettings(fixture: PushBrowserFixture): Promise<void> {
     const { page, base } = fixture;
-    if (page.url() !== `${base}/settings`) await page.goto(`${base}/settings`);
+    if (page.url() === `${base}/settings`) return;
+    await expect.poll(() => page.getByTestId("login-status-indicator").getAttribute("data-status"), {
+        timeout: 10_000,
+    }).toBe("authenticated");
+    const settings = page.getByRole("link", { name: "Settings", exact: true });
+    if (!await settings.isVisible()) await page.getByRole("button", { name: "Show sidebar", exact: true }).click();
+    await settings.click();
+}
+export async function enrollCurrentDevice(fixture: PushBrowserFixture): Promise<string> {
+    const { page } = fixture;
+    await openNotificationSettings(fixture);
+    await page.getByRole("button", { name: "Enable notifications" }).waitFor({ state: "visible" });
+    expect(await page.getByTestId("push-status").locator("..").textContent()).not.toContain("unavailable");
     await page.getByRole("button", { name: "Enable notifications" }).click();
-    await expect.poll(() => page.getByTestId("push-status").textContent()).toContain("registered");
+    await expect.poll(() => page.getByTestId("push-status").locator("..").textContent(), { timeout: 10_000 })
+        .toContain("This browser is registered.");
     const binding = await readBrowserBinding(page);
     expect(binding.generation).toBeTruthy();
     return binding.generation!;
@@ -338,6 +413,7 @@ export function pushPayload(generation: string, ruleId = "built-worker-rule"): M
 export interface WorkerObservations {
     shown: string[];
     operations: string[];
+    openFailures: string[];
     completedPush: number;
     click?: Promise<unknown>;
     releaseDiscovery?: () => void;
@@ -345,6 +421,46 @@ export interface WorkerObservations {
 }
 interface InstrumentedWorker extends ServiceWorkerGlobalScope {
     observations: WorkerObservations;
+}
+
+export async function restartPushWorker(fixture: PushBrowserFixture): Promise<void> {
+    const previous = fixture.context.serviceWorkers().find(worker =>
+        worker.url() === `${fixture.base}/service-worker.js`
+    );
+    if (!previous) throw new Error("Expected the production worker before restart");
+    const before = await inspectWorkerBinding(previous);
+    const version = fixture.workerVersion();
+    if (!version) throw new Error("Expected the activated production worker version");
+    await fixture.cdp.send("ServiceWorker.stopWorker", { versionId: version.versionId });
+    await expect.poll(() => fixture.workerVersion()?.runningStatus, { timeout: 10_000 }).toBe("stopped");
+    await fixture.cdp.send("ServiceWorker.startWorker", { scopeURL: `${fixture.base}/` });
+    await expect.poll(() => fixture.workerVersion()?.runningStatus, { timeout: 10_000 }).toBe("running");
+    // Playwright may retain the Worker wrapper while Chromium replaces its execution context.
+    const restarted = fixture.context.serviceWorkers().find(worker =>
+        worker.url() === `${fixture.base}/service-worker.js`
+    )!;
+    expect(await restarted.evaluate(() => "observations" in globalThis)).toBe(false);
+    const after = await inspectWorkerBinding(restarted);
+    expect(after.workerBootId).not.toBe(before.workerBootId);
+    expect(after.binding).toEqual(before.binding);
+}
+
+async function inspectWorkerBinding(worker: Worker) {
+    return worker.evaluate(async () => {
+        const scope = globalThis as unknown as ServiceWorkerGlobalScope;
+        const channel = new MessageChannel();
+        const response = new Promise<{ workerBootId: string; binding: unknown; }>((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error("Worker self-inspection timed out")), 5000);
+            channel.port1.onmessage = event => {
+                clearTimeout(timeout);
+                channel.port1.close();
+                if (event.data.error) reject(new Error(event.data.error));
+                else resolve(event.data);
+            };
+        });
+        scope.registration.active!.postMessage("outliner:read-web-push-binding", [channel.port2]);
+        return response;
+    });
 }
 
 export async function instrumentPushWorker(fixture: PushBrowserFixture): Promise<Worker> {
@@ -356,7 +472,7 @@ export async function instrumentPushWorker(fixture: PushBrowserFixture): Promise
     )!;
     await worker.evaluate(() => {
         const scope = globalThis as unknown as InstrumentedWorker;
-        scope.observations = { shown: [], operations: [], completedPush: 0 };
+        scope.observations = { shown: [], operations: [], openFailures: [], completedPush: 0 };
         const originalShow = scope.registration.showNotification.bind(scope.registration);
         scope.registration.showNotification = (title, options) => {
             scope.observations.shown.push(title);
@@ -382,7 +498,10 @@ export async function instrumentPushWorker(fixture: PushBrowserFixture): Promise
         const originalOpen = scope.clients.openWindow.bind(scope.clients);
         scope.clients.openWindow = url => {
             scope.observations.operations.push(`open:${url}`);
-            return originalOpen(url);
+            return originalOpen(url).catch(error => {
+                scope.observations.openFailures.push(error.name);
+                throw error;
+            });
         };
     });
     return worker;
@@ -425,8 +544,9 @@ export async function activateNotification(worker: Worker, tag: string, wait = t
 
 export async function observations(worker: Worker) {
     return worker.evaluate(() => {
-        const { shown, operations, completedPush } = (globalThis as unknown as InstrumentedWorker).observations;
-        return { shown, operations, completedPush };
+        const { shown, operations, openFailures, completedPush } =
+            (globalThis as unknown as InstrumentedWorker).observations;
+        return { shown, operations, openFailures, completedPush };
     });
 }
 

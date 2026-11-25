@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, test } from "vitest";
+import type { MobilePayloadV1 } from "../../shared/src/notifications/mobile-payload";
 import {
     activateNotification,
     buildPushWorker,
@@ -10,9 +11,11 @@ import {
     loginAccount,
     loginAndEnroll,
     observations,
+    openNotificationSettings,
     pushPayload,
     readBrowserBinding,
     releaseClientDiscovery,
+    restartPushWorker,
     startPushBrowser,
 } from "./helpers/web-push-browser.fixture";
 
@@ -50,6 +53,7 @@ describe("production-built Web Push worker", () => {
 
                 fixture.cleanupFails = true;
                 await fixture.page.evaluate(() => localStorage.setItem("fixture:cleanup-failure", "true"));
+                await fixture.page.goto(`${fixture.base}/projects/new`);
                 await fixture.page.locator("button.logout-btn").click();
                 await expect.poll(() => fixture.page.locator(".email-login-form").isVisible()).toBe(true);
                 expect((await readBrowserBinding(fixture.page)).generation).toBeUndefined();
@@ -79,10 +83,7 @@ describe("production-built Web Push worker", () => {
                 await deliverPush(fixture, worker, payloadB);
                 expect((await observations(worker)).shown).toHaveLength(2);
                 await fixture.page.goto("about:blank");
-                await fixture.cdp.send("ServiceWorker.stopAllWorkers");
-                const restarted = fixture.context.waitForEvent("serviceworker");
-                await fixture.cdp.send("ServiceWorker.startWorker", { scopeURL: `${fixture.base}/` });
-                await restarted;
+                await restartPushWorker(fixture);
                 worker = await instrumentPushWorker(fixture);
                 expect(
                     await worker.evaluate(async () =>
@@ -95,6 +96,11 @@ describe("production-built Web Push worker", () => {
                 expect((await observations(worker)).shown).toEqual([]);
                 await deliverPush(fixture, worker, payloadB);
                 expect((await observations(worker)).shown).toEqual(["Grid changed"]);
+                await activateNotification(worker, payloadB.ruleId);
+                expect((await observations(worker)).operations).toEqual([`open:${fixture.base}${payloadB.href}`]);
+                // Synthetic notification activation has no trusted OS interaction token. The actual browser
+                // openWindow call is still made; this boundary does not claim a successful native background tap.
+                expect((await observations(worker)).openFailures).toEqual(["InvalidAccessError"]);
             } finally {
                 await fixture.close();
             }
@@ -107,11 +113,47 @@ describe("production-built Web Push worker", () => {
                 const generation = await loginAndEnroll(fixture, "worker-tap@example.test");
                 const worker = await instrumentPushWorker(fixture);
                 const payload = pushPayload(generation);
-                await deliverPush(fixture, worker, payload);
-                await activateNotification(worker, payload.ruleId);
-                await expect.poll(() => fixture.page.url()).toBe(`${fixture.base}${payload.href}`);
-                expect((await observations(worker)).operations[0]).toBe(`navigate:${fixture.base}${payload.href}`);
-                await fixture.page.goto(`${fixture.base}/settings`);
+                const targets: MobilePayloadV1[] = [payload, {
+                    ...payload,
+                    ruleId: "calendar-tap-rule",
+                    target: { projectId: "project-one", kind: "calendar", objectId: "calendar-one" },
+                    title: "Calendar changed",
+                    href: `/project-one/-/calendars/calendar-one?${new URLSearchParams({
+                        context: JSON.stringify({
+                            version: 1,
+                            locale: "ja-JP",
+                            timeZone: "UTC",
+                            weekStart: 1,
+                            viewType: "month",
+                            anchorUtcMs: Date.UTC(2026, 0, 16, 12),
+                            rangeStartUtcMs: Date.UTC(2025, 11, 29),
+                            rangeEndUtcMs: Date.UTC(2026, 1, 2),
+                            monthLaneFilter: "focus-lane",
+                            collapsedEntryKeys: [],
+                        }),
+                    })}`,
+                }, {
+                    ...payload,
+                    ruleId: "kanban-tap-rule",
+                    target: { projectId: "project-one", kind: "kanban", objectId: "kanban-one" },
+                    title: "Kanban changed",
+                    href: `/project-one/-/kanbans/kanban-one?${new URLSearchParams({
+                        surface: "board",
+                        version: "1",
+                        locale: "en-GB",
+                        timeZone: "Asia/Tokyo",
+                    })}`,
+                }];
+                for (const target of targets) {
+                    const before = (await observations(worker)).operations.length;
+                    await deliverPush(fixture, worker, target);
+                    await activateNotification(worker, target.ruleId);
+                    await expect.poll(() => fixture.page.url()).toBe(`${fixture.base}${target.href}`);
+                    expect((await observations(worker)).operations[before]).toBe(
+                        `navigate:${fixture.base}${target.href}`,
+                    );
+                }
+                await openNotificationSettings(fixture);
                 await deliverPush(fixture, worker, { ...payload, ruleId: "held-tap-rule" });
                 const prior = (await observations(worker)).operations.length;
                 await holdClientDiscovery(worker);
@@ -138,23 +180,29 @@ describe("production-built Web Push worker", () => {
         try {
             const generation = await loginAndEnroll(fixture, "worker-failed-disarm@example.test");
             fixture.cleanupFails = true;
-            await fixture.page.evaluate(() => {
+            const failLocalWrites = () => {
                 localStorage.setItem("fixture:cleanup-failure", "true");
-                IDBObjectStore.prototype.put = function() {
-                    throw new DOMException("Controlled local write failure", "QuotaExceededError");
+                const original = IDBObjectStore.prototype.put;
+                IDBObjectStore.prototype.put = function(...args) {
+                    if (this.name === "enrollment" && this.transaction.db.name === "outliner-web-push") {
+                        throw new DOMException("Controlled local write failure", "QuotaExceededError");
+                    }
+                    return original.apply(this, args);
                 };
-            });
+            };
+            await fixture.page.addInitScript(failLocalWrites);
+            await fixture.page.evaluate(failLocalWrites);
             await fixture.page.getByRole("button", { name: "Disable notifications" }).click();
             await expect.poll(() => fixture.page.getByTestId("push-status").textContent()).toContain("incomplete");
             expect((await readBrowserBinding(fixture.page)).generation).toBe(generation);
+            await fixture.page.goto(`${fixture.base}/projects/new`);
             await fixture.page.locator("button.logout-btn").click();
-            await expect.poll(() => fixture.page.locator("button.logout-btn").isVisible()).toBe(true);
+            await expect.poll(() => fixture.page.locator(".auth-container .error").textContent()).toContain(
+                "Could not verify local disarm",
+            );
             expect(await fixture.page.locator(".email-login-form").isVisible()).toBe(false);
             await fixture.page.goto("about:blank");
-            await fixture.cdp.send("ServiceWorker.stopAllWorkers");
-            const restarted = fixture.context.waitForEvent("serviceworker");
-            await fixture.cdp.send("ServiceWorker.startWorker", { scopeURL: `${fixture.base}/` });
-            await restarted;
+            await restartPushWorker(fixture);
             const worker = await instrumentPushWorker(fixture);
             expect(
                 await worker.evaluate(async () =>
@@ -174,7 +222,7 @@ describe("production-built Web Push worker", () => {
         let release!: () => void;
         try {
             await loginAccount(fixture, "worker-delayed-a@example.test");
-            await fixture.page.goto(`${fixture.base}/settings`);
+            await openNotificationSettings(fixture);
             let started!: (generation: string) => void;
             const committed = new Promise<string>(resolve => started = resolve);
             fixture.registrationDelay = { started, release: new Promise<void>(resolve => release = resolve) };
@@ -183,7 +231,7 @@ describe("production-built Web Push worker", () => {
 
             const pageB = await fixture.context.newPage();
             await installPushBrowserPage(pageB);
-            await pageB.goto(`${fixture.base}/settings`);
+            await pageB.goto(`${fixture.base}/projects/new`);
             await pageB.locator("button.logout-btn").click();
             await expect.poll(() => pageB.locator(".email-login-form").isVisible()).toBe(true);
             const second = { ...fixture, page: pageB };
