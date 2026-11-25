@@ -380,18 +380,8 @@ jobs:
           UNAVAILABLE_ARTIFACT_ID: '0'
         run: |
           set -euo pipefail
-          response_file="$(mktemp)"
-          trap 'rm -f "$response_file"' EXIT
-          if gh api --include \
-            "repos/$GITHUB_REPOSITORY/actions/artifacts/$UNAVAILABLE_ARTIFACT_ID/zip" \
-            >"$response_file" 2>/dev/null; then
-            request_exit=0
-          else
-            request_exit=$?
-          fi
-          http_status="$(awk '/^HTTP\/[0-9.]+ [0-9][0-9][0-9]/{status=$2} END{print status}' "$response_file")"
-          scripts/ci/verify-unavailable-artifact-response.sh \
-            "$request_exit" "$http_status" "$UNAVAILABLE_ARTIFACT_ID"
+          scripts/ci/reject-unavailable-artifact.sh \
+            "$GITHUB_REPOSITORY" "$UNAVAILABLE_ARTIFACT_ID"
 
       - name: Download wrong-artifact control
         uses: actions/download-artifact@v8

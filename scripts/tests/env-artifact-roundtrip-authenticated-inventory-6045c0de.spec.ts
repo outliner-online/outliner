@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
@@ -12,7 +13,7 @@ import YAML from "yaml";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const workflowPath = path.join(root, ".github/workflows/ci-test-e2e.yml");
-const unavailableVerifier = path.join(root, "scripts/ci/verify-unavailable-artifact-response.sh");
+const unavailableControl = path.join(root, "scripts/ci/reject-unavailable-artifact.sh");
 
 function artifactJob(): Record<string, any> {
     return YAML.parse(fs.readFileSync(workflowPath, "utf8")).jobs["artifact-roundtrip"];
@@ -44,11 +45,9 @@ function expectUnavailableControl(control: Record<string, any>): void {
         GH_TOKEN: "${{ github.token }}",
         UNAVAILABLE_ARTIFACT_ID: "0",
     });
-    expect(control.run).toContain("gh api --include");
     expect(control.run).toContain(
-        "repos/$GITHUB_REPOSITORY/actions/artifacts/$UNAVAILABLE_ARTIFACT_ID/zip",
+        'scripts/ci/reject-unavailable-artifact.sh \\\n  "$GITHUB_REPOSITORY" "$UNAVAILABLE_ARTIFACT_ID"',
     );
-    expect(control.run).toContain("verify-unavailable-artifact-response.sh");
 }
 
 test("poll and every download use the same authenticated run inventory and upload identities", () => {
@@ -106,13 +105,43 @@ test("regression rejects split lookup paths and substituted artifact identities"
 test("unavailable control requires both download failure and authenticated absence evidence", () => {
     expectUnavailableControl(step(artifactJob(), "Reject an unavailable artifact"));
 
-    const verify = (requestExit: string, httpStatus: string, artifactId = "0"): number =>
-        spawnSync(unavailableVerifier, [requestExit, httpStatus, artifactId], { encoding: "utf8" }).status ?? -1;
+    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "unavailable-artifact-control-"));
+    const ghFixture = path.join(fixtureRoot, "gh");
+    fs.writeFileSync(
+        ghFixture,
+        `#!/bin/bash
+set -euo pipefail
+test "$1" = api
+test "$2" = --include
+test "$3" = repos/outliner-online/outliner/actions/artifacts/0/zip
+case "$PROVIDER_RESULT" in
+  not-found) printf 'HTTP/2.0 404 Not Found\\n'; exit 1 ;;
+  authentication) printf 'HTTP/2.0 401 Unauthorized\\n'; exit 1 ;;
+  network) echo 'connection reset' >&2; exit 1 ;;
+  success) printf 'HTTP/2.0 200 OK\\n'; exit 0 ;;
+esac
+exit 64
+`,
+        { mode: 0o755 },
+    );
 
-    expect(verify("1", "404"), "an authenticated not-found response is the required control").toBe(0);
-    expect(verify("1", "401"), "authentication failure must not satisfy the control").not.toBe(0);
-    expect(verify("1", ""), "a transport failure has no authoritative HTTP response").not.toBe(0);
-    expect(verify("0", ""), "an unexpectedly successful download must not satisfy the control").not.toBe(0);
-    expect(verify("invalid", "404"), "an ambiguous request result must not satisfy the control").not.toBe(0);
-    expect(verify("1", "404", "not-an-id"), "a 404 for an invalid identity must not satisfy the control").not.toBe(0);
+    const runControl = (providerResult: string): number =>
+        spawnSync(unavailableControl, ["outliner-online/outliner", "0"], {
+            encoding: "utf8",
+            env: {
+                ...process.env,
+                GH_TOKEN: "short-lived-test-token",
+                PATH: `${fixtureRoot}:${process.env.PATH}`,
+                PROVIDER_RESULT: providerResult,
+            },
+        }).status ?? -1;
+
+    try {
+        expect(runControl("not-found"), "the production control accepts the exact authenticated 404").toBe(0);
+        expect(runControl("authentication"), "the production control rejects authentication failure").not.toBe(0);
+        expect(runControl("network"), "the production control rejects transport failure").not.toBe(0);
+        expect(runControl("success"), "the production control rejects an unexpected download").not.toBe(0);
+    } finally {
+        fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    }
 });

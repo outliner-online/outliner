@@ -327,7 +327,7 @@ test("artifact and Pages deployment producers retain their consumer-facing contr
     );
     const unavailableControl = findStep(e2e, "artifact-roundtrip", "Reject an unavailable artifact");
     expect(unavailableControl["continue-on-error"]).toBeUndefined();
-    expect(unavailableControl.run).toContain("verify-unavailable-artifact-response.sh");
+    expect(unavailableControl.run).toContain("reject-unavailable-artifact.sh");
     const negativeControls = findStep(
         e2e,
         "artifact-roundtrip",
