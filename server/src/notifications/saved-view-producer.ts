@@ -50,6 +50,7 @@ interface Capture {
     readonly projection: Awaited<ReturnType<CapturedViewProducer["read"]>>;
     current(): boolean;
     definitionCurrent(): boolean;
+    definitionExists(): boolean;
     release(): Promise<void>;
 }
 
@@ -88,6 +89,12 @@ export function savedViewOpener(
                             return { status: "not_found", reason: terminal };
                         }
                         throw error;
+                    }
+                    if (!candidate.definitionExists()) {
+                        terminal = "not_found";
+                        await candidate.release();
+                        await retained.release();
+                        return { status: "not_found", reason: terminal };
                     }
                     if (
                         closed || !candidate.definitionCurrent() || retained.definition !== candidate.definition
@@ -398,6 +405,7 @@ function complete(
         projection: ready,
         current: () => !released && isCaptureCurrent(host, target, documents, definition, value),
         definitionCurrent: () => definitionFor(documents[0]!, target.kind as Kind, target.objectId) === definition,
+        definitionExists: () => definitionFor(documents[0]!, target.kind as Kind, target.objectId) !== undefined,
         async release() {
             if (released) return;
             released = true;

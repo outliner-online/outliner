@@ -1,3 +1,4 @@
+import { HocuspocusProvider } from "@hocuspocus/provider";
 import { expect } from "chai";
 import { execFile } from "node:child_process";
 import crypto from "node:crypto";
@@ -17,6 +18,7 @@ import { GRID_OBSERVATION_PARITY } from "../../shared/tests/fixtures/gridObserva
 import { releaseWithoutStore } from "../src/mcp/live-room.js";
 import { OutlinerRelationService } from "../src/mcp/relation-service.js";
 import { ViewObservationService } from "../src/notifications/view-observation.js";
+import { JobScheduler } from "../src/scheduler/Scheduler.js";
 import { seedGridObservationParity } from "./view-observation-grid-fixture.js";
 
 const UID = "owner";
@@ -198,6 +200,86 @@ describe("default saved Grid and Calendar observation producers", function() {
         await handle.close();
     });
 
+    it("invalidates and refreshes through browser Hocuspocus synchronization", async () => {
+        const browserProject = "demo";
+        const browserHeld = await seedGridObservationParity(server.hocuspocus, browserProject, UID);
+        const service = new ViewObservationService(server.hocuspocus, async () => true);
+        const handle = await service.openViewObservation({
+            uid: UID,
+            target: { projectId: browserProject, kind: "grid", objectId: "heterogeneous" },
+            context: gridContext,
+        });
+        const first = await handle.readSnapshot({ observedAtUtcMs: 1 });
+        expect(first.status).to.equal("ready");
+        if (first.status !== "ready") throw new Error("Grid not ready");
+        const invalidated = deferred();
+        handle.onInvalidate(() => invalidated.resolve());
+        const address = server.server.address() as { port: number; };
+        const browserDoc = new Y.Doc();
+        const room = `projects/${browserProject}/tables/choices`;
+        const provider = new HocuspocusProvider({
+            url: `ws://127.0.0.1:${address.port}/${room}`,
+            name: room,
+            document: browserDoc,
+        });
+        try {
+            await providerEvent(provider, "synced");
+            browserDoc.getMap<Y.Map<unknown>>("data").get("same")!.set("observed_on", "2026-11-27");
+            await invalidated.promise;
+            expect(handle.isCurrent(first.versionToken)).to.equal(false);
+            const refreshed = await handle.readSnapshot({ observedAtUtcMs: 2 });
+            expect(refreshed.status).to.equal("ready");
+            if (refreshed.status !== "ready" || refreshed.projection.kind !== "grid") {
+                throw new Error("Grid not ready");
+            }
+            expect(refreshed.projection.rows[0]).to.deep.equal([{ value: "2026-11-27" }]);
+        } finally {
+            provider.destroy();
+            browserDoc.destroy();
+            await handle.close();
+            await Promise.all(browserHeld.map(connection => connection.disconnect()));
+        }
+    });
+
+    it("invalidates and refreshes through the production scheduler writer", async () => {
+        const projectDoc = (held[0] as any).document as Y.Doc;
+        const schedule = new Y.Map<unknown>();
+        schedule.set("name", "Update observed date");
+        schedule.set("targetTableId", "choices");
+        schedule.set("sql", "INSERT INTO choices (id, observed_on, hidden) "
+            + "VALUES ('scheduler-row', DATE '2026-11-28', 'scheduled') RETURNING *");
+        schedule.set("timezone", "UTC");
+        projectDoc.getMap("schedules").set("observation-writer", schedule);
+        const service = new ViewObservationService(server.hocuspocus, async () => true);
+        const handle = await service.openViewObservation({
+            uid: UID,
+            target: { projectId: PROJECT, kind: "grid", objectId: "heterogeneous" },
+            context: gridContext,
+        });
+        const first = await handle.readSnapshot({ observedAtUtcMs: 1 });
+        expect(first.status).to.equal("ready");
+        if (first.status !== "ready") throw new Error("Grid not ready");
+        const invalidated = deferred();
+        handle.onInvalidate(() => invalidated.resolve());
+        const scheduler = new JobScheduler(server.hocuspocus);
+        scheduler.setDb(server.persistence.db);
+        scheduler.start(3_600_000, false);
+        try {
+            expect((await scheduler.runRuleNow(`projects/${PROJECT}`, "observation-writer")).success).to.equal(true);
+            await invalidated.promise;
+            expect(handle.isCurrent(first.versionToken)).to.equal(false);
+            const refreshed = await handle.readSnapshot({ observedAtUtcMs: 2 });
+            expect(refreshed.status).to.equal("ready");
+            if (refreshed.status !== "ready" || refreshed.projection.kind !== "grid") {
+                throw new Error("Grid not ready");
+            }
+            expect(refreshed.projection.rows.flat()).to.deep.include({ value: "2026-11-28" });
+        } finally {
+            await scheduler.stop();
+            await handle.close();
+        }
+    });
+
     it("refuses a complete PGlite result above the observation row limit", async () => {
         const service = new ViewObservationService(server.hocuspocus, async () => true);
         const handle = await service.openViewObservation({
@@ -244,6 +326,38 @@ describe("default saved Grid and Calendar observation producers", function() {
         expect(await handle.readSnapshot({ observedAtUtcMs: 3 })).to.deep.equal({
             status: "stale",
             reason: "incarnation_lost",
+        });
+        await handle.close();
+    });
+
+    it("reports not_found when a held Grid capture observes target deletion", async () => {
+        const reached = deferred();
+        const resume = deferred();
+        let certifications = 0;
+        const service = new ViewObservationService(server.hocuspocus, async () => true, {}, {
+            beforeFinalCertification: async () => {
+                if (++certifications === 2) {
+                    reached.resolve();
+                    await resume.promise;
+                }
+            },
+        });
+        const handle = await service.openViewObservation({
+            uid: UID,
+            target: { projectId: PROJECT, kind: "grid", objectId: "heterogeneous" },
+            context: gridContext,
+        });
+        const source = (held[1] as any).document as Y.Doc;
+        source.getMap<Y.Map<unknown>>("data").get("same")!.set("observed_on", "2026-11-25");
+        const pending = handle.readSnapshot({ observedAtUtcMs: 2 });
+        await reached.promise;
+        const projectDoc = (held[0] as any).document as Y.Doc;
+        projectDoc.getMap("yjsGrids").delete("heterogeneous");
+        resume.resolve();
+        expect(await pending).to.deep.equal({ status: "not_found", reason: "not_found" });
+        expect(await handle.readSnapshot({ observedAtUtcMs: 3 })).to.deep.equal({
+            status: "not_found",
+            reason: "not_found",
         });
         await handle.close();
     });
@@ -374,4 +488,14 @@ function deferred() {
     let resolve!: () => void;
     const promise = new Promise<void>(done => resolve = done);
     return { promise, resolve };
+}
+
+function providerEvent(provider: HocuspocusProvider, event: "synced") {
+    return new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`Provider ${event} timeout`)), 10_000);
+        provider.on(event, () => {
+            clearTimeout(timer);
+            resolve();
+        });
+    });
 }
