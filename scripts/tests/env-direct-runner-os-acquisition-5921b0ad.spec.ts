@@ -20,6 +20,7 @@ let buildContext: string | undefined;
 const output = (result: ReturnType<typeof spawnSync>) => `${result.stdout ?? ""}${result.stderr ?? ""}`;
 const builder = join(root, "scripts/tests/fixtures/direct-runner-os/build-fixture.sh");
 const suppliedProvisioningDeadline = process.env.DIRECT_RUNNER_OS_PROVISIONING_DEADLINE_NS;
+const failureControlTimeoutMs = 30_000;
 const provisioningDeadline = suppliedProvisioningDeadline
     ? BigInt(suppliedProvisioningDeadline)
     : process.hrtime.bigint() + 900_000_000_000n;
@@ -52,20 +53,34 @@ beforeAll(() => {
 
     // Negative control at the real provisioning boundary: the actual builder
     // must propagate a native failure before any scenario container can start.
-    const failingContext = mkdtempSync(join(tmpdir(), "direct-runner-os-failing-"));
-    writeFileSync(join(failingContext, "Dockerfile"), "FROM scratch\nCOPY absent-file /must-not-exist\n");
+    const suppliedFailureContext = process.env.DIRECT_RUNNER_OS_FAILURE_CONTROL_CONTEXT;
+    const failingContext = suppliedFailureContext ?? mkdtempSync(join(tmpdir(), "direct-runner-os-failing-"));
+    if (!suppliedFailureContext) {
+        writeFileSync(join(failingContext, "Dockerfile"), "FROM scratch\nCOPY absent-file /must-not-exist\n");
+    }
     try {
-        const failedBuild = spawnSync("bash", [builder, `${image}-failure-control`, failingContext], {
+        const controlArguments = suppliedFailureContext ? ["--network", "host", "--no-cache"] : [];
+        const remainingProvisioningMs = remainingProvisioning();
+        const provisioningDeadlineIsTighter = remainingProvisioningMs <= failureControlTimeoutMs;
+        const failedBuild = spawnSync("bash", [builder, `${image}-failure-control`, failingContext,
+            ...controlArguments], {
             cwd: root,
             encoding: "utf8",
-            timeout: 30000,
+            timeout: Math.min(failureControlTimeoutMs, remainingProvisioningMs),
             maxBuffer: 5 * 1024 * 1024,
         });
+        if ((failedBuild.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") {
+            expectNoScenarioContainers();
+            if (provisioningDeadlineIsTighter) {
+                throw new Error("Fixture provisioning deadline exceeded during the failure-control build");
+            }
+            throw new Error("Failure-control build exceeded its 30000ms local timeout");
+        }
         expect(failedBuild.error, output(failedBuild)).toBeUndefined();
         expect(failedBuild.status, output(failedBuild)).not.toBe(0);
         expectNoScenarioContainers();
     } finally {
-        rmSync(failingContext, { recursive: true, force: true });
+        if (!suppliedFailureContext) rmSync(failingContext, { recursive: true, force: true });
     }
 
     if (process.env.DIRECT_RUNNER_OS_PREBUILT_IMAGE) {
