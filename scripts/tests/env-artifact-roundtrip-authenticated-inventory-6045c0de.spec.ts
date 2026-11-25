@@ -49,6 +49,8 @@ function expectUnavailableControl(control: Record<string, any>): void {
     expect(control.run).toContain(
         'scripts/ci/reject-unavailable-artifact.sh \\\n  "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$UNAVAILABLE_ARTIFACT_ID"',
     );
+    expect(control.run).toContain('"${{ steps.representative-upload.outputs.artifact-id }}"');
+    expect(control.run).toContain('"${{ steps.wrong-upload.outputs.artifact-id }}"');
 }
 
 test("poll and every download use the same authenticated run inventory and upload identities", () => {
