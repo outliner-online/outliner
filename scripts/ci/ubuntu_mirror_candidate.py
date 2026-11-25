@@ -12,6 +12,25 @@ COMPONENTS = {'main', 'restricted', 'universe', 'multiverse'}
 MIRROR_URI = 'mirror+file:/etc/apt/apt-mirrors.txt'
 
 
+def reject_unsafe_source_metadata(text):
+    """Reject explicit trust relaxations before structural Deb822 parsing.
+
+    A malformed earlier paragraph must not prevent inspection of a later,
+    independently parseable security field.
+    """
+    for line in text.splitlines():
+        match = re.fullmatch(r'([A-Za-z-]+):[ \t]+([^\n]+)', line)
+        if not match:
+            continue
+        key, value = match[1], match[2].strip()
+        if key == 'Trusted' and value.lower() in ('yes', 'true', '1'):
+            raise ValueError('weakened-source-trust')
+        if key in ('Check-Date', 'Check-Valid-Until') and value.lower() not in ('yes', 'true', '1'):
+            raise ValueError('weakened-source-validity')
+        if key.startswith(('Allow-', 'Valid-Until-')):
+            raise ValueError('unsupported-source-security-override')
+
+
 def parse_mirrors(text):
     if len(text.encode()) > 4096:
         raise ValueError('mirrorlist-bound')
@@ -50,6 +69,7 @@ def source_fields(block):
 def fallback_plan(sources, mirrors, failed_uri, native_exit, remaining_ms, nonce, failure_kind):
     if len(sources.encode()) > 16384 or not re.fullmatch('[a-f0-9]{32}', nonce):
         raise ValueError('scope-bound')
+    reject_unsafe_source_metadata(sources)
     failed = urlsplit(failed_uri)
     if (failed.scheme != 'http' or failed.hostname != 'us-east-2.ec2.archive.ubuntu.com'
             or failed.port is not None or failed.username or failed.password or failed.query or failed.fragment

@@ -112,7 +112,7 @@ NODE
     ;;
   observed-unsafe-rejected)
     write_observed_layout
-    sed -i 's/Suites: resolute resolute-updates resolute-backports/Suites: resolute-proposed/' /etc/apt/sources.list.d/ubuntu.sources
+    sed -i '0,/Types: deb/s//Types: deb\n folded-value/' /etc/apt/sources.list.d/ubuntu.sources
     echo 'Allow-Insecure: yes' >> /etc/apt/sources.list.d/ubuntu.sources
     status=0
     E2E_BROWSER=firefox bash /fixture/scripts/setup-direct-runner-os.sh 2>&1 | tee /tmp/unsafe-setup.log || status=$?

@@ -89,6 +89,11 @@ class Plan(unittest.TestCase):
         sources += '\nAllow-Insecure: yes\n'
         with self.assertRaisesRegex(ValueError, '^unsupported-source-security-override$'):
             self.plan(sources=sources)
+    def test_later_unsafe_override_is_not_masked_by_earlier_deb822_folding(self):
+        sources=SOURCES.replace('Types: deb','Types: deb\n folded-value',1)
+        sources += '\nAllow-Insecure: yes\n'
+        with self.assertRaisesRegex(ValueError, '^unsupported-source-security-override$'):
+            self.plan(sources=sources)
     def test_deadline_not_reset(self):
         for remaining in (0,5000,600000):
             with self.assertRaises(ValueError):self.plan(remaining_ms=remaining)
