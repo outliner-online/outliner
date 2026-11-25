@@ -41,6 +41,15 @@ jobs:
           cd client
           ./node_modules/.bin/vitest list --project unit --no-static-parse \
             --json=../coverage/unit-baseline/selection.json
+      - name: Install unit orchestration regression dependencies
+        run: npm ci --prefix scripts/tests --ignore-scripts --no-audit --no-fund
+      - name: Verify unit shard orchestration regressions
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p job_logs
+          scripts/run-env-tests.sh --isolated env-ci-unit-native-shards-5995a001.spec.ts \
+            2>&1 | tee job_logs/unit-shard-regressions.log
       - name: Upload native coverage baseline
         if: always()
         uses: actions/upload-artifact@v7
@@ -50,6 +59,7 @@ jobs:
             coverage/unit-baseline/coverage-final.json
             coverage/unit-baseline/selection.json
             job_logs/unit-coverage-baseline.log
+            job_logs/unit-shard-regressions.log
           archive: true
           if-no-files-found: error
           retention-days: 2

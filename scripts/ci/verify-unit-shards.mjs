@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const artifactDir = path.resolve(process.argv[2] ?? "unit-artifacts");
 const shardCount = Number(process.argv[3] ?? 2);
@@ -13,6 +15,12 @@ if (!runId || !runAttempt) throw new Error("GITHUB_RUN_ID and GITHUB_RUN_ATTEMPT
 const clientDir = path.resolve("client");
 const vitestBin = process.env.UNIT_VITEST_BIN ?? path.join(clientDir, "node_modules/.bin/vitest");
 const configArgs = process.env.UNIT_VITEST_CONFIG ? [`--config=${process.env.UNIT_VITEST_CONFIG}`] : [];
+// Resolve the same Istanbul implementation as the pinned native V8 provider.
+const clientRequire = createRequire(path.join(clientDir, "package.json"));
+const coverageRequire = createRequire(clientRequire.resolve("@vitest/coverage-v8"));
+const { createCoverageMap } = await import(
+    pathToFileURL(coverageRequire.resolve("@vitest/istanbul-lib-coverage")).href
+);
 
 function relativeFile(file) {
     const withoutProject = file.trim().replace(/^\[unit\]\s+/, "");
@@ -87,16 +95,20 @@ function validateCoverageMaps(coverage) {
             if (JSON.stringify(definitions) !== JSON.stringify(counters)) {
                 throw new Error(`coverage ${mapName} does not match ${counterName} counters: ${file}`);
             }
+            if (counterName === "b") {
+                for (const key of definitions) {
+                    if (!Array.isArray(data.b[key]) || data.b[key].length !== data.branchMap[key].locations.length) {
+                        throw new Error(`coverage branch locations do not match counters: ${file}`);
+                    }
+                }
+            }
         }
     }
 }
 function coverageEntryCount(data) {
     return Object.keys(data.statementMap).length + Object.keys(data.fnMap).length + Object.keys(data.branchMap).length;
 }
-function canonicalDefinitions(map) {
-    return [...new Set(Object.values(map).map((definition) => JSON.stringify(definition)))].sort();
-}
-function coverageDefinitionSignatures(map) {
+function coverageDefinitionSignatures(map, mapName, virtualSource) {
     const withoutColumns = (value) => {
         if (Array.isArray(value)) return value.map(withoutColumns);
         if (value && typeof value === "object") {
@@ -108,7 +120,21 @@ function coverageDefinitionSignatures(map) {
         }
         return value;
     };
-    return [...new Set(Object.values(map).map((definition) => JSON.stringify(withoutColumns(definition))))].sort();
+    return [
+        ...new Set(
+            Object.values(map).map((definition) => {
+                // Native position-based merging can retain a different generated
+                // name or branch type. Compare the complete source locations,
+                // including every branch arm, without using those labels as IDs.
+                const sourceDefinition = Object.fromEntries(
+                    Object.entries(definition).filter(([key]) =>
+                        !(mapName === "fnMap" && key === "name") && !(mapName === "branchMap" && key === "type")
+                    ),
+                );
+                return JSON.stringify(virtualSource ? withoutColumns(sourceDefinition) : sourceDefinition);
+            }),
+        ),
+    ].sort();
 }
 function validateCoverageSchema(coverage, schema, shard) {
     for (const [file, expected] of Object.entries(schema)) {
@@ -121,88 +147,39 @@ function validateCoverageSchema(coverage, schema, shard) {
     }
 }
 function mergeCoverageReports(reports) {
-    const result = {};
+    const result = createCoverageMap({});
     for (const coverage of reports) {
-        for (const [file, data] of Object.entries(coverage)) {
-            const target = result[file] ??= {
-                ...data,
-                statementMap: {},
-                fnMap: {},
-                branchMap: {},
-                s: {},
-                f: {},
-                b: {},
-            };
-            for (const [mapName, counterName] of [["statementMap", "s"], ["fnMap", "f"], ["branchMap", "b"]]) {
-                const definitions = new Map(Object.entries(target[mapName]).map(([key, definition]) => [
-                    JSON.stringify(definition),
-                    key,
-                ]));
-                for (const [key, definition] of Object.entries(data[mapName])) {
-                    const serialized = JSON.stringify(definition);
-                    let targetKey = definitions.get(serialized);
-                    if (targetKey === undefined) {
-                        targetKey = String(definitions.size);
-                        definitions.set(serialized, targetKey);
-                        target[mapName][targetKey] = definition;
-                        target[counterName][targetKey] = counterName === "b" ? [] : 0;
-                    }
-                    if (counterName === "b") {
-                        const counts = data[counterName][key];
-                        target[counterName][targetKey] = counts.map((count, index) =>
-                            count + (target[counterName][targetKey][index] ?? 0)
-                        );
-                    } else {
-                        target[counterName][targetKey] += data[counterName][key];
-                    }
-                }
-            }
-        }
+        // Native merges may mutate their first input. Keep each shard intact
+        // for the independent completeness checks below.
+        result.merge(structuredClone(coverage));
     }
-    return result;
+    return Object.fromEntries(result.files().map((file) => [file, result.fileCoverageFor(file).toJSON()]));
 }
-function validateCompleteCoverageMaps(coverage, baseline, shardReports) {
+function normalizedCoverageDefinitions(coverage) {
+    // An uncovered native report can contain several generated definitions at
+    // the same source position. Native execution merges those positions and
+    // renames colliding anonymous functions. Apply that same normalization to
+    // both inputs before comparing full definitions, including branch arms.
+    // The doubled counters are deliberately unused; only the maps are compared.
+    return mergeCoverageReports([coverage, coverage]);
+}
+function validateCompleteCoverageMaps(coverage, baseline, inventory, label) {
+    const normalized = normalizedCoverageDefinitions(coverage);
     for (const [file, expected] of Object.entries(baseline)) {
         if (coverageEntryCount(expected) === 0) continue;
-        if (!coverage[file]) throw new Error(`merged coverage is missing executable file: ${file}`);
+        if (!normalized[file]) throw new Error(`${label} coverage is missing executable file: ${file}`);
         for (const mapName of ["statementMap", "fnMap", "branchMap"]) {
-            if (file.endsWith(".svelte")) {
-                const expectedCount = Object.keys(expected[mapName]).length;
-                const mergedCount = Object.keys(coverage[file][mapName]).length;
-                // Svelte's discovery and execution transforms can assign different
-                // generated locations to the same source definition, so location
-                // signatures are not stable across those two native runs. The
-                // independent baseline still provides a strict completeness floor:
-                // every executable definition kind it discovers must be represented
-                // by at least as many definitions in the merged shard result.
-                if (mergedCount < expectedCount) {
-                    throw new Error(
-                        `merged coverage ${mapName} has fewer definitions than native Svelte selection: ${file}`,
-                    );
-                }
-                // Do not let independently generated locations from different
-                // shards inflate the merged count and conceal a shared omission.
-                // A shard may legitimately expose a smaller transformed map, but
-                // at least one current-run schema must independently meet the
-                // native definition floor; combining two partial maps is not proof.
-                const largestShardCount = Math.max(
-                    ...shardReports.map((report) => Object.keys(report[file]?.[mapName] ?? {}).length),
-                );
-                if (largestShardCount < expectedCount) {
-                    throw new Error(
-                        `shard coverage ${mapName} has fewer definitions than native Svelte selection: ${file}`,
-                    );
-                }
-                continue;
-            }
-            // Match stable JS/TS source maps by source structure. Svelte maps
-            // are validated against each runner's exact schema above because
-            // discovery and execution can emit different generated nodes.
-            const mergedSignatures = new Set(coverageDefinitionSignatures(coverage[file][mapName]));
-            const missingSignatures = coverageDefinitionSignatures(expected[mapName])
-                .filter((definition) => !mergedSignatures.has(definition));
+            // Generated virtual sources, such as Paraglide's source-map-only
+            // runtime, can shift columns between native runs. Real repository
+            // sources, including Svelte, retain exact columns and full structure.
+            const virtualSource = !inventory.has(path.resolve(file));
+            const actualSignatures = new Set(
+                coverageDefinitionSignatures(normalized[file][mapName], mapName, virtualSource),
+            );
+            const missingSignatures = coverageDefinitionSignatures(expected[mapName], mapName, virtualSource)
+                .filter((definition) => !actualSignatures.has(definition));
             if (missingSignatures.length) {
-                throw new Error(`merged coverage ${mapName} is missing native selection definitions: ${file}`);
+                throw new Error(`${label} coverage ${mapName} is missing native selection definitions: ${file}`);
             }
         }
     }
@@ -245,6 +222,13 @@ const expectedCoverageFiles = repositoryCoverageInventory();
 const baselineSelection = nativeSelection.find((test) => relativeFile(test.file) === "src/utils/typeGuards.test.ts")
     ?? nativeSelection[0];
 const coverageBaseline = nativeCoverageBaseline(relativeFile(baselineSelection.file));
+if (!Object.keys(coverageBaseline).length) throw new Error("empty native coverage baseline");
+const missingBaselineFiles = expectedCoverageFiles.filter((file) => !coverageBaseline[file]);
+if (missingBaselineFiles.length) {
+    throw new Error(
+        `native coverage baseline is missing repository files: ${missingBaselineFiles.slice(0, 20).join(",")}`,
+    );
+}
 validateCoverageMaps(coverageBaseline);
 let nativeCoverageFiles;
 for (let shard = 1; shard <= shardCount; shard++) {
@@ -285,7 +269,12 @@ const mergedCoverage = mergeCoverageReports(coverageReports);
 if (Object.keys(mergedCoverage).length !== nativeCoverageFiles.length) {
     throw new Error("merged coverage is incomplete");
 }
-validateCompleteCoverageMaps(mergedCoverage, coverageBaseline, coverageReports);
+const normalizedBaseline = normalizedCoverageDefinitions(coverageBaseline);
+const inventory = new Set(expectedCoverageFiles);
+validateCompleteCoverageMaps(mergedCoverage, normalizedBaseline, inventory, "merged");
+coverageReports.forEach((coverage, index) =>
+    validateCompleteCoverageMaps(coverage, normalizedBaseline, inventory, `shard ${index + 1}`)
+);
 const output = path.resolve("coverage/unit_and_integration/coverage-final.json");
 fs.mkdirSync(path.dirname(output), { recursive: true });
 fs.writeFileSync(output, JSON.stringify(mergedCoverage));
