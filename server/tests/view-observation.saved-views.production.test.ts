@@ -1,9 +1,13 @@
 import { expect } from "chai";
 import * as Y from "yjs";
-import type { CalendarObservationContextV1 } from "../../shared/src/notifications/calendarProjection.js";
+import {
+    type CalendarObservationContextV1,
+    decodeCalendarObservationContext,
+} from "../../shared/src/notifications/calendarProjection.js";
 import type { GridObservationContextV1 } from "../../shared/src/notifications/gridProjection.js";
 import { computeViewRange } from "../../shared/src/services/calendarGridRange.js";
 import { createGridEntry, getGridDefinitionTarget, setGridQuery } from "../../shared/src/services/gridDefinition.js";
+import { GRID_OBSERVATION_PARITY } from "../../shared/tests/fixtures/gridObservationParity.js";
 import { ViewObservationService } from "../src/notifications/view-observation.js";
 import { Project } from "../src/schema/app-schema.js";
 
@@ -48,7 +52,7 @@ describe("default saved Grid and Calendar observation producers", function() {
             kind: "grid",
             title: "Heterogeneous",
             columns: [{ label: "value" }],
-            rows: [[{ value: "2026-11-21" }], [{ value: "2026-11-22T12:34:56.000Z" }]],
+            rows: GRID_OBSERVATION_PARITY.expectedVisibleValues.map(value => [{ value }]),
         });
         expect(handle.isCurrent(snapshot.versionToken)).to.equal(true);
         await handle.close();
@@ -71,10 +75,9 @@ describe("default saved Grid and Calendar observation producers", function() {
         const snapshot = await handle.readSnapshot({ observedAtUtcMs: 1 });
         expect(snapshot.status).to.equal("ready");
         if (snapshot.status !== "ready" || snapshot.projection.kind !== "grid") throw new Error("Grid not ready");
-        expect(snapshot.projection.rows).to.deep.equal([
-            [{ value: "2026-11-21T00:00:00.000Z" }],
-            [{ value: "2026-11-22T12:34:56.000Z" }],
-        ]);
+        expect(snapshot.projection.rows).to.deep.equal(
+            GRID_OBSERVATION_PARITY.expectedAmbiguousValues.map(value => [{ value }]),
+        );
         await handle.close();
     });
 
@@ -114,6 +117,38 @@ describe("default saved Grid and Calendar observation producers", function() {
         await handle.close();
     });
 
+    it("never certifies an old Grid query when the definition changes during source opening", async () => {
+        const reached = deferred();
+        const resume = deferred();
+        let sourceOpenings = 0;
+        const service = new ViewObservationService(server.hocuspocus, async () => true, {}, {
+            beforeSourceOpen: async () => {
+                if (++sourceOpenings === 1) {
+                    reached.resolve();
+                    await resume.promise;
+                }
+            },
+        });
+        const opening = service.openViewObservation({
+            uid: UID,
+            target: { projectId: PROJECT, kind: "grid", objectId: "heterogeneous" },
+            context: gridContext,
+        });
+        await reached.promise;
+        const projectDoc = (held[0] as any).document as Y.Doc;
+        setGridQuery(
+            getGridDefinitionTarget(projectDoc as never, "heterogeneous")!,
+            "SELECT observed_on AS value FROM choices",
+        );
+        resume.resolve();
+        const handle = await opening;
+        const snapshot = await handle.readSnapshot({ observedAtUtcMs: 1 });
+        expect(snapshot.status).to.equal("ready");
+        if (snapshot.status !== "ready" || snapshot.projection.kind !== "grid") throw new Error("Grid not ready");
+        expect(snapshot.projection.rows).to.deep.equal([[{ value: "2026-11-21" }]]);
+        await handle.close();
+    });
+
     it("executes Calendar SQL with the explicit saved range and time-zone context", async () => {
         const anchorUtcMs = Date.parse("2026-11-21T12:00:00Z");
         const range = computeViewRange(anchorUtcMs, "day", 1, "UTC");
@@ -142,17 +177,22 @@ describe("default saved Grid and Calendar observation producers", function() {
         expect(snapshot.projection.content.some(value => value.kind === "timed" && value.title === "Choice"))
             .to.equal(true);
         expect(snapshot.effectiveContext).to.deep.equal(context);
+        const link = new URL(snapshot.deepLink, "https://outliner.example");
+        expect(decodeCalendarObservationContext(link.searchParams.get("context") ?? "")).to.deep.equal({
+            valid: true,
+            context,
+        });
         await handle.close();
     });
 });
 
 async function seedSavedViews(host: any): Promise<any[]> {
     const canonical = Project.createInstance("Saved views");
-    const choices = table("choices", "CREATE TABLE choices (id TEXT PRIMARY KEY, observed_on DATE NOT NULL)", {
-        same: { observed_on: "2026-11-21" },
+    const choices = table("choices", GRID_OBSERVATION_PARITY.choicesSchema, {
+        same: GRID_OBSERVATION_PARITY.choicesRow,
     });
-    const notes = table("notes", "CREATE TABLE notes (id TEXT PRIMARY KEY, observed_at TIMESTAMP NOT NULL)", {
-        same: { observed_at: "2026-11-22 12:34:56" },
+    const notes = table("notes", GRID_OBSERVATION_PARITY.notesSchema, {
+        same: GRID_OBSERVATION_PARITY.notesRow,
     });
     for (
         const [id, name, sqlName, doc] of [["choices", "Choices", "choices", choices], ["notes", "Notes", "notes",
@@ -166,10 +206,8 @@ async function seedSavedViews(host: any): Promise<any[]> {
     }
     createGridEntry(canonical.ydoc as never, "heterogeneous", {
         name: "Heterogeneous",
-        query: "SELECT 'choices' AS source_kind, id AS source_id, observed_on AS value FROM choices "
-            + "UNION ALL SELECT 'notes' AS source_kind, id AS source_id, "
-            + "observed_at + INTERVAL '0 seconds' AS value FROM notes ORDER BY source_kind",
-        components: { source_kind: { hidden: true }, source_id: { hidden: true } },
+        query: `${GRID_OBSERVATION_PARITY.branchA} UNION ALL ${GRID_OBSERVATION_PARITY.branchB} ORDER BY source_kind`,
+        components: { source_kind: { hidden: true }, source_id: { hidden: true }, hidden: { hidden: true } },
     });
     const calendar = new Y.Map<unknown>();
     calendar.set("name", "Calendar");

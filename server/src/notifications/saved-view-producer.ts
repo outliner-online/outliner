@@ -54,7 +54,10 @@ export function savedViewOpener(
     host: Host,
     canAccess: (uid: string, projectId: string) => Promise<boolean>,
     kind: Kind,
-    options: { beforeFinalCertification?: () => Promise<void>; } = {},
+    options: {
+        beforeFinalCertification?: () => Promise<void>;
+        beforeSourceOpen?: (tableId: string, index: number) => Promise<void>;
+    } = {},
 ): ViewProducerOpener {
     return async input => {
         let capture = await openCapture(host, canAccess, kind, input, options);
@@ -114,7 +117,10 @@ async function openCapture(
     canAccess: (uid: string, projectId: string) => Promise<boolean>,
     kind: Kind,
     { uid, target, context }: { uid: string; target: TargetRef; context: ObservationContext; },
-    options: { beforeFinalCertification?: () => Promise<void>; },
+    options: {
+        beforeFinalCertification?: () => Promise<void>;
+        beforeSourceOpen?: (tableId: string, index: number) => Promise<void>;
+    },
 ): Promise<Capture> {
     if (!hostValue.documents) throw new McpReadError("internal_failure", "Live room authority is unavailable");
     const host = hostValue as LiveRoomHost;
@@ -131,6 +137,10 @@ async function openCapture(
         const query = kind === "grid"
             ? getGridQuery(getGridDefinitionTarget(doc as never, target.objectId)!)
             : String(definition.get("query") ?? "");
+        // Capture the complete project/definition input before the first
+        // source-opening await. A later revision must never certify the query
+        // and settings selected above as if they came from that later state.
+        const projectInputRevision = documentRevision(doc);
         if (Buffer.byteLength(query, "utf8") > LIMITS.queryBytes) {
             transferred = true;
             return complete(project, sources, definition, {
@@ -151,11 +161,20 @@ async function openCapture(
             id,
             sqlName: String(entry.get("sqlName") ?? ""),
         })).filter(value => /^[A-Za-z_][A-Za-z0-9_]*$/.test(value.sqlName));
-        for (const table of tables) {
+        for (const [index, table] of tables.entries()) {
+            await options.beforeSourceOpen?.(table.id, index);
             const connection = await openLiveRoom(host, `projects/${target.projectId}/tables/${table.id}`, uid, {
                 effect: "none",
             });
             sources.set(table.id, connection);
+            if (
+                definitionFor(doc, kind, target.objectId) !== definition
+                || documentRevision(doc) !== projectInputRevision
+            ) {
+                transferred = true;
+                return complete(project, sources, definition, { status: "stale", reason: "inputs_changed" }, host,
+                    target, `stale:${projectInputRevision}`);
+            }
         }
         const docs = [doc, ...[...sources.values()].map(value => value.document as unknown as Y.Doc)];
         const capturedRevision = revision(docs);
@@ -410,6 +429,9 @@ function revision(documents: readonly Y.Doc[]) {
     const hash = crypto.createHash("sha256");
     for (const doc of documents) hash.update(Buffer.from(Y.encodeStateAsUpdate(doc)));
     return hash.digest("base64url");
+}
+function documentRevision(document: Y.Doc) {
+    return Buffer.from(Y.encodeStateAsUpdate(document)).toString("base64url");
 }
 function digest(value: string) {
     return crypto.createHash("sha256").update(value).digest("base64url");

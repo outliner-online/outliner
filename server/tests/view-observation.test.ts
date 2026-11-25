@@ -1,6 +1,9 @@
 import { expect } from "chai";
 import * as Y from "yjs";
-import type { GridObservationContextV1 } from "../../shared/src/notifications/gridProjection.js";
+import {
+    type GridObservationContextV1,
+    parseGridObservationContext,
+} from "../../shared/src/notifications/gridProjection.js";
 import { parseKanbanObservationContext } from "../../shared/src/notifications/kanbanProjection.js";
 import { type CapturedViewProducer, ViewObservationService } from "../src/notifications/view-observation.js";
 
@@ -43,6 +46,11 @@ describe("ViewObservationService retained lifecycle", () => {
         expect(first.status).to.equal("ready");
         if (first.status !== "ready") throw new Error("expected ready");
         expect(first.deepLink).to.contain("/project/-/grids/tasks?");
+        const gridUrl = new URL(first.deepLink, "https://outliner.example");
+        expect(parseGridObservationContext(gridUrl.searchParams.get("observation") ?? undefined)).to.deep.equal({
+            status: "supported",
+            context,
+        });
         expect(handle.isCurrent(first.versionToken)).to.equal(true);
 
         doc.getMap("source").set("value", 2);

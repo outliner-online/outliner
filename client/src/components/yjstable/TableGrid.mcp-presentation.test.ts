@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/svelte";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
+import { GRID_OBSERVATION_PARITY } from "../../../../shared/tests/fixtures/gridObservationParity";
 import {
     createGrid,
     getGridHandles,
@@ -68,15 +69,12 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
         const notes = getTableHandles(projectDoc, createTable(projectDoc, "Notes", "notes"))!;
         setSchemaText(
             choices,
-            "CREATE TABLE choices (id TEXT PRIMARY KEY, observed_on DATE NOT NULL, hidden TEXT)",
+            GRID_OBSERVATION_PARITY.choicesSchema,
         );
-        setSchemaText(notes, "CREATE TABLE notes (id TEXT PRIMARY KEY, observed_at TIMESTAMP NOT NULL, hidden TEXT)");
-        addRecord(choices, { observed_on: "2026-11-21", hidden: "choice-secret" }, "same");
-        addRecord(notes, { observed_at: "2026-11-22 12:34:56", hidden: "note-secret" }, "same");
-        const branchA =
-            "SELECT 'choices' AS source_kind, id AS source_id, observed_on AS value, hidden AS hidden FROM choices";
-        const branchB =
-            "SELECT 'notes' AS source_kind, id AS source_id, observed_at + INTERVAL '0 seconds' AS value, hidden AS hidden FROM notes";
+        setSchemaText(notes, GRID_OBSERVATION_PARITY.notesSchema);
+        addRecord(choices, GRID_OBSERVATION_PARITY.choicesRow, "same");
+        addRecord(notes, GRID_OBSERVATION_PARITY.notesRow, "same");
+        const { branchA, branchB } = GRID_OBSERVATION_PARITY;
         const grid = getGridHandles(
             projectDoc,
             createGrid(projectDoc, {
@@ -180,7 +178,7 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
             await waitFor(() => expect(view.container.querySelectorAll("tbody tr")).toHaveLength(2));
             await waitFor(() => expect(view.container.querySelectorAll("td[data-col='value'] button")).toHaveLength(2));
             expect(view.container.querySelector("td[data-col='value'] input[type='date']")).toBeNull();
-            const ambiguousValues = ["2026-11-21T00:00:00.000Z", "2026-11-22T12:34:56.000Z"];
+            const ambiguousValues = [...GRID_OBSERVATION_PARITY.expectedAmbiguousValues];
             expect([...view.container.querySelectorAll("td[data-col='value'] button")].map(cell => cell.textContent))
                 .toEqual(ambiguousValues);
             await waitFor(() =>

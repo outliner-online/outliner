@@ -23,7 +23,7 @@
         projectObjectsSelectedRoute,
     } from "../../lib/managementPaths";
     import { DemoInitAborted } from "../../lib/demoInit";
-    import { openRouteProject, type RouteProjectHandle } from "../../lib/routeProject";
+    import { openRouteProject, openRouteProjectById, type RouteProjectHandle } from "../../lib/routeProject";
     import type { GridObservationContextV1 } from "../../../../shared/src/notifications/gridProjection";
 
     const logger = getLogger("GridStandalonePage");
@@ -89,7 +89,9 @@
             // parameter change cannot leak a demo client reference.
             projectHandle?.release();
             projectHandle = undefined;
-            projectHandle = await openRouteProject(projectName, () => isDestroyed);
+            projectHandle = observationContext
+                ? await openRouteProjectById(projectName, () => isDestroyed)
+                : await openRouteProject(projectName, () => isDestroyed);
             if (!projectHandle) {
                 notFound = true;
                 return;

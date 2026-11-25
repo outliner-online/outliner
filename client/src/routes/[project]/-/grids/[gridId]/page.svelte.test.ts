@@ -9,16 +9,20 @@ vi.mock("../../../../../auth/UserManager", () => ({
     userManager: { getCurrentUser: () => null, addEventListener: () => () => {} },
 }));
 let projectDoc = new Y.Doc();
+const routeState = vi.hoisted(() => ({ openByTitle: vi.fn(), openById: vi.fn() }));
 vi.mock("../../../../../lib/routeProject", async () => {
     const { store } = await import("../../../../../stores/store.svelte");
+    const open = (tracker: typeof routeState.openByTitle) => vi.fn(async (projectName: string) => {
+        await Promise.resolve();
+        tracker(projectName);
+        store.project = { ydoc: projectDoc, schedules: projectDoc.getMap("schedules") } as unknown as NonNullable<
+            typeof store.project
+        >;
+        return { projectId: projectDoc.guid, release: vi.fn() };
+    });
     return {
-        openRouteProject: vi.fn(async () => {
-            await Promise.resolve();
-            store.project = { ydoc: projectDoc, schedules: projectDoc.getMap("schedules") } as unknown as NonNullable<
-                typeof store.project
-            >;
-            return { projectId: projectDoc.guid, release: vi.fn() };
-        }),
+        openRouteProject: open(routeState.openByTitle),
+        openRouteProjectById: open(routeState.openById),
     };
 });
 // Only Monaco is substituted in jsdom. SELECT, metadata and the Grid renderer
@@ -36,6 +40,8 @@ import GridStandalonePage from "./+page.svelte";
 beforeEach(() => {
     setPage({ params: { project: "demo", gridId: "grid-a" } });
     projectDoc = new Y.Doc();
+    routeState.openByTitle.mockClear();
+    routeState.openById.mockClear();
 });
 afterEach(async () => {
     cleanup();
@@ -135,6 +141,8 @@ describe("public demo standalone Grid observation context", { timeout: 60000 }, 
         render(DemoGridStandalonePage);
         await waitFor(() => expect(cell()?.textContent).toBe("42"), { timeout: 30000 });
         expect(screen.queryByTestId("grid-observation-context-error")).toBeNull();
+        expect(routeState.openById).toHaveBeenCalledWith("demo");
+        expect(routeState.openByTitle).not.toHaveBeenCalled();
     });
 
     it.each([

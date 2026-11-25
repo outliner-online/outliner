@@ -5,7 +5,10 @@ import type {
     CalendarObservationContextV1,
     CalendarVisibleProjection,
 } from "../../../shared/src/notifications/calendarProjection.js";
-import { validateCalendarObservationContext } from "../../../shared/src/notifications/calendarProjection.js";
+import {
+    encodeCalendarObservationContext,
+    validateCalendarObservationContext,
+} from "../../../shared/src/notifications/calendarProjection.js";
 import type {
     GridObservationContextV1,
     GridVisibleProjection,
@@ -233,7 +236,8 @@ function deepLink(target: TargetRef, context: ObservationContext): string {
         parameters.set("version", String(kanban.version));
         parameters.set("locale", kanban.locale);
         parameters.set("timeZone", kanban.timeZone);
-    } else parameters.set("observationContext", JSON.stringify(context));
+    } else if (target.kind === "grid") parameters.set("observation", JSON.stringify(context));
+    else parameters.set("context", encodeCalendarObservationContext(context as CalendarObservationContextV1));
     return `/${encodeURIComponent(target.projectId)}/-/${plural}/${encodeURIComponent(target.objectId)}?${parameters}`;
 }
 
