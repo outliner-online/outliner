@@ -59,13 +59,16 @@ function isolatedCheckout(directory: string, failures: { unit?: boolean; base?: 
             "test:base": productionScripts["test:base"],
         },
     }));
-    fs.writeFileSync(path.join(client, "src", "covered-source.js"), "export const coveredValue = 1;\n");
+    fs.writeFileSync(
+        path.join(client, "src", "covered-source.js"),
+        "export const coveredValue = 1;\nexport function coveredFunction() { return coveredValue; }\n",
+    );
     for (const file of ["first.test.js", "second.test.js"]) {
         fs.writeFileSync(
             path.join(client, "src", file),
-            `import { test, expect } from "vitest"; import { coveredValue } from "./covered-source.js"; test(${
+            `import { test, expect } from "vitest"; import { coveredFunction } from "./covered-source.js"; test(${
                 JSON.stringify(file)
-            }, () => expect(coveredValue).toBe(${failures.unit ? 2 : 1}));\n`,
+            }, () => expect(coveredFunction()).toBe(${failures.unit ? 2 : 1}));\n`,
         );
     }
     fs.writeFileSync(
@@ -265,6 +268,35 @@ describe("unit CI native shard orchestration", () => {
         const successfulWorkflow = runStableWorkflow(isolated);
         expect(successfulWorkflow.result.status).toBe(0);
         expect(successfulWorkflow.shardRuns.every((result) => result.status === 0)).toBe(true);
+        const nativeCoverageDirectory = path.join(isolated.checkout, "native-coverage");
+        const nativeCoverageRun = spawnSync(
+            path.join(isolated.client, "node_modules/.bin/vitest"),
+            [
+                "run",
+                "--project",
+                "unit",
+                "--coverage",
+                `--coverage.reportsDirectory=${nativeCoverageDirectory}`,
+            ],
+            { cwd: isolated.client, env: env() },
+        );
+        expect(nativeCoverageRun.status).toBe(0);
+        const nativeCoverage = JSON.parse(
+            fs.readFileSync(path.join(nativeCoverageDirectory, "coverage-final.json"), "utf8"),
+        );
+        const mergedCoverage = JSON.parse(
+            fs.readFileSync(
+                path.join(isolated.checkout, "coverage/unit_and_integration/coverage-final.json"),
+                "utf8",
+            ),
+        );
+        const coveredSource = nativeCoverage[path.join(isolated.client, "src/covered-source.js")];
+        expect(
+            Object.keys(coveredSource.statementMap).length
+                + Object.keys(coveredSource.fnMap).length
+                + Object.keys(coveredSource.branchMap).length,
+        ).toBeGreaterThan(1);
+        expect(mergedCoverage).toEqual(nativeCoverage);
         expect(fs.readFileSync(path.join(isolated.checkout, "job_logs/base-test.log"), "utf8")).toContain(
             "Tests  1 passed",
         );
