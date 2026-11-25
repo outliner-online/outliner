@@ -221,3 +221,94 @@ settings and a new observation before a later edit.
 The server notification adapter sends exact, caller-authorized bytes directly through Node HTTPS. It accepts only public IPv4 destinations on HTTPS port 443, pins the single DNS result set to the TLS connection, verifies the original DNS name and connected peer, and never follows redirects or uses an ambient proxy. IPv6-only callback destinations are not supported by this initial adapter.
 
 MCP event callbacks use Standard Webhooks signatures over the bytes that are ultimately written. Callback enrollment can use the signed, unpredictable challenge exchange, but a successful challenge proves only control of that endpoint at that attempt. A 2xx response means receiver acceptance—not browser display, user action, ChatGPT execution, or exactly-once processing. Each call is one bounded attempt; ambiguous response loss remains unknown and is not automatically retried or stored.
+
+## Account-wide Events notifications
+
+When private SQLite persistence, `NOTIFICATION_CREDENTIAL_KEY`, the saved-view
+observer, and the safe HTTPS sender are available, `/mcp` advertises Events.
+There is exactly one event, `outliner.changed`, with strict empty arguments `{}`.
+One verified callback serves an authenticated user's account across all authorized
+projects and OAuth clients. A different live callback or client identity receives
+an explicit `conflict`; remove the old tuple before choosing another destination.
+Other users have independent routes.
+
+`events/list` accepts bounded protocol `_meta` and no replay cursor (only absent
+or `null`). `events/subscribe` accepts:
+
+```json
+{
+    "name": "outliner.changed",
+    "arguments": {},
+    "delivery": {
+        "mode": "webhook",
+        "url": "https://receiver.example/callback",
+        "secret": "whsec_<receiver-generated signing secret>"
+    },
+    "ttlMs": 3600000,
+    "cursor": null
+}
+```
+
+The receiver must echo the random `challenge` from a signed
+`{"type":"verification","challenge":"…"}` request in a successful JSON response.
+Registration succeeds only after that verification and an atomic durable commit.
+The response contains `id`, ISO timestamp `refreshBefore`, `cursor: null`, and
+`truncated: false`. The actual deadline never exceeds the verified JWT expiry or
+the requested positive integer TTL. Omitted TTL defaults to at most one hour.
+Renew through another authenticated `events/subscribe` with the same tuple; every
+renewal verifies callback control again. A failed renewal preserves an otherwise
+valid old lease. No OAuth access/refresh tokens are stored for background sends.
+This lease does not claim instant knowledge of an external ChatGPT disconnect.
+
+`events/unsubscribe` accepts the same `name`, empty `arguments`, and
+`delivery: {mode:"webhook",url:…}` without a secret. It is idempotent for the
+current owner's exact tuple. It clears route credentials, fences in-flight
+verification, and stops HTTP bodies that have not started. Notification rules
+are retained. Stale tuples and other users cannot remove a replacement route.
+
+Choose objects and explicit display contexts with `update_notification_settings`.
+Adding projects, changing selections or contexts, and changing MCP/mobile channel
+flags do not require another Events subscription. Settings edits themselves do
+not create result-change events. Initial observation and restart establish silent
+baselines; late registration does not replay previously dropped changes.
+
+Events contain only event identity/name/timestamp, `cursor: null`, stable
+project/object/rule identifiers, observation time, semantic display-diff counts,
+up to three paired old/new display samples, explicit truncation flags, and the
+authorized same-context deep link. Each display value is at most 120 Unicode
+code points. Counts describe changed displayed positions and labels, rather than
+claiming source-row insert/update/delete identities. Samples are reduced first
+to keep the serialized envelope within 16 KiB; an oversized mandatory identity or
+link causes an unsent local failure. Raw rows, hidden fields, queries, Yjs updates,
+credentials, and instructions are excluded.
+
+Each offered change gets at most one bounded HTTP attempt, with no retry, queue,
+outbox, replay cursor, or durable delivery history. The exact prepared change is
+revalidated after connection establishment and checked synchronously alongside
+the captured lease generation immediately before the first body write. A changed
+A-to-B candidate is discarded/deferred; the observer prepares A-to-C separately.
+A 2xx means receiver acceptance only; response loss after possible transmission
+remains unknown. A definitive 410 disables only the matching lease generation.
+Neither outcome establishes that ChatGPT started/completed an agent run or that
+a user acknowledged the notification.
+
+`get_notification_delivery_status` is an authenticated read-only tool with empty
+arguments. It returns only the owner's `configured`, `active`, `pending`,
+`expired`, `disabled`, or `unavailable` state, optional expiry, and bounded latest
+process-local attempt category (or `null`). It never returns URLs, secrets,
+another user's route, or persisted history. After restart, latest evidence is
+absent, never invented success.
+
+The optional server key is canonical base64 encoding of 32 random bytes, used
+only for AES-256-GCM notification credential encryption with authenticated record
+context. Configure it through the server environment, separately from OAuth
+signing keys. Missing/invalid keys, corrupt encrypted credentials, and unavailable
+storage fail closed without a plaintext fallback. Expiry removes encrypted
+credentials even when no new view changes arrive. Shutdown aborts transient
+network work and detaches the observer adapter.
+
+Local regression coverage uses real JWT verification, SQLite, mounted MCP
+protocol handlers, live Hocuspocus/PGlite saved views, and a controlled DNS/TLS/HTTP
+boundary. These tests do not send production callbacks or prove live ChatGPT
+execution. The pinned Agent Table source was not present in this worktree; exact
+reference interoperability remains an external validation gate.

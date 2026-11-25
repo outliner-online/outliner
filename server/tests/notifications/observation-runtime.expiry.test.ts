@@ -1,6 +1,14 @@
 import { expect } from "chai";
 import { RuntimeClock } from "./observation-runtime.clock.js";
-import { deferred, edit, rule, type RuntimeFixture, runtimeFixture, UID } from "./observation-runtime.fixture.js";
+import {
+    deferred,
+    edit,
+    rule,
+    type RuntimeFixture,
+    runtimeFixture,
+    UID,
+    waitFor,
+} from "./observation-runtime.fixture.js";
 import { observedTransport, settleTransport } from "./observation-runtime.transport.js";
 
 describe("notification runtime terminal opportunity expiry", function() {
@@ -43,10 +51,10 @@ describe("notification runtime terminal opportunity expiry", function() {
             expect(result).to.include({ kind: "rejected", reason: "authorization", writeInitiated: false });
             expect(transport.bodies).to.have.length(0);
             expect(await captured.revalidate()).to.include({ status: "cancelled", reason: "expired" });
-            const reads = f.reads.length;
             if (outcome === "failed") settleTransport(captured, result);
             else captured.settleAttempt({ initiated: result.writeInitiated, outcome });
-            await clock.until(() => f.reads.length > reads && f.runtime.diagnostics().evaluating === 0);
+            await clock.advance(60_000);
+            await waitFor(() => f.runtime.diagnostics().evaluating === 0 && f.runtime.diagnostics().candidates === 0);
             expect(f.offered).to.have.length(1);
             edit(source, "C");
             await clock.until(() => f.offered.length === 2 && f.runtime.diagnostics().evaluating === 0);

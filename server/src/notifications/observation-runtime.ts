@@ -114,8 +114,7 @@ interface Attempt {
     invalidation?: Exclude<ViewChangeRevalidation, { status: "current"; }>;
 }
 type ReadySnapshot = Extract<ReadSnapshotResult, { status: "ready"; }>;
-// Ownership is private callback context, never part of the externally safe payload.
-type Adapter = (candidate: PreparedViewChange, ownerUid: string) => void | Promise<void>;
+type Adapter = (candidate: PreparedViewChange) => void | Promise<void>;
 
 /**
  * One server-lifetime, process-local owner of temporal visible differences.
@@ -168,6 +167,10 @@ export class NotificationObservationRuntime {
             },
             clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
         };
+    }
+
+    isClosed(): boolean {
+        return this.stopped;
     }
 
     start(): void {
@@ -562,6 +565,7 @@ export class NotificationObservationRuntime {
                 continue;
             }
             const payload: ViewChangePayload = freezeDeep({
+                uid: entry.uid,
                 eventId: randomUUID(),
                 ruleId: entry.rule.ruleId,
                 channel,
@@ -622,7 +626,7 @@ export class NotificationObservationRuntime {
         // One invocation is the entire best-effort opportunity. A callback
         // may retain the capability, but must eventually aggregate its actual
         // first-write evidence and settle it; merely returning is not evidence.
-        Promise.resolve().then(() => adapter(attempt.prepared, attempt.admission.uid)).catch(() => {
+        Promise.resolve().then(() => adapter(attempt.prepared)).catch(() => {
             // A thrown adapter cannot prove whether any request wrote bytes.
             // Fence later writes and retain the bounded attempt until explicit
             // settlement supplies its evidence; never fabricate zero writes.
@@ -735,7 +739,8 @@ export class NotificationObservationRuntime {
         const sameBaseline = entry.alive && !this.stopped && state.generation === attempt.generation
             && state.baselineGeneration === attempt.baselineGeneration && state.candidate === attempt;
         const terminal = outcome.outcome !== "cancelled" && outcome.outcome !== "deferred";
-        const advance = sameBaseline && (outcome.initiated || (terminal && this.current(attempt)));
+        const wasCurrent = sameBaseline && this.current(attempt);
+        const advance = sameBaseline && (outcome.initiated || (terminal && wasCurrent));
         attempt.settled = true;
         attempt.valid = false;
         if (advance) {
@@ -748,7 +753,10 @@ export class NotificationObservationRuntime {
             state.reason = undefined;
         }
         if (!attempt.callbackActive) this.attempts.delete(attempt.payload.eventId);
-        if (sameBaseline) this.dirty(entry, true);
+        // A current advancement already has the fresh projection. Preserve
+        // real source invalidations without making another channel compete
+        // with a redundant settlement-triggered evaluation.
+        if (sameBaseline && (!advance || !wasCurrent)) this.dirty(entry, true);
         this.schedule();
     }
 

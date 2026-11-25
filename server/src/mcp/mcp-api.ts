@@ -3,6 +3,7 @@ import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import crypto from "crypto";
 import express from "express";
 import * as z from "zod/v4";
+import type { NotificationEventsService } from "../notifications/mcp-events-service.js";
 import {
     type NotificationSettingsService,
     NotificationSettingsValidationError,
@@ -10,6 +11,7 @@ import {
 import { NotificationSettingsStoreError } from "../notifications/settings-store.js";
 import { getOAuthIssuer } from "../oauth/config.js";
 import { verifyAccessToken } from "../oauth/tokens.js";
+import type { VerifiedOAuthAccessToken } from "../oauth/types.js";
 import { mcpLogger as logger } from "../utils/log-manager.js";
 import { recordMcpAudit } from "./audit-log.js";
 import type { CreateTableTool } from "./create-table-tool.js";
@@ -103,7 +105,9 @@ const issueFields = (issue: z.core.$ZodIssue): string[] =>
 
 export function createMcpRouter(
     service: OutlinerReadService,
-    verifyToken: (token: string) => { uid: string; scope: string; } = verifyAccessToken,
+    verifyToken: (
+        token: string,
+    ) => Pick<VerifiedOAuthAccessToken, "uid" | "scope"> & Partial<VerifiedOAuthAccessToken> = verifyAccessToken,
     configuredIssuer?: string,
     relationService?: OutlinerRelationService,
     scheduleService?: OutlinerScheduleService,
@@ -114,6 +118,7 @@ export function createMcpRouter(
     kanbanDefinitionTools?: KanbanDefinitionTools,
     kanbanLifecycle?: KanbanLifecycleTools,
     notificationSettings?: NotificationSettingsService,
+    notificationEvents?: NotificationEventsService,
 ) {
     const router = express.Router();
     const issuer = () => configuredIssuer ?? getOAuthIssuer();
@@ -159,6 +164,7 @@ export function createMcpRouter(
                 return void res.status(403).json({ error: "insufficient_scope" });
             }
             res.locals.mcpUid = verified.uid;
+            res.locals.mcpActor = verified;
         } catch {
             logger.info({ event: "mcp_authentication_failed", requestId, reason: "invalid_token" });
             return void res.set("WWW-Authenticate", `${challenge()}, error="invalid_token"`).status(401).json({
@@ -171,7 +177,7 @@ export function createMcpRouter(
     router.post("/mcp", async (req, res) => {
         const uid = res.locals.mcpUid as string;
         const requestId = res.locals.mcpRequestId as string;
-        const grantedScopes = verifyToken(req.headers.authorization!.slice("Bearer ".length)).scope.split(/\s+/);
+        const grantedScopes = (res.locals.mcpActor as VerifiedOAuthAccessToken).scope.split(/\s+/);
         const requireWrite = () => {
             if (!grantedScopes.includes("outliner.write")) {
                 throw new McpReadError(
@@ -183,7 +189,10 @@ export function createMcpRouter(
             }
         };
 
-        const mcp = new McpServer({ name: "outliner", version: "1.0.0" });
+        const mcp = new McpServer({ name: "outliner", version: "1.0.0" }, {
+            capabilities: notificationEvents?.ready() ? { events: {} } as never : {},
+        });
+        if (notificationEvents?.ready()) notificationEvents.register(mcp, res.locals.mcpActor);
         const uidFingerprint = crypto.createHash("sha256").update(uid).digest("hex").slice(0, 12);
         /**
          * Every tool registered below, keyed by name, filled in as each
@@ -387,6 +396,11 @@ export function createMcpRouter(
                 callback as never,
             );
         };
+        if (notificationEvents) {
+            tool("get_notification_delivery_status",
+                "Read your account callback lease and latest process-local attempt category.", {},
+                async () => notificationEvents.status(uid), { strict: true });
+        }
         if (notificationSettings) {
             const settingsCall = async <T>(operation: () => T | Promise<T>): Promise<T> => {
                 try {

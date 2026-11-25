@@ -64,7 +64,7 @@ export async function runtimeFixture(
     options: RuntimeOptions = {},
     hooks: ObservationHooks = {},
     directory = tempDir(),
-    captureMobile = true,
+    { captureMcp = true, captureMobile = true }: { captureMcp?: boolean; captureMobile?: boolean; } = {},
 ) {
     const acl = new AclStore();
     acl.grant("projectUsers", PROJECT, UID);
@@ -97,9 +97,11 @@ export async function runtimeFixture(
         ...options,
     });
     const offered: PreparedViewChange[] = [];
-    runtime.subscribe("mcp", candidate => {
-        offered.push(candidate);
-    });
+    if (captureMcp) {
+        runtime.subscribe("mcp", candidate => {
+            offered.push(candidate);
+        });
+    }
     if (captureMobile) {
         runtime.subscribe("mobile", candidate => {
             offered.push(candidate);

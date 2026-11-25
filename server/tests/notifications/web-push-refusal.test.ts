@@ -36,12 +36,12 @@ describe("Web Push terminal local refusals", function() {
             await clock.until(() => held);
             await reached.promise;
             await clock.advance(1001);
-            const reads = f.reads.length;
             resume.resolve();
             await waitFor(() => f.settlements.length === 1);
             expect(f.settlements).to.deep.equal([{ initiated: false, outcome: "expired" }]);
             expect(f.captured.requests).to.have.length(0);
-            await clock.until(() => f.reads.length > reads && f.runtime.diagnostics().evaluating === 0);
+            await clock.advance(60_000);
+            await waitFor(() => f.runtime.diagnostics().evaluating === 0 && f.runtime.diagnostics().candidates === 0);
             expect(f.captured.calls).to.have.length(1);
             expect(f.settlements).to.have.length(1);
             edit(source, "C");

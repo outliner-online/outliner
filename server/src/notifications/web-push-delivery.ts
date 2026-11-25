@@ -33,7 +33,7 @@ export class WebPushDeliveryAdapter {
     ) {
         this.config = options.config ?? loadPushConfig;
         this.transport = options.transport ?? sendNotificationHttps;
-        this.unsubscribe = runtime.subscribe("mobile", (candidate, uid) => this.deliver(candidate, uid));
+        this.unsubscribe = runtime.subscribe("mobile", candidate => this.deliver(candidate, candidate.uid));
     }
 
     close(): void {

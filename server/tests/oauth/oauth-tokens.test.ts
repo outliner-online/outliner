@@ -2,7 +2,7 @@ process.env.NODE_ENV = "test";
 
 import { expect } from "chai";
 import jwt from "jsonwebtoken";
-import { resetOAuthSigningSecretForTests } from "../../src/oauth/config.js";
+import { getOAuthIssuer, getOAuthSigningSecret, resetOAuthSigningSecretForTests } from "../../src/oauth/config.js";
 import { signAccessToken, verifyAccessToken } from "../../src/oauth/tokens.js";
 
 describe("oauth/tokens", () => {
@@ -28,6 +28,7 @@ describe("oauth/tokens", () => {
         expect(verified.uid).to.equal("uid-123");
         expect(verified.scope).to.equal("outliner.read");
         expect(verified.clientId).to.equal("chatgpt");
+        expect(verified.expiresAtMs).to.equal((jwt.decode(token) as jwt.JwtPayload).exp! * 1000);
     });
 
     it("never embeds Firebase credentials or a raw Firebase ID token in the access token", () => {
@@ -47,6 +48,18 @@ describe("oauth/tokens", () => {
         });
         await new Promise(resolve => setTimeout(resolve, 1100));
         expect(() => verifyAccessToken(token)).to.throw();
+    });
+
+    it("refuses missing expiry and invalid issuer/audience/algorithm even with authentic claims", () => {
+        const issuer = getOAuthIssuer();
+        const claims = { sub: "owner", scope: "outliner.read", client_id: "chatgpt" };
+        const secret = getOAuthSigningSecret();
+        for (const options of [
+            { issuer, audience: issuer },
+            { issuer: "wrong", audience: issuer, expiresIn: 3600 },
+            { issuer, audience: "wrong", expiresIn: 3600 },
+            { issuer, audience: issuer, expiresIn: 3600, algorithm: "HS384" as const },
+        ]) expect(() => verifyAccessToken(jwt.sign(claims, secret, options))).to.throw();
     });
 
     it("rejects a tampered access token", () => {

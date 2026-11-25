@@ -34,8 +34,12 @@ export async function webPushFixture(options: {
     runtimeOptions?: RuntimeOptions;
     directory?: string;
     config?: PushConfig;
+    captureMcp?: boolean;
 } = {}) {
-    const f = await runtimeFixture(options.runtimeOptions, {}, options.directory, false);
+    const f = await runtimeFixture(options.runtimeOptions, {}, options.directory, {
+        captureMcp: options.captureMcp,
+        captureMobile: false,
+    });
     const config = options.config ?? pushConfig();
     const store = new PushDeviceStore(f.server.persistence!.db!);
     store.initialize();

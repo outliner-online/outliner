@@ -10,6 +10,7 @@ tests:
 - server/tests/notifications/web-push-outcomes.test.ts
 - server/tests/notifications/web-push-isolation.test.ts
 - server/tests/notifications/web-push-lifecycle.test.ts
+- server/tests/notifications/web-push-mcp-channels.test.ts
 - server/tests/notifications/web-push-refusal.test.ts
 - client/src/services/notifications/enrollmentBinding.test.ts
 - client/src/services/notifications/notificationNavigation.test.ts

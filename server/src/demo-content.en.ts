@@ -71,6 +71,7 @@ export function demoContentEn(): DemoLocaleContent {
                 key: "remote mcp access",
                 title: "Remote MCP Access",
                 lines: [
+                    "Selected Grid, Calendar, and Kanban changes can share one account-wide ChatGPT Events callback across authorized projects. Configure notification rules through MCP; changing selections needs no resubscription. The callback lease must be renewed before its token-bounded deadline. Delivery is best effort, with no replay or delivery history; get_notification_delivery_status reports only current private lease state and process-local attempt evidence.",
                     "Outliner's on-premises server exposes an authorized MCP endpoint for compatible AI clients.",
                     "Paste a normal Outliner project or page URL into the client; resolve_url converts its human-readable titles to stable IDs.",
                     "Text, Grid, Calendar, and Layout remain distinct semantic node kinds instead of being flattened into fake text.",

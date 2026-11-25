@@ -43,6 +43,9 @@ The immutable payload includes an event ID for that single opportunity, rule ID,
 channel, full target identity, observation time, settings revision, source version
 token, explicit effective context, canonical object link, and bounded summary.
 The prior and proposed next projections remain internal runtime state.
+The server-only candidate also carries the authoritative owner UID for selecting
+that owner's destinations. Channel adapters must construct their own explicit
+wire format; the smartphone payload does not include this private routing field.
 
 Before initiating a send, call `revalidate()` from the HTTPS transport's
 `beforeSend` preparation boundary. This freshly checks project access and source
