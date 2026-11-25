@@ -82,7 +82,10 @@ function updateBinding(operation: "read" | "disarm" | "arm", value?: EnrollmentB
                 open.result.close();
                 resolve(result);
             };
-            tx.onabort = tx.onerror = () => reject(tx.error ?? new Error("Enrollment binding changed"));
+            tx.onabort = tx.onerror = () => {
+                open.result.close();
+                reject(tx.error ?? new Error("Enrollment binding changed"));
+            };
         };
     });
 }
@@ -127,7 +130,8 @@ export class BrowserPushRegistration {
             const matches = keyMatches && !!subscription
                 && server.endpointHash === await endpointHash(subscription.endpoint);
             this.status = server.state === "registered" && matches && Notification.permission === "granted"
-                    && server.vapidKeyId === config.vapidKeyId
+                    && server.vapidKeyId === config.vapidKeyId && !!binding.generation
+                    && binding.generation === server.enrollmentGeneration
                 ? "registered"
                 : "not-enrolled";
         } catch (error) {
@@ -162,9 +166,10 @@ export class BrowserPushRegistration {
                 subscription: { endpoint: subscription.endpoint, keys: json.keys },
             });
             if (generation !== this.operation) return;
+            if (!status.enrollmentGeneration) throw new Error("Committed enrollment generation is unavailable");
             await updateBinding("arm", {
                 fence: this.bindingFence,
-                generation: enrollmentGeneration,
+                generation: status.enrollmentGeneration,
                 vapidKeyId: config.vapidKeyId,
             });
             if (generation === this.operation && status.state === "registered") {

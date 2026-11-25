@@ -7,6 +7,7 @@ export interface PushStatus {
     state: "registered" | "disabled";
     vapidKeyId?: string;
     endpointHash?: string;
+    enrollmentGeneration?: string;
 }
 export interface PublicPushConfig {
     available: true;

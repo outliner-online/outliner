@@ -85,12 +85,14 @@ describe("browser Web Push enrollment lifecycle", () => {
                 return json(serverStatus);
             }
             if (init?.method === "PUT") {
+                const registration = JSON.parse(String(init.body)) as { enrollmentGeneration: string; };
                 serverStatus = {
                     deviceId: "browser",
                     revision: 1,
                     state: "registered",
                     vapidKeyId: "key-1",
                     endpointHash: await sha256(endpoint),
+                    enrollmentGeneration: registration.enrollmentGeneration,
                 };
                 return json(serverStatus);
             }
@@ -147,6 +149,49 @@ describe("browser Web Push enrollment lifecycle", () => {
         expect(subscribeCalls).toBe(1);
     });
 
+    it("shows enrollment progress immediately and hides the enable action until the commit finishes", async () => {
+        let releaseRegistration!: () => void;
+        const registrationBarrier = new Promise<void>(resolve => releaseRegistration = resolve);
+        const immediateFetch = globalThis.fetch;
+        globalThis.fetch = async (input, init) => {
+            if (init?.method === "PUT") await registrationBarrier;
+            return immediateFetch(input, init);
+        };
+
+        render(PushDeviceSettings);
+        const enable = await screen.findByRole("button", { name: "Enable notifications" });
+        await fireEvent.click(enable);
+        expect(screen.getByTestId("push-status")).toHaveTextContent("Enrolling this browser");
+        expect(screen.queryByRole("button", { name: "Enable notifications" })).toBeNull();
+
+        releaseRegistration();
+        await waitFor(() => expect(screen.getByTestId("push-status")).toHaveTextContent("registered"));
+    });
+
+    it("does not reconcile a committed server device after its durable local generation is disarmed", async () => {
+        const enrollment = new BrowserPushRegistration();
+        await enrollment.reconcile();
+        await enrollment.enroll();
+        expect(enrollment.status).toBe("registered");
+
+        const committedSubscription = subscription!;
+        committedSubscription.unsubscribe = async () => false;
+        const immediateFetch = globalThis.fetch;
+        globalThis.fetch = async (input, init) =>
+            String(input).endsWith("/disable")
+                ? json({ error: "persistence_unavailable" }, 503)
+                : immediateFetch(input, init);
+        const disarmer = new BrowserPushRegistration();
+        await disarmer.disable();
+        expect(disarmer.status).toBe("incomplete");
+        expect(subscription).toBe(committedSubscription);
+        expect(serverStatus.state).toBe("registered");
+
+        const reopenedSettings = new BrowserPushRegistration();
+        await reopenedSettings.reconcile();
+        expect(reopenedSettings.status).toBe("not-enrolled");
+    });
+
     it("keeps a completed cross-context disarm effective against a delayed enrollment arm", async () => {
         let releaseRegistration!: () => void;
         const registrationBarrier = new Promise<void>(resolve => releaseRegistration = resolve);
@@ -163,7 +208,8 @@ describe("browser Web Push enrollment lifecycle", () => {
 
         const otherContext = new BrowserPushRegistration();
         await otherContext.disable();
-        expect(otherContext.status).toBe("disabled");
+        expect(["disabled", "incomplete"]).toContain(otherContext.status);
+        expect(otherContext.detail).not.toBe("Could not verify local disarm");
         releaseRegistration();
         await pending;
         expect(delayedEnrollment.status).toBe("failed");

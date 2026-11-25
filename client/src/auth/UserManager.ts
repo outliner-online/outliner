@@ -46,6 +46,17 @@ export class UserManager {
     private authGeneration = 0;
     private localAuthError: string | undefined;
 
+    private async disarmPushEnrollmentBeforeSignIn(): Promise<void> {
+        if (typeof window === "undefined") return;
+        const { BrowserPushRegistration } = await import("../services/notifications/browserPushRegistration");
+        const enrollment = new BrowserPushRegistration();
+        await enrollment.disable();
+        if (enrollment.detail === "Could not verify local disarm") throw new Error(enrollment.detail);
+        if (enrollment.status === "incomplete") {
+            logger.warn({ detail: enrollment.detail }, "Web Push cleanup incomplete before sign-in");
+        }
+    }
+
     getLocalAuthError(): string | undefined {
         return this.localAuthError;
     }
@@ -403,6 +414,7 @@ export class UserManager {
     public async loginWithGoogle(): Promise<void> {
         if (isOnPrem) throw new Error("Google login is unavailable in this deployment");
         try {
+            await this.disarmPushEnrollmentBeforeSignIn();
             const provider = new GoogleAuthProvider();
             await signInWithPopup(this.auth, provider);
             // Auth state changes are detected by onAuthStateChanged
@@ -425,6 +437,7 @@ export class UserManager {
             return;
         }
         try {
+            await this.disarmPushEnrollmentBeforeSignIn();
             logger.info(`[UserManager] Attempting email/password login for: ${email}`);
             logger.debug(
                 { state: this.auth.currentUser ? "authenticated" : "not authenticated" },

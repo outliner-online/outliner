@@ -21,8 +21,19 @@ describe("private Web Push device store", () => {
             admissionFence,
             enrollmentGeneration: "generation_marker_0001",
         };
-        expect(store.register("owner-a", device, input)).to.include({ revision: 1, state: "registered" });
-        expect(store.register("owner-a", device, input)).to.include({ revision: 1, state: "registered" });
+        expect(store.register("owner-a", device, input)).to.include({
+            revision: 1,
+            state: "registered",
+            enrollmentGeneration: "generation_marker_0001",
+        });
+        expect(store.register("owner-a", device, {
+            ...input,
+            enrollmentGeneration: "generation_marker_0002",
+        })).to.include({
+            revision: 1,
+            state: "registered",
+            enrollmentGeneration: "generation_marker_0001",
+        });
         expect(store.disable("owner-a", device)).to.include({ revision: 2, state: "disabled" });
         expect(() => store.register("owner-a", device, { ...input, expectedRevision: 2 })).to.throw(PushDeviceError,
             "stale");

@@ -19,6 +19,7 @@ export interface PushDeviceStatus {
     state: "registered" | "disabled";
     vapidKeyId?: string;
     endpointHash?: string;
+    enrollmentGeneration?: string;
 }
 export class PushDeviceError extends Error {
     constructor(public code: "conflict" | "capacity" | "unavailable", message: string) {
@@ -61,12 +62,12 @@ export class PushDeviceStore {
     }
     list(uid: string): PushDeviceStatus[] {
         return (this.db().prepare(
-            "SELECT device_id deviceId, revision, state, vapid_key_id vapidKeyId, endpoint_hash endpointHash FROM web_push_devices WHERE uid=? ORDER BY device_id",
+            "SELECT device_id deviceId, revision, state, vapid_key_id vapidKeyId, endpoint_hash endpointHash, enrollment_generation enrollmentGeneration FROM web_push_devices WHERE uid=? ORDER BY device_id",
         ).all(uid) as PushDeviceStatus[]);
     }
     get(uid: string, deviceId: string): PushDeviceStatus | undefined {
         return this.db().prepare(
-            "SELECT device_id deviceId, revision, state, vapid_key_id vapidKeyId, endpoint_hash endpointHash FROM web_push_devices WHERE uid=? AND device_id=?",
+            "SELECT device_id deviceId, revision, state, vapid_key_id vapidKeyId, endpoint_hash endpointHash, enrollment_generation enrollmentGeneration FROM web_push_devices WHERE uid=? AND device_id=?",
         ).get(uid, deviceId) as PushDeviceStatus | undefined;
     }
     register(uid: string, deviceId: string, input: ValidatedRegistration): PushDeviceStatus {
