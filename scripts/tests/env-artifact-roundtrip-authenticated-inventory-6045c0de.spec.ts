@@ -117,10 +117,20 @@ test("authenticated download retries the exact run artifact until its archive is
 set -euo pipefail
 test "$1" = api
 if [[ "$2" == repos/outliner-online/outliner/actions/runs/999/artifacts* ]]; then
+  if [ "$PROVIDER_RESULT" = authentication ]; then
+    exit 1
+  fi
+  if [ "$PROVIDER_RESULT" = missing ]; then
+    printf '222\\n'
+    exit 0
+  fi
   printf '111\\n'
   exit 0
 fi
 test "$2" = repos/outliner-online/outliner/actions/artifacts/111/zip
+if [ "$PROVIDER_RESULT" = network ]; then
+  exit 1
+fi
 count=$(($(cat "$FIXTURE_STATE" 2>/dev/null || echo 0) + 1))
 printf '%s' "$count" > "$FIXTURE_STATE"
 if [ "$count" -eq 1 ]; then
@@ -130,21 +140,37 @@ cat "$FIXTURE_ARCHIVE"
 `,
         { mode: 0o755 },
     );
+    fs.writeFileSync(path.join(fixtureRoot, "sleep"), "#!/bin/bash\nexit 0\n", { mode: 0o755 });
 
-    const destination = path.join(fixtureRoot, "downloaded");
-    try {
-        const result = spawnSync(authenticatedDownload, ["outliner-online/outliner", "999", "111", destination], {
-            encoding: "utf8",
-            env: {
-                ...process.env,
-                FIXTURE_ARCHIVE: archive,
-                FIXTURE_STATE: path.join(fixtureRoot, "state"),
-                GH_TOKEN: "short-lived-test-token",
-                PATH: `${fixtureRoot}:${process.env.PATH}`,
+    const runDownload = (providerResult: string, token = "short-lived-test-token") =>
+        spawnSync(
+            authenticatedDownload,
+            ["outliner-online/outliner", "999", "111", path.join(fixtureRoot, `downloaded-${providerResult}`)],
+            {
+                encoding: "utf8",
+                env: {
+                    ...process.env,
+                    FIXTURE_ARCHIVE: archive,
+                    FIXTURE_STATE: path.join(fixtureRoot, `state-${providerResult}`),
+                    GH_TOKEN: token,
+                    PATH: `${fixtureRoot}:${process.env.PATH}`,
+                    PROVIDER_RESULT: providerResult,
+                },
             },
-        });
+        );
+    try {
+        const result = runDownload("readiness");
         expect(result.status, result.stderr).toBe(0);
-        expect(fs.readFileSync(path.join(destination, "execution.json"), "utf8")).toBe('{"status":"passed"}\n');
+        expect(fs.readFileSync(path.join(fixtureRoot, "downloaded-readiness", "execution.json"), "utf8")).toBe(
+            '{"status":"passed"}\n',
+        );
+        expect(runDownload("authentication").status, "authentication failure cannot become a download success")
+            .not.toBe(0);
+        expect(runDownload("missing").status, "an artifact outside the authenticated run inventory is rejected")
+            .not.toBe(0);
+        expect(runDownload("network").status, "exhausted network failures cannot become a download success")
+            .not.toBe(0);
+        expect(runDownload("readiness", "").status, "the workflow credential is required").not.toBe(0);
     } finally {
         fs.rmSync(fixtureRoot, { recursive: true, force: true });
     }
