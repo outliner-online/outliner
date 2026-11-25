@@ -35,7 +35,7 @@
                 {
                     "key": "server-tests",
                     "name": "Server tests",
-                    "job_pattern": "^(?:server-test / )?server-test$",
+                    "job_pattern": "^(?:server-test / )?server-test(?: shard [12]/2)?$",
                     "test_step_pattern": "^Run server tests$",
                     "source_paths": [
                         ".github/workflows/ci-test-server.yml",
@@ -43,6 +43,9 @@
                         ".github/actions/setup-test-env/action.yml",
                         "scripts/run-server-tests.sh",
                         "scripts/run-server-test-command.sh",
+                        "scripts/ci/run-server-test-shard.sh",
+                        "scripts/ci/server-test-reporter.mjs",
+                        "scripts/ci/verify-server-test-shards.mjs",
                         "scripts/setup.sh",
                         "server/tests/loaders/pin-server-deps.mjs"
                     ],
@@ -150,7 +153,7 @@
                 {
                     "key": "server-tests",
                     "name": "Server tests",
-                    "job_pattern": "^(?:server-test / )?server-test$",
+                    "job_pattern": "^(?:server-test / )?server-test(?: shard [12]/2)?$",
                     "test_step_pattern": "^Run server tests$",
                     "source_paths": [
                         ".github/workflows/ci-test-server.yml",
@@ -158,6 +161,9 @@
                         ".github/actions/setup-test-env/action.yml",
                         "scripts/run-server-tests.sh",
                         "scripts/run-server-test-command.sh",
+                        "scripts/ci/run-server-test-shard.sh",
+                        "scripts/ci/server-test-reporter.mjs",
+                        "scripts/ci/verify-server-test-shards.mjs",
                         "scripts/setup.sh",
                         "server/tests/loaders/pin-server-deps.mjs"
                     ],
