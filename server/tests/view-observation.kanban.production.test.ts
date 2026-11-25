@@ -109,14 +109,19 @@ describe("retained view observation production refresh", function() {
             target: { projectId: PROJECT, kind: "kanban", objectId: "board" },
             context,
         });
+        let invalidations = 0;
+        handle.onInvalidate(() => invalidations++);
         const source = held[1].document as unknown as Y.Doc;
         source.getMap("data").delete("a");
+        expect(invalidations).to.equal(1);
         const pending = handle.readSnapshot({ observedAtUtcMs: 2 });
         await reached.promise;
         const room = `projects/${PROJECT}/tables/tasks`;
         releaseWithoutStore(held[1]);
         server.hocuspocus.documents.delete(room);
         const replacement = await server.hocuspocus.openDirectConnection(room, { context: { uid: UID } });
+        source.getMap("data").set("detached-update", new Y.Map());
+        expect(invalidations).to.equal(1);
         resume.resolve();
         expect(await pending).to.deep.equal({ status: "stale", reason: "incarnation_lost" });
         expect(await handle.readSnapshot({ observedAtUtcMs: 3 })).to.deep.equal({
@@ -154,6 +159,33 @@ describe("retained view observation production refresh", function() {
             status: "stale",
             reason: "incarnation_lost",
         });
+        await handle.close();
+        await Promise.all(held.map(connection => connection.disconnect()));
+    });
+
+    it("invalidates an issued token when the saved target is deleted", async () => {
+        const held = await seed(server.hocuspocus, "SELECT id, status, title FROM tasks ORDER BY id", {
+            titleField: "title",
+        });
+        const service = new ViewObservationService(server.hocuspocus, async () => true);
+        const handle = await service.openViewObservation({
+            uid: UID,
+            target: { projectId: PROJECT, kind: "kanban", objectId: "board" },
+            context,
+        });
+        const ready = await handle.readSnapshot({ observedAtUtcMs: 1 });
+        expect(ready.status).to.equal("ready");
+        if (ready.status !== "ready") throw new Error("Kanban not ready");
+        expect(handle.isCurrent(ready.versionToken)).to.equal(true);
+
+        const project = held[0].document as unknown as Y.Doc;
+        getKanbanRegistry(project).delete("board");
+        expect(handle.isCurrent(ready.versionToken)).to.equal(false);
+        expect(await handle.readSnapshot({ observedAtUtcMs: 2 })).to.deep.equal({
+            status: "not_found",
+            reason: "not_found",
+        });
+
         await handle.close();
         await Promise.all(held.map(connection => connection.disconnect()));
     });

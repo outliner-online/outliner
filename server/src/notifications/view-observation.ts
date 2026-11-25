@@ -83,15 +83,17 @@ export class ViewObservationService {
     private readonly openers: Readonly<Partial<Record<ViewKind, ViewProducerOpener>>>;
 
     constructor(
-        kanbanHost: Pick<Hocuspocus, "openDirectConnection"> & Partial<Pick<Hocuspocus, "documents">>,
+        private readonly observationHost:
+            & Pick<Hocuspocus, "openDirectConnection">
+            & Partial<Pick<Hocuspocus, "documents">>,
         private readonly canAccess: (uid: string, projectId: string) => Promise<boolean>,
         openers: Partial<Record<ViewKind, ViewProducerOpener>> = {},
         kanbanOptions: ConstructorParameters<typeof OutlinerKanbanQueryService>[2] = {},
     ) {
         this.openers = {
-            grid: savedViewOpener(kanbanHost, canAccess, "grid", kanbanOptions),
-            calendar: savedViewOpener(kanbanHost, canAccess, "calendar", kanbanOptions),
-            kanban: kanbanOpener(kanbanHost, canAccess, kanbanOptions),
+            grid: savedViewOpener(this.observationHost, canAccess, "grid", kanbanOptions),
+            calendar: savedViewOpener(this.observationHost, canAccess, "calendar", kanbanOptions),
+            kanban: kanbanOpener(this.observationHost, canAccess, kanbanOptions),
             ...openers,
         };
     }
@@ -108,7 +110,7 @@ export class ViewObservationService {
         const opener = this.openers[input.target.kind];
         if (!opener) throw new McpReadError("invalid_argument", `${input.target.kind} observation is unavailable`);
         const producer = await opener(input);
-        return new RetainedViewObservation(input, producer, this.canAccess);
+        return new RetainedViewObservation(input, producer, this.canAccess, this.observationHost);
     }
 }
 
@@ -125,6 +127,7 @@ class RetainedViewObservation implements ViewObservationHandle {
         private readonly input: { uid: string; target: TargetRef; context: ObservationContext; },
         private readonly producer: CapturedViewProducer,
         private readonly canAccess: (uid: string, projectId: string) => Promise<boolean>,
+        private readonly host: Partial<Pick<Hocuspocus, "documents">>,
     ) {
         // Subscribe before the first capture. A generation check below closes
         // the gap across every asynchronous producer/access step.
@@ -136,6 +139,10 @@ class RetainedViewObservation implements ViewObservationHandle {
             if (this.listeners.some(candidate => candidate.doc === doc)) continue;
             const listener = () => {
                 if (this.closed) return;
+                // A detached room can still emit local Yjs updates after the
+                // serving-room registry has moved to a replacement document.
+                // Those updates are no longer authoritative invalidations.
+                if (this.host.documents && this.host.documents.get(documentRoom(doc)) !== doc) return;
                 this.generation++;
                 for (const callback of [...this.callbacks]) callback();
             };
