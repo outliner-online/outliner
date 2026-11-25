@@ -20,11 +20,11 @@ class SourceSummary(unittest.TestCase):
     def test_known_old_and_new_suite_shapes_are_diagnostic_only(self):
         summary = m.source_shape_summary(SOURCES)
         self.assertEqual(summary, {'paragraphs': [
-            {'suites': 'archive-three', 'uri': 'image-mirrorlist'},
-            {'suites': 'security-only', 'uri': 'security-http'}], 'unknown_count': 0})
+            {'components': 'ubuntu-four', 'enabled': 'default', 'signed_by': 'ubuntu-archive-keyring', 'suites': 'archive-three', 'types': 'deb', 'uri': 'image-mirrorlist'},
+            {'components': 'ubuntu-four', 'enabled': 'default', 'signed_by': 'ubuntu-archive-keyring', 'suites': 'security-only', 'types': 'deb', 'uri': 'security-http'}], 'unknown_count': 0})
         combined = SOURCES.split('\n\n')[0].replace('resolute-backports', 'resolute-backports resolute-security')
         self.assertEqual(m.source_shape_summary(combined)['paragraphs'], [
-            {'suites': 'archive-and-security', 'uri': 'image-mirrorlist'}])
+            {'components': 'ubuntu-four', 'enabled': 'default', 'signed_by': 'ubuntu-archive-keyring', 'suites': 'archive-and-security', 'types': 'deb', 'uri': 'image-mirrorlist'}])
         from test_ubuntu_mirror_candidate import MIRRORS, FAILED
         with self.assertRaisesRegex(ValueError, '^unsupported-suite-source-layout$'):
             m.fallback_plan(combined, MIRRORS, FAILED, 100, 200000, 'a' * 32, 'transport-error')
@@ -42,16 +42,16 @@ class SourceSummary(unittest.TestCase):
         secret = 'DO-NOT-LEAK-123'
         raw = 'Suites: ' + secret + '\nURIs: https://user:' + secret + '@unknown.invalid/private?token=' + secret
         result = m.source_shape_summary(raw)
-        self.assertEqual(result, {'paragraphs': [{'suites': 'other', 'uri': 'other'}], 'unknown_count': 1})
+        self.assertEqual(result, {'paragraphs': [{'components': 'other', 'enabled': 'default', 'signed_by': 'other', 'suites': 'other', 'types': 'other', 'uri': 'other'}], 'unknown_count': 1})
         serialized = json.dumps(result)
         for forbidden in (secret, 'unknown.invalid', 'https:', 'token', 'user:', '/private'):
             self.assertNotIn(forbidden, serialized)
     def test_malformed_fields_are_other_and_output_is_capped(self):
         raw = '\n\n'.join(['Suites: resolute-security\nURIs: http://security.ubuntu.com/ubuntu'] * 5)
         result = m.source_shape_summary(raw)
-        self.assertEqual(len(result['paragraphs']), 3)
-        self.assertEqual(result['unknown_count'], 2)
-        self.assertEqual(m.source_shape_summary(' Suites: injected-secret')['paragraphs'], [{'suites': 'other', 'uri': 'other'}])
+        self.assertEqual(len(result['paragraphs']), 5)
+        self.assertEqual(result['unknown_count'], 0)
+        self.assertEqual(m.source_shape_summary(' Suites: injected-secret')['paragraphs'], [{'components': 'other', 'enabled': 'default', 'signed_by': 'other', 'suites': 'other', 'types': 'other', 'uri': 'other'}])
 
     def test_actual_profile_output_does_not_expose_unknown_uri(self):
         from test_ubuntu_mirror_candidate import MIRRORS
