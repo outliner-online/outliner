@@ -39,8 +39,10 @@ export async function getPushConfig(): Promise<PublicPushConfig> {
 export async function getPushStatus(deviceId: string): Promise<PushStatus> {
     return (await request(`/devices/${encodeURIComponent(deviceId)}`)).json();
 }
-export async function createAdmission(): Promise<number> {
-    return ((await (await request("/admissions", { method: "POST" })).json()) as { admissionFence: number; })
+export async function createAdmission(deviceId: string): Promise<number> {
+    return ((await (await request("/admissions", { method: "POST", body: JSON.stringify({ deviceId }) })).json()) as {
+        admissionFence: number;
+    })
         .admissionFence;
 }
 export async function registerPushDevice(deviceId: string, body: object): Promise<PushStatus> {

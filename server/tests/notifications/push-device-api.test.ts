@@ -41,7 +41,7 @@ describe("authenticated Web Push device API", () => {
         await request(app).get(`/api/notifications/push/devices/${device}`)
             .set("Authorization", "Bearer invalid").expect(401);
 
-        const admission = await request(app).post("/api/notifications/push/admissions")
+        const admission = await request(app).post("/api/notifications/push/admissions").send({ deviceId: device })
             .set("Authorization", "Bearer token-owner-a").expect(200);
         const ecdh = createECDH("prime256v1");
         const registration = {
@@ -68,17 +68,29 @@ describe("authenticated Web Push device API", () => {
         });
         expect(committed.body).not.to.have.any.keys("endpoint", "p256dh", "auth");
 
+        const renewalAdmission = await request(app).post("/api/notifications/push/admissions").send({
+            deviceId: device,
+        })
+            .set("Authorization", "Bearer token-owner-a").expect(200);
         const repeated = await request(app).put(`/api/notifications/push/devices/${device}`)
             .set("Authorization", "Bearer token-owner-a").send({
                 ...registration,
+                expectedRevision: 1,
+                admissionFence: renewalAdmission.body.admissionFence,
                 enrollmentGeneration: "uncommitted_generation_0002",
             }).expect(200);
-        expect(repeated.body).to.deep.equal(committed.body);
+        expect(repeated.body).to.include({
+            revision: 2,
+            state: "registered",
+            enrollmentGeneration: "uncommitted_generation_0002",
+        });
         const ownerB = await request(app).get(`/api/notifications/push/devices/${device}`)
             .set("Authorization", "Bearer token-owner-b").expect(200);
         expect(ownerB.body).to.include({ revision: 0, state: "disabled" });
 
-        const invalidAdmission = await request(app).post("/api/notifications/push/admissions")
+        const invalidAdmission = await request(app).post("/api/notifications/push/admissions").send({
+            deviceId: device,
+        })
             .set("Authorization", "Bearer token-owner-a").expect(200);
         await request(app).put("/api/notifications/push/devices/another_device_identifier")
             .set("Authorization", "Bearer token-owner-a").send({
@@ -91,11 +103,11 @@ describe("authenticated Web Push device API", () => {
         const reopened = createApp(new PushDeviceStore(db));
         const persisted = await request(reopened).get(`/api/notifications/push/devices/${device}`)
             .set("Authorization", "Bearer token-owner-a").expect(200);
-        expect(persisted.body).to.deep.equal(committed.body);
+        expect(persisted.body).to.deep.equal(repeated.body);
         await request(reopened).post(`/api/notifications/push/devices/${device}/disable`)
             .set("Authorization", "Bearer token-owner-a").expect(200)
-            .expect(response => expect(response.body).to.include({ revision: 2, state: "disabled" }));
-        expect(store.get("owner-a", device)).to.include({ revision: 2, state: "disabled" });
+            .expect(response => expect(response.body).to.include({ revision: 3, state: "disabled" }));
+        expect(store.get("owner-a", device)).to.include({ revision: 3, state: "disabled" });
         db.close();
     });
 
@@ -104,29 +116,52 @@ describe("authenticated Web Push device API", () => {
         const store = new PushDeviceStore(db);
         store.initialize();
         const app = createApp(store);
-        const admission = await request(app).post("/api/notifications/push/admissions")
+        const admission = await request(app).post("/api/notifications/push/admissions").send({ deviceId: device })
+            .set("Authorization", "Bearer token-owner-a").expect(200);
+
+        await request(app).post("/api/notifications/push/devices/unrelated_device_identifier/disable")
+            .set("Authorization", "Bearer token-owner-a").expect(200);
+
+        const ecdh = createECDH("prime256v1");
+        const registration = {
+            expectedRevision: 0,
+            admissionFence: admission.body.admissionFence,
+            enrollmentGeneration: "admitted_generation_0001",
+            vapidKeyId: config.vapidKeyId,
+            subscription: {
+                endpoint: "https://push.example.test/send/admitted",
+                keys: {
+                    p256dh: ecdh.generateKeys().toString("base64url"),
+                    auth: Buffer.alloc(16, 8).toString("base64url"),
+                },
+            },
+        };
+        await request(app).put(`/api/notifications/push/devices/${device}`)
+            .set("Authorization", "Bearer token-owner-a").send(registration).expect(200);
+
+        const disabled = await request(app).post(`/api/notifications/push/devices/${device}/disable`)
+            .set("Authorization", "Bearer token-owner-a").expect(200);
+        const contestedAdmission = await request(app).post("/api/notifications/push/admissions").send({
+            deviceId: device,
+        })
             .set("Authorization", "Bearer token-owner-a").expect(200);
 
         await request(app).post(`/api/notifications/push/devices/${device}/disable`)
             .set("Authorization", "Bearer token-owner-a").expect(200)
-            .expect(response => expect(response.body).to.include({ revision: 0, state: "disabled" }));
+            .expect(response => expect(response.body).to.include({ revision: 3, state: "disabled" }));
 
-        const ecdh = createECDH("prime256v1");
         await request(app).put(`/api/notifications/push/devices/${device}`)
             .set("Authorization", "Bearer token-owner-a").send({
-                expectedRevision: 0,
-                admissionFence: admission.body.admissionFence,
+                ...registration,
+                expectedRevision: disabled.body.revision,
+                admissionFence: contestedAdmission.body.admissionFence,
                 enrollmentGeneration: "overtaken_generation_01",
-                vapidKeyId: config.vapidKeyId,
                 subscription: {
+                    ...registration.subscription,
                     endpoint: "https://push.example.test/send/overtaken",
-                    keys: {
-                        p256dh: ecdh.generateKeys().toString("base64url"),
-                        auth: Buffer.alloc(16, 8).toString("base64url"),
-                    },
                 },
             }).expect(409);
-        expect(store.get("owner-a", device)).to.equal(undefined);
+        expect(store.get("owner-a", device)).to.include({ state: "disabled" });
         db.close();
     });
 });

@@ -95,10 +95,14 @@ export function createPushDeviceRouter(options: {
             respond(error, res);
         }
     });
-    router.post("/notifications/push/admissions", (_req, res) => {
+    router.post("/notifications/push/admissions", (req, res) => {
+        const deviceId = (req.body as { deviceId?: unknown; } | undefined)?.deviceId;
+        if (typeof deviceId !== "string" || !ID.test(deviceId)) {
+            return void res.status(400).json({ error: "invalid_device" });
+        }
         try {
             const store = withStore(res);
-            if (store) res.json({ admissionFence: store.issueAdmission(res.locals.pushUid) });
+            if (store) res.json({ admissionFence: store.issueAdmission(res.locals.pushUid, deviceId) });
         } catch (error) {
             respond(error, res);
         }

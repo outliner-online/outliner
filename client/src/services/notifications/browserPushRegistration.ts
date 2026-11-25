@@ -155,18 +155,24 @@ export class BrowserPushRegistration {
             if (subscription && !sameBytes(subscription.options.applicationServerKey, applicationServerKey)) {
                 throw new Error("Existing subscription must be reconciled before enrollment");
             }
-            subscription ??= await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey });
+            subscription ??= await registration.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: applicationServerKey.buffer as ArrayBuffer,
+            });
             const json = subscription.toJSON();
             const enrollmentGeneration = randomId();
-            const status = await registerPushDevice(deviceId(), {
+            const currentDeviceId = deviceId();
+            const status = await registerPushDevice(currentDeviceId, {
                 expectedRevision: this.serverStatus?.revision ?? 0,
-                admissionFence: await createAdmission(),
+                admissionFence: await createAdmission(currentDeviceId),
                 enrollmentGeneration,
                 vapidKeyId: config.vapidKeyId,
                 subscription: { endpoint: subscription.endpoint, keys: json.keys },
             });
             if (generation !== this.operation) return;
-            if (!status.enrollmentGeneration) throw new Error("Committed enrollment generation is unavailable");
+            if (status.enrollmentGeneration !== enrollmentGeneration) {
+                throw new Error("Committed enrollment generation does not match this enrollment");
+            }
             await updateBinding("arm", {
                 fence: this.bindingFence,
                 generation: status.enrollmentGeneration,

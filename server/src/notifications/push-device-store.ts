@@ -40,6 +40,10 @@ export class PushDeviceStore {
             enrollment_generation TEXT, updated_at INTEGER NOT NULL,
             PRIMARY KEY(uid, device_id), CHECK(state IN ('registered','disabled'))
           );
+          CREATE TABLE IF NOT EXISTS web_push_admissions (
+            uid TEXT NOT NULL, device_id TEXT NOT NULL, admission_fence INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL, PRIMARY KEY(uid, device_id), UNIQUE(uid, admission_fence)
+          );
           CREATE INDEX IF NOT EXISTS web_push_devices_owner ON web_push_devices(uid, state);
         `);
     }
@@ -49,15 +53,28 @@ export class PushDeviceStore {
         }
         return this.database;
     }
-    issueAdmission(uid: string): number {
+    issueAdmission(uid: string, deviceId: string): number {
         const db = this.db();
         return db.transaction(() => {
             db.prepare("INSERT INTO web_push_owners(uid, admission_fence) VALUES (?, 0) ON CONFLICT(uid) DO NOTHING")
                 .run(uid);
+            const existing = db.prepare("SELECT 1 FROM web_push_admissions WHERE uid=? AND device_id=?")
+                .get(uid, deviceId);
+            const admitted = (db.prepare("SELECT COUNT(*) count FROM web_push_admissions WHERE uid=?").get(uid) as {
+                count: number;
+            }).count;
+            if (!existing && admitted >= MAX_RETAINED_PUSH_DEVICES) {
+                throw new PushDeviceError("capacity", "Device capacity reached");
+            }
             db.prepare("UPDATE web_push_owners SET admission_fence=admission_fence+1 WHERE uid=?").run(uid);
-            return (db.prepare("SELECT admission_fence FROM web_push_owners WHERE uid=?").get(uid) as {
+            const fence = (db.prepare("SELECT admission_fence FROM web_push_owners WHERE uid=?").get(uid) as {
                 admission_fence: number;
             }).admission_fence;
+            db.prepare(
+                `INSERT INTO web_push_admissions(uid,device_id,admission_fence,updated_at) VALUES (?,?,?,?)
+                 ON CONFLICT(uid,device_id) DO UPDATE SET admission_fence=excluded.admission_fence,updated_at=excluded.updated_at`,
+            ).run(uid, deviceId, fence, Date.now());
+            return fence;
         }).immediate();
     }
     list(uid: string): PushDeviceStatus[] {
@@ -73,12 +90,6 @@ export class PushDeviceStore {
     register(uid: string, deviceId: string, input: ValidatedRegistration): PushDeviceStatus {
         const db = this.db();
         return db.transaction(() => {
-            const owner = db.prepare("SELECT admission_fence FROM web_push_owners WHERE uid=?").get(uid) as {
-                admission_fence: number;
-            } | undefined;
-            if (!owner || owner.admission_fence !== input.admissionFence) {
-                throw new PushDeviceError("conflict", "Registration authority is stale");
-            }
             const row = db.prepare("SELECT * FROM web_push_devices WHERE uid=? AND device_id=?").get(uid, deviceId) as
                 | Record<string, unknown>
                 | undefined;
@@ -86,7 +97,12 @@ export class PushDeviceStore {
             if (
                 row?.state === "registered" && row.endpoint === input.endpoint && row.p256dh === input.p256dh
                 && row.auth_secret === input.auth && row.vapid_key_id === input.vapidKeyId
+                && row.enrollment_generation === input.enrollmentGeneration
             ) return this.get(uid, deviceId)!;
+            const admission = db.prepare(
+                "SELECT 1 FROM web_push_admissions WHERE uid=? AND device_id=? AND admission_fence=?",
+            ).get(uid, deviceId, input.admissionFence);
+            if (!admission) throw new PushDeviceError("conflict", "Registration authority is stale");
             if ((row ? Number(row.revision) : 0) !== input.expectedRevision) {
                 throw new PushDeviceError("conflict", "Registration authority is stale");
             }
@@ -121,6 +137,8 @@ export class PushDeviceStore {
             )
                 .run(uid, deviceId, revision, endpointHash, input.endpoint, input.p256dh, input.auth, input.vapidKeyId,
                     input.enrollmentGeneration, Date.now());
+            db.prepare("DELETE FROM web_push_admissions WHERE uid=? AND device_id=? AND admission_fence=?")
+                .run(uid, deviceId, input.admissionFence);
             return this.get(uid, deviceId)!;
         }).immediate();
     }
@@ -128,10 +146,9 @@ export class PushDeviceStore {
         const db = this.db();
         return db.transaction(() => {
             const row = this.get(uid, deviceId);
-            // A pending first enrollment has no device row yet. Advancing an
-            // existing owner fence invalidates that admitted authority without
-            // allocating a per-device tombstone for a never-admitted ID.
-            db.prepare("UPDATE web_push_owners SET admission_fence=admission_fence+1 WHERE uid=?").run(uid);
+            // Invalidate authority admitted for this exact device only. An
+            // absent unrelated ID remains an allocation-free no-op.
+            db.prepare("DELETE FROM web_push_admissions WHERE uid=? AND device_id=?").run(uid, deviceId);
             if (!row) return undefined;
             db.prepare(
                 `UPDATE web_push_devices SET revision=revision+1,state='disabled',endpoint_hash=NULL,endpoint=NULL,p256dh=NULL,auth_secret=NULL,enrollment_generation=NULL,updated_at=? WHERE uid=? AND device_id=?`,

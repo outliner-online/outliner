@@ -11,7 +11,7 @@ describe("private Web Push device store", () => {
         const db = new Database(":memory:");
         const store = new PushDeviceStore(db);
         store.initialize();
-        const admissionFence = store.issueAdmission("owner-a");
+        const admissionFence = store.issueAdmission("owner-a", device);
         const input = {
             endpoint: "https://push.example.test/send/1",
             p256dh: key,
@@ -26,18 +26,45 @@ describe("private Web Push device store", () => {
             state: "registered",
             enrollmentGeneration: "generation_marker_0001",
         });
-        expect(store.register("owner-a", device, {
+        const renewedInput = {
             ...input,
+            expectedRevision: 1,
+            admissionFence: store.issueAdmission("owner-a", device),
             enrollmentGeneration: "generation_marker_0002",
-        })).to.include({
-            revision: 1,
+        };
+        expect(store.register("owner-a", device, renewedInput)).to.include({
+            revision: 2,
             state: "registered",
-            enrollmentGeneration: "generation_marker_0001",
+            enrollmentGeneration: "generation_marker_0002",
         });
-        expect(store.disable("owner-a", device)).to.include({ revision: 2, state: "disabled" });
-        expect(() => store.register("owner-a", device, { ...input, expectedRevision: 2 })).to.throw(PushDeviceError,
+        expect(store.register("owner-a", device, renewedInput)).to.include({
+            revision: 2,
+            enrollmentGeneration: "generation_marker_0002",
+        });
+        expect(store.disable("owner-a", device)).to.include({ revision: 3, state: "disabled" });
+        expect(() => store.register("owner-a", device, { ...input, expectedRevision: 3 })).to.throw(PushDeviceError,
             "stale");
-        expect(new PushDeviceStore(db).get("owner-a", device)).to.include({ revision: 2, state: "disabled" });
+        expect(new PushDeviceStore(db).get("owner-a", device)).to.include({ revision: 3, state: "disabled" });
+        db.close();
+    });
+
+    it("keeps another device's admitted authority when an absent device is disabled", () => {
+        const db = new Database(":memory:");
+        const store = new PushDeviceStore(db);
+        store.initialize();
+        const admittedDevice = "admitted_device_identifier";
+        const fence = store.issueAdmission("owner-a", admittedDevice);
+
+        expect(store.disable("owner-a", "unrelated_device_identifier")).to.equal(undefined);
+        expect(store.register("owner-a", admittedDevice, {
+            endpoint: "https://push.example.test/admitted",
+            p256dh: key,
+            auth,
+            vapidKeyId: "key-1",
+            expectedRevision: 0,
+            admissionFence: fence,
+            enrollmentGeneration: "admitted_generation_0001",
+        })).to.include({ state: "registered", enrollmentGeneration: "admitted_generation_0001" });
         db.close();
     });
 
@@ -53,14 +80,14 @@ describe("private Web Push device store", () => {
             auth,
             vapidKeyId: "key-1",
             expectedRevision: 0,
-            admissionFence: store.issueAdmission("owner-a"),
+            admissionFence: store.issueAdmission("owner-a", device),
             enrollmentGeneration: "generation_marker_0001",
         };
         store.register("owner-a", device, input);
         expect(() =>
             store.register("owner-b", "device_identifier_0002", {
                 ...input,
-                admissionFence: store.issueAdmission("owner-b"),
+                admissionFence: store.issueAdmission("owner-b", "device_identifier_0002"),
                 enrollmentGeneration: "generation_marker_0002",
             })
         ).to.throw(PushDeviceError, "conflicts with an existing destination");
@@ -71,7 +98,7 @@ describe("private Web Push device store", () => {
         const db = new Database(":memory:");
         const store = new PushDeviceStore(db);
         store.initialize();
-        const pendingFence = store.issueAdmission("pending-owner");
+        const pendingFence = store.issueAdmission("pending-owner", device);
         expect(store.disable("pending-owner", device)).to.equal(undefined);
         expect(store.list("pending-owner")).to.deep.equal([]);
         expect(() => store.register("pending-owner", device, {
@@ -91,7 +118,8 @@ describe("private Web Push device store", () => {
                 auth,
                 vapidKeyId: "key-1",
                 expectedRevision: 0,
-                admissionFence: store.issueAdmission("full-owner"),
+                admissionFence: store.issueAdmission("full-owner",
+                    `capacity_device_${index.toString().padStart(2, "0")}`),
                 enrollmentGeneration: `capacity_generation_${index.toString().padStart(2, "0")}`,
             });
         }
@@ -102,7 +130,7 @@ describe("private Web Push device store", () => {
             auth,
             vapidKeyId: "key-1",
             expectedRevision: 0,
-            admissionFence: store.issueAdmission("full-owner"),
+            admissionFence: store.issueAdmission("full-owner", "capacity_replacement"),
             enrollmentGeneration: "capacity_replacement_generation",
         });
         expect(() => store.register("full-owner", "capacity_device_00", {
@@ -111,7 +139,7 @@ describe("private Web Push device store", () => {
             auth,
             vapidKeyId: "key-1",
             expectedRevision: disabled.revision,
-            admissionFence: store.issueAdmission("full-owner"),
+            admissionFence: store.issueAdmission("full-owner", "capacity_device_00"),
             enrollmentGeneration: "capacity_reactivation_generation",
         })).to.throw(PushDeviceError, "capacity");
         expect(store.get("full-owner", "capacity_device_00")).to.include({ state: "disabled" });

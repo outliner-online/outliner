@@ -192,6 +192,37 @@ describe("browser Web Push enrollment lifecycle", () => {
         expect(reopenedSettings.status).toBe("not-enrolled");
     });
 
+    it("does not re-arm a disarmed generation when an identical registration returns stale authority", async () => {
+        const enrollment = new BrowserPushRegistration();
+        await enrollment.reconcile();
+        await enrollment.enroll();
+        const oldGeneration = serverStatus.enrollmentGeneration;
+        await enrollment.disable();
+
+        serverStatus = {
+            ...serverStatus,
+            state: "registered",
+            vapidKeyId: "key-1",
+            endpointHash: await sha256(endpoint),
+            enrollmentGeneration: oldGeneration,
+        };
+        const immediateFetch = globalThis.fetch;
+        globalThis.fetch = async (input, init) => {
+            if (init?.method === "PUT") return json(serverStatus);
+            return immediateFetch(input, init);
+        };
+
+        const retry = new BrowserPushRegistration();
+        await retry.reconcile();
+        await retry.enroll();
+        expect(retry.status).toBe("failed");
+
+        const afterRestart = new BrowserPushRegistration();
+        await afterRestart.reconcile();
+        expect(afterRestart.status).toBe("not-enrolled");
+        expect(localStorage.getItem("outliner:web-push-armed")).toBeNull();
+    });
+
     it("keeps a completed cross-context disarm effective against a delayed enrollment arm", async () => {
         let releaseRegistration!: () => void;
         const registrationBarrier = new Promise<void>(resolve => releaseRegistration = resolve);
