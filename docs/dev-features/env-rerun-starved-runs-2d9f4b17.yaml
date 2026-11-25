@@ -1,23 +1,22 @@
 id: ENV-2d9f4b17
 title: Workflow runs starved of a hosted runner are re-queued automatically
 title-ja: ホストランナーを取得できなかった実行を自動で再キューする
-description: 'When GitHub cannot hand a queued job to a hosted runner it kills the job after about fifteen
-
+description: >-
+  When GitHub cannot hand a queued job to a hosted runner it kills the job after about fifteen
   minutes and the whole run is reported as failed even though nothing executed. The Rerun Starved Runs
-
   workflow watches the top-level workflows, recognises that signature (a cancelled job with no runner name
-
   that waited out the acquisition timeout, inside a run whose conclusion is failure) and re-queues the run,
-
   up to three attempts. Runs cancelled by a superseding push or by hand are left untouched. A hosted runner
-
   that dies mid-run is recognised the same way: the job concludes as failure with a runner assigned but its
-
   steps never reach a terminal state and no step failed, so no verdict exists (run 38041845041, e2e core-3).
-
   Jobs with a failed step keep their failure and are never re-queued as infrastructure loss.
-
-  '
+  The exact attempt-scoped jobs read retries HTTP 502, 503 and 504 up to three reads with 2- and 4-second
+  delays. Each read has a 30-second timeout and a 5-second kill grace, within the existing five-minute
+  workflow budget. Authentication, permissions, throttling and rerun writes do not receive new retries.
+  Before classification, the response must contain one valid JSON job-list page for the requested run
+  and attempt, with the fields needed for eligibility, including explicit step status and conclusion.
+  Unavailable or invalid evidence exits unsuccessfully without classification or a rerun request.
+  The existing first-page scope and failed-jobs rerun route with its full-run fallback are preserved.
 category: environment
 status: implemented
 components:
@@ -25,3 +24,4 @@ components:
 - scripts/ci/rerun-starved-run.sh
 tests:
 - scripts/tests/env-rerun-starved-runs-2d9f4b17.spec.ts
+- scripts/tests/env-rerun-job-evidence-2d9f4b17.spec.ts
