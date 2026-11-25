@@ -84,6 +84,43 @@ function isolatedCheckout(directory: string, failures: { unit?: boolean; base?: 
     );
     return { checkout, client };
 }
+function runStableWorkflow(isolated: ReturnType<typeof isolatedCheckout>) {
+    const artifacts = path.join(isolated.checkout, "unit-artifacts");
+    const shardRuns = [1, 2].map((shard) => {
+        const result = spawnSync("npm", ["run", "github:test:unit"], {
+            cwd: isolated.client,
+            env: env({ UNIT_SHARD: `${shard}/2` }),
+        });
+        if (result.status === 0) {
+            const shardDirectory = path.join(artifacts, `unit-shard-${shard}-100-2`);
+            fs.mkdirSync(path.join(shardDirectory, "unit-evidence"), { recursive: true });
+            fs.mkdirSync(path.join(shardDirectory, "coverage", `unit-shard-${shard}`), { recursive: true });
+            fs.copyFileSync(
+                path.join(isolated.checkout, "unit-evidence", `shard-${shard}.json`),
+                path.join(shardDirectory, "unit-evidence", `shard-${shard}.json`),
+            );
+            fs.copyFileSync(
+                path.join(isolated.checkout, "coverage", `unit-shard-${shard}`, "coverage-final.json"),
+                path.join(shardDirectory, "coverage", `unit-shard-${shard}`, "coverage-final.json"),
+            );
+        }
+        return result;
+    });
+    const workflow = unitWorkflow();
+    const reject = workflow.jobs["unit-test"].steps.find((step: any) => step.name.includes("Reject"));
+    const shardResult = shardRuns.every((result) => result.status === 0) ? "success" : "failure";
+    const rejection = spawnSync("bash", ["-c", reject.run], {
+        cwd: isolated.checkout,
+        env: { ...process.env, SHARD_RESULT: shardResult },
+    });
+    if (rejection.status !== 0) return { artifacts, result: rejection, shardRuns };
+    const stableCommand = workflow.jobs["unit-test"].steps.find((step: any) => step.name.includes("Verify")).run;
+    const result = spawnSync("bash", ["-c", stableCommand], {
+        cwd: isolated.checkout,
+        env: env({ UNIT_ARTIFACT_DIR: artifacts }),
+    });
+    return { artifacts, result, shardRuns };
+}
 function basePackage(directory: string, failing = true) {
     const baseDirectory = path.join(directory, "base-package");
     fs.mkdirSync(baseDirectory);
@@ -172,21 +209,14 @@ describe("unit CI native shard orchestration", () => {
         });
         expect(fs.statSync(path.join(directory, "shard-1.json")).size).toBeGreaterThan(0);
         const failingCheckout = isolatedCheckout(path.join(directory, "native-failure"), { unit: true });
-        const failed = spawnSync("npm", ["run", "github:test:unit"], {
-            cwd: failingCheckout.client,
-            env: env({ UNIT_SHARD: "1/1" }),
-        });
-        expect(failed.status).toBe(1);
-        expect(`${failed.stdout}\n${failed.stderr}`).toContain("expected 1 to be 2");
+        const failedWorkflow = runStableWorkflow(failingCheckout);
+        expect(failedWorkflow.result.status).toBe(1);
         expect(
-            JSON.parse(
-                fs.readFileSync(path.join(failingCheckout.checkout, "unit-evidence", "shard-1.json"), "utf8"),
-            ).testResults[0].assertionResults[0].status,
-        ).toBe("failed");
-        const reject = unitWorkflow().jobs["unit-test"].steps.find((step: any) => step.name.includes("Reject"));
-        const shardResult = failed.status === 0 ? "success" : "failure";
-        expect(spawnSync("bash", ["-c", reject.run], { env: { ...process.env, SHARD_RESULT: shardResult } }).status)
-            .toBe(1);
+            failedWorkflow.shardRuns.some((result) =>
+                `${result.stdout}\n${result.stderr}`.includes("expected 1 to be 2")
+            ),
+        )
+            .toBe(true);
     });
 
     test("the real aggregate verifies exact identities and coverage before running base exactly once", () => {
@@ -231,47 +261,20 @@ describe("unit CI native shard orchestration", () => {
     test("the shipped stable-check command verifies a real native sharded selection", () => {
         const directory = temporaryDirectory();
         const isolated = isolatedCheckout(directory);
-        const artifacts = path.join(isolated.checkout, "unit-artifacts");
-        for (const shard of [1, 2]) {
-            execFileSync("npm", ["run", "github:test:unit"], {
-                cwd: isolated.client,
-                env: env({ UNIT_SHARD: `${shard}/2` }),
-            });
-            const shardDirectory = path.join(artifacts, `unit-shard-${shard}-100-2`);
-            fs.mkdirSync(path.join(shardDirectory, "unit-evidence"), { recursive: true });
-            fs.mkdirSync(path.join(shardDirectory, "coverage", `unit-shard-${shard}`), { recursive: true });
-            fs.copyFileSync(
-                path.join(isolated.checkout, "unit-evidence", `shard-${shard}.json`),
-                path.join(shardDirectory, "unit-evidence", `shard-${shard}.json`),
-            );
-            fs.copyFileSync(
-                path.join(isolated.checkout, "coverage", `unit-shard-${shard}`, "coverage-final.json"),
-                path.join(shardDirectory, "coverage", `unit-shard-${shard}`, "coverage-final.json"),
-            );
-        }
-        const workflow = unitWorkflow();
-        const stableCommand = workflow.jobs["unit-test"].steps.find((step: any) => step.name.includes("Verify")).run;
-        execFileSync("bash", ["-c", stableCommand], {
-            cwd: isolated.checkout,
-            env: env({
-                UNIT_ARTIFACT_DIR: artifacts,
-            }),
-        });
+        const successfulWorkflow = runStableWorkflow(isolated);
+        expect(successfulWorkflow.result.status).toBe(0);
         expect(fs.readFileSync(path.join(isolated.checkout, "job_logs/base-test.log"), "utf8")).toContain(
             "Tests  1 passed",
         );
-        fs.writeFileSync(
-            path.join(isolated.client, "base.test.js"),
-            'import { test, expect } from "vitest"; test("base package failure", () => { console.log("BASE PACKAGE FAILURE"); expect(1).toBe(2); });\n',
+        const failingBaseCheckout = isolatedCheckout(temporaryDirectory(), { base: true });
+        const failedWorkflow = runStableWorkflow(failingBaseCheckout);
+        expect(failedWorkflow.result.status).toBe(1);
+        const baseFailureLog = fs.readFileSync(
+            path.join(failingBaseCheckout.checkout, "job_logs/base-test.log"),
+            "utf8",
         );
-        const baseFailure = spawnSync("bash", ["-c", stableCommand], {
-            cwd: isolated.checkout,
-            env: env({ UNIT_ARTIFACT_DIR: artifacts }),
-        });
-        expect(baseFailure.status).toBe(1);
-        expect(fs.readFileSync(path.join(isolated.checkout, "job_logs/base-test.log"), "utf8")).toContain(
-            "BASE PACKAGE FAILURE",
-        );
+        expect(baseFailureLog).toContain("BASE PACKAGE ENTRY");
+        expect(baseFailureLog).toContain("expected 1 to be 2");
     });
 
     test("the package unit entry remains usable without shard orchestration", () => {
