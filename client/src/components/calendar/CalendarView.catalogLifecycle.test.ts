@@ -39,7 +39,12 @@ describe("CalendarView catalog lifecycle", { timeout: 120_000 }, () => {
         });
         const projections: CalendarProjectionResult[] = [];
         const component = render(CalendarView, {
-            props: { project, projectId, calendarId, onVisibleProjection: result => projections.push(result) },
+            props: {
+                project,
+                projectId,
+                calendarId,
+                onVisibleProjection: (result: CalendarProjectionResult) => projections.push(result),
+            },
         });
         await waitFor(() => expect(component.getByText("Catalog event")).toBeTruthy());
         await waitFor(() => expect(projections.at(-1)?.ready).toBe(true));

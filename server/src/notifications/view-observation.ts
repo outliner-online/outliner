@@ -22,6 +22,7 @@ import {
     createKanbanVisibleProjection,
     isKanbanObservationContextV1,
 } from "../../../shared/src/notifications/kanbanProjection.js";
+import { getKanbanRegistry } from "../../../shared/src/services/kanbanDefinition.js";
 import { OutlinerKanbanQueryService } from "../mcp/kanban-query-service.js";
 import { McpReadError } from "../mcp/mcp-error.js";
 import { savedViewOpener } from "./saved-view-producer.js";
@@ -256,7 +257,7 @@ function kanbanOpener(
     options: ConstructorParameters<typeof OutlinerKanbanQueryService>[2],
 ): ViewProducerOpener {
     return async ({ uid, target, context }) => {
-        const service = new OutlinerKanbanQueryService(host, canAccess, options);
+        const service = new OutlinerKanbanQueryService(host, canAccess, { ...options, retainNonReady: true });
         let observed = await service.openObservation(uid, target.projectId, target.objectId);
         let documents = observationDocuments(observed);
         let closed = false;
@@ -309,8 +310,19 @@ function kanbanOpener(
                         await retained.release();
                         return { status: "stale", reason: closed ? "closed" : "incarnation_lost" };
                     }
+                    // A refused capture can still carry the old definition
+                    // identity when the live target changed during an await.
+                    // Classify against the retained authoritative room itself.
+                    const currentDefinition = getKanbanRegistry(retainedDocuments[0]!).get(target.objectId);
+                    if (!currentDefinition) {
+                        terminalReason = "not_found";
+                        await candidate.release();
+                        await retained.release();
+                        return { status: "not_found", reason: terminalReason };
+                    }
                     if (
                         closed || lifecycleGeneration !== refreshGeneration
+                        || retained.definitionIdentity !== currentDefinition
                         || retained.definitionIdentity !== candidate.definitionIdentity
                     ) {
                         terminalReason = closed ? undefined : "incarnation_lost";

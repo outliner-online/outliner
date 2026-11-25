@@ -106,7 +106,8 @@ export function savedViewOpener(
                     // the retained authority for the next refresh attempt.
                     if (
                         candidate.projection.status === "stale" && candidate.projection.reason === "inputs_changed"
-                        && candidate.definitionCurrent() && retained.definition === candidate.definition
+                        && retained.authoritiesCurrent() && candidate.definitionCurrent()
+                        && retained.definition === candidate.definition
                     ) {
                         await candidate.release();
                         return candidate.projection;
@@ -126,8 +127,11 @@ export function savedViewOpener(
                         await candidate.release();
                         return projection;
                     }
+                    // Both captures can still point to the same displaced
+                    // room after an await, so pairwise identity is not enough.
                     if (
-                        closed || !candidate.definitionCurrent() || retained.definition !== candidate.definition
+                        closed || !retained.authoritiesCurrent() || !candidate.definitionCurrent()
+                        || retained.definition !== candidate.definition
                         || !sameAuthorities(retained, candidate)
                     ) {
                         terminal = closed ? undefined : "incarnation_lost";

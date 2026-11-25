@@ -112,6 +112,8 @@ export class OutlinerKanbanQueryService {
         private readonly hocuspocus: Pick<Hocuspocus, "openDirectConnection"> & Partial<Pick<Hocuspocus, "documents">>,
         private readonly canAccess: (uid: string, projectId: string) => Promise<boolean>,
         private readonly options: {
+            /** Keep non-ready captures alive until their observation owner releases them. */
+            retainNonReady?: boolean;
             beforeCertification?: () => Promise<void>;
             beforeFinalCertification?: () => Promise<void>;
             beforeSourceOpen?: (tableId: string, index: number) => Promise<void>;
@@ -127,6 +129,13 @@ export class OutlinerKanbanQueryService {
         let project: DirectConnection | undefined;
         const sources = new Map<string, DirectConnection>();
         let transferred = false;
+        const finish = async (...args: Parameters<OutlinerKanbanQueryService["finish"]>) => {
+            const observation = await this.finish(...args);
+            // Diagnostics keep their existing eager cleanup. Retained view
+            // observers explicitly own these same handles even when non-ready.
+            transferred = this.options.retainNonReady === true;
+            return observation;
+        };
         let failure: unknown;
         try {
             project = await openLiveRoom(host, `projects/${projectId}`, uid, { effect: "none" });
@@ -137,7 +146,7 @@ export class OutlinerKanbanQueryService {
             const settings = readKanbanSettings(entry);
             const querySize = Buffer.byteLength(settings.query, "utf8");
             if (querySize > LIMITS.queryBytes) {
-                return await this.finish(
+                return await finish(
                     uid,
                     projectId,
                     project,
@@ -151,7 +160,7 @@ export class OutlinerKanbanQueryService {
                 );
             }
             if (!settings.query.trim() || !settings.groupField) {
-                return await this.finish(
+                return await finish(
                     uid,
                     projectId,
                     project,
@@ -167,7 +176,7 @@ export class OutlinerKanbanQueryService {
             try {
                 query = validateReadOnlySelect(settings.query, false);
             } catch {
-                return await this.finish(
+                return await finish(
                     uid,
                     projectId,
                     project,
@@ -208,7 +217,7 @@ export class OutlinerKanbanQueryService {
                     revision: documentRevision(tableDoc),
                 });
                 if (!this.inputsCurrent(host, projectId, doc, entry, inputs, projectRevision)) {
-                    return await this.finish(
+                    return await finish(
                         uid,
                         projectId,
                         project,
@@ -259,7 +268,7 @@ export class OutlinerKanbanQueryService {
                     `SELECT * FROM (${normalized}\n) AS kanban_observation LIMIT ${LIMITS.rows + 1}`,
                 );
                 if ((result.fields?.length ?? 0) > LIMITS.columns) {
-                    return await this.finish(
+                    return await finish(
                         uid,
                         projectId,
                         project,
@@ -273,7 +282,7 @@ export class OutlinerKanbanQueryService {
                     );
                 }
                 if (result.rows.length > LIMITS.rows) {
-                    return await this.finish(
+                    return await finish(
                         uid,
                         projectId,
                         project,
@@ -291,7 +300,7 @@ export class OutlinerKanbanQueryService {
                     "utf8",
                 );
                 if (jsonBytes > LIMITS.jsonBytes) {
-                    return await this.finish(
+                    return await finish(
                         uid,
                         projectId,
                         project,
@@ -310,7 +319,7 @@ export class OutlinerKanbanQueryService {
                         names.filter(name => name === field).length !== 1
                     );
                 if (invalidRole) {
-                    return await this.finish(
+                    return await finish(
                         uid,
                         projectId,
                         project,
@@ -343,7 +352,7 @@ export class OutlinerKanbanQueryService {
                 const declaredLanes = await groupingChoices(lease.db, settings, analysis, catalog.enums);
                 const projection = projectRows(result.rows, settings, analysis, evidence.queryId, declaredLanes);
                 if (!projection) {
-                    return await this.finish(
+                    return await finish(
                         uid,
                         projectId,
                         project,
@@ -356,7 +365,7 @@ export class OutlinerKanbanQueryService {
                     );
                 }
                 if (projection.lanes.length > LIMITS.lanes) {
-                    return await this.finish(
+                    return await finish(
                         uid,
                         projectId,
                         project,
@@ -373,7 +382,7 @@ export class OutlinerKanbanQueryService {
                 await this.authorize(uid, projectId);
                 const currentCheck = () => this.inputsCurrent(host, projectId, doc, entry, inputs, projectRevision);
                 if (!currentCheck()) {
-                    return await this.finish(
+                    return await finish(
                         uid,
                         projectId,
                         project,
@@ -391,7 +400,7 @@ export class OutlinerKanbanQueryService {
                     "utf8",
                 );
                 if (completeJsonBytes > LIMITS.jsonBytes) {
-                    return await this.finish(
+                    return await finish(
                         uid,
                         projectId,
                         project,
@@ -408,7 +417,7 @@ export class OutlinerKanbanQueryService {
                 await this.options.beforeFinalCertification?.();
                 await this.authorize(uid, projectId);
                 if (!currentCheck()) {
-                    return await this.finish(
+                    return await finish(
                         uid,
                         projectId,
                         project,
@@ -444,7 +453,7 @@ export class OutlinerKanbanQueryService {
                     : error instanceof SourceMaterializationError
                     ? "incomplete_source_materialization"
                     : "execution_error";
-                return await this.finish(
+                return await finish(
                     uid,
                     projectId,
                     project,

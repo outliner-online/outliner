@@ -5,8 +5,8 @@ import * as Y from "yjs";
 const routeState = vi.hoisted(() => ({
     docsById: new Map<string, unknown>(),
     docsByTitle: new Map<string, unknown>(),
-    openById: vi.fn(),
-    openByTitle: vi.fn(),
+    openById: vi.fn<(key: string) => void>(),
+    openByTitle: vi.fn<(key: string) => void>(),
 }));
 
 vi.mock("$app/navigation", () => ({ goto: vi.fn() }));
@@ -21,8 +21,7 @@ vi.mock("../../lib/routeProject", async () => {
     const { store } = await import("../../stores/store.svelte");
     const { yjsStore } = await import("../../stores/yjsStore.svelte");
     const open =
-        (docs: Map<string, unknown>, tracker: ReturnType<typeof vi.fn>) =>
-        async (key: string, isStale: () => boolean) => {
+        (docs: Map<string, unknown>, tracker: (key: string) => void) => async (key: string, isStale: () => boolean) => {
             // Match the real network-backed opener's asynchronous boundary so
             // store publication is not captured as a dependency of the view's
             // route-loading effect.

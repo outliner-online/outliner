@@ -147,6 +147,7 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
             expect(displayedTimestamp).not.toBe(displayedDate);
             await waitFor(() => expect(getGridProjection(grid.gridId).status).toBe("ready"));
             const initial = getGridProjection(grid.gridId);
+            if (initial.status !== "ready") throw new Error("Expected accepted heterogeneous projection");
             expect(initial).toMatchObject({
                 status: "ready",
                 projection: {

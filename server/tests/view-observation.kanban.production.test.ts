@@ -174,6 +174,61 @@ describe("retained view observation production refresh", function() {
         await Promise.all(held.map(connection => connection.disconnect()));
     });
 
+    for (const change of ["delete", "replace", "edit"] as const) {
+        it(`certifies a definition ${change} during a held refresh`, async () => {
+            const query = "SELECT id, status, title FROM tasks ORDER BY id";
+            const held = await seed(server.hocuspocus, query, { titleField: "title" });
+            const reached = deferred(), resume = deferred();
+            let openings = 0;
+            const service = new ViewObservationService(server.hocuspocus, async () => true, {}, {
+                beforeSourceOpen: async () => {
+                    if (++openings === 2) {
+                        reached.resolve();
+                        await resume.promise;
+                    }
+                },
+            });
+            const handle = await service.openViewObservation({
+                uid: UID,
+                target: { projectId: PROJECT, kind: "kanban", objectId: "board" },
+                context,
+            });
+            try {
+                const ready = await handle.readSnapshot({ observedAtUtcMs: 1 });
+                if (ready.status !== "ready") throw new Error("Kanban not ready");
+                const source = held[1].document as unknown as Y.Doc;
+                source.getMap<Y.Map<unknown>>("data").get("a")!.set("title", "Changed");
+                const pending = handle.readSnapshot({ observedAtUtcMs: 2 });
+                await reached.promise;
+                const project = held[0].document as unknown as Y.Doc;
+                if (change === "edit") getKanbanRegistry(project).get("board")!.set("name", "Edited");
+                else {
+                    getKanbanRegistry(project).delete("board");
+                    if (change === "replace") {
+                        createKanbanEntry(project, "board", { query, groupField: "status", titleField: "title" });
+                    }
+                }
+                resume.resolve();
+                const expected = change === "delete"
+                    ? { status: "not_found", reason: "not_found" }
+                    : change === "replace"
+                    ? { status: "stale", reason: "incarnation_lost" }
+                    : { status: "unavailable", reason: "stale_evidence" };
+                expect(await pending).to.deep.equal(expected);
+                expect(handle.isCurrent(ready.versionToken)).to.equal(false);
+                const next = await handle.readSnapshot({ observedAtUtcMs: 3 });
+                if (change === "edit") {
+                    expect(next.status).to.equal("ready");
+                    if (next.status === "ready") expect(next.projection.title).to.equal("Edited");
+                } else expect(next).to.deep.equal(expected);
+            } finally {
+                resume.resolve();
+                await handle.close();
+                await Promise.all(held.map(connection => connection.disconnect()));
+            }
+        });
+    }
+
     it("invalidates an issued token when a live source record is deleted", async () => {
         const browserProject = "demo";
         const held = await seed(server.hocuspocus, "SELECT id, status, title FROM tasks ORDER BY id", {

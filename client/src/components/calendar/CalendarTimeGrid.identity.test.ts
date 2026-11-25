@@ -165,7 +165,7 @@ it("keeps the focused occurrence through accepted keyboard moves that change its
         duration: "00:30:00",
     };
     const moves: number[] = [];
-    const state: { view?: ReturnType<typeof render>; } = {};
+    const state: { view?: Pick<ReturnType<typeof render>, "rerender">; } = {};
     const onKeyboardMove = async (_entry: CalendarEntry, startMs: number) => {
         moves.push(startMs);
         await state.view!.rerender({
