@@ -166,10 +166,15 @@ function validateCompleteCoverageMaps(coverage, baseline) {
         if (coverageEntryCount(expected) === 0) continue;
         if (!coverage[file]) throw new Error(`merged coverage is missing executable file: ${file}`);
         for (const mapName of ["statementMap", "fnMap", "branchMap"]) {
-            // Svelte's source-map columns can differ depending on whether a
-            // module is transformed during discovery or test execution. Match
-            // definitions by their stable source lines and structure, while
-            // the current-attempt runner schemas above validate exact maps.
+            if (file.endsWith(".svelte")) {
+                if (Object.keys(expected[mapName]).length && !Object.keys(coverage[file][mapName]).length) {
+                    throw new Error(`merged coverage ${mapName} is empty for executable Svelte file: ${file}`);
+                }
+                continue;
+            }
+            // Match stable JS/TS source maps by source structure. Svelte maps
+            // are validated against each runner's exact schema above because
+            // discovery and execution can emit different generated nodes.
             const mergedSignatures = new Set(coverageDefinitionSignatures(coverage[file][mapName]));
             const missingSignatures = coverageDefinitionSignatures(expected[mapName])
                 .filter((definition) => !mergedSignatures.has(definition));
