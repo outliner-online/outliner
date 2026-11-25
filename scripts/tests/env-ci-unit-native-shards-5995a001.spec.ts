@@ -449,8 +449,17 @@ describe("unit CI native shard orchestration", () => {
             delete data["/source.ts"].statementMap[5];
             delete data["/source.ts"].s[5];
             fs.writeFileSync(shardCoverage, JSON.stringify(data));
+            const schemaPath = path.join(
+                directory,
+                `unit-shard-${shard}-100-2/unit-evidence/coverage-schema-${shard}.json`,
+            );
+            const schema = JSON.parse(fs.readFileSync(schemaPath, "utf8"));
+            delete schema["/source.ts"].statementMap[5];
+            fs.writeFileSync(schemaPath, JSON.stringify(schema));
         }
-        expect(run(directory).stderr.toString()).toContain("coverage statementMap differs from runner schema");
+        expect(run(directory).stderr.toString()).toContain(
+            "merged coverage statementMap differs from native selection",
+        );
         artifactFixture(directory);
         const first = path.join(directory, "unit-shard-1-100-2/unit-evidence/shard-1.json");
         fs.copyFileSync(first, path.join(directory, "unit-shard-2-100-2/unit-evidence/shard-2.json"));

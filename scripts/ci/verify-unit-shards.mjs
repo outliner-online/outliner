@@ -106,18 +106,6 @@ function validateCoverageSchema(coverage, schema, shard) {
         }
     }
 }
-function mergeCoverageSchema(baseline, schema) {
-    for (const [file, data] of Object.entries(schema)) {
-        const target = baseline[file] ??= { statementMap: {}, fnMap: {}, branchMap: {} };
-        for (const mapName of ["statementMap", "fnMap", "branchMap"]) {
-            const definitions = new Set(canonicalDefinitions(target[mapName]));
-            for (const definition of canonicalDefinitions(data[mapName])) definitions.add(definition);
-            target[mapName] = Object.fromEntries(
-                [...definitions].map((definition, index) => [index, JSON.parse(definition)]),
-            );
-        }
-    }
-}
 function mergeCoverageReports(reports) {
     const result = {};
     for (const coverage of reports) {
@@ -173,6 +161,23 @@ function validateCompleteCoverageMaps(coverage, baseline) {
         }
     }
 }
+function nativeCoverageBaseline(testFile) {
+    if (process.env.UNIT_COVERAGE_BASELINE) {
+        return JSON.parse(fs.readFileSync(process.env.UNIT_COVERAGE_BASELINE, "utf8"));
+    }
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), `unit-coverage-baseline-${runId}-${runAttempt}-`));
+    execFileSync(vitestBin, ["run", testFile, ...configArgs, "--project", "unit", "--coverage",
+        "--coverage.reporter=json", `--coverage.reportsDirectory=${directory}`], {
+        cwd: clientDir,
+        stdio: "inherit",
+        env: { ...process.env, NODE_ENV: "test" },
+    });
+    const baselinePath = path.join(directory, "coverage-final.json");
+    if (!fs.existsSync(baselinePath)) throw new Error("native coverage baseline was not produced");
+    const baseline = JSON.parse(fs.readFileSync(baselinePath, "utf8"));
+    fs.rmSync(directory, { recursive: true });
+    return baseline;
+}
 const nativeSelectionPath = path.join(os.tmpdir(), `unit-native-selection-${runId}-${runAttempt}.json`);
 execFileSync(vitestBin, ["list", ...configArgs, "--project", "unit", "--no-static-parse",
     `--json=${nativeSelectionPath}`], {
@@ -180,17 +185,17 @@ execFileSync(vitestBin, ["list", ...configArgs, "--project", "unit", "--no-stati
     stdio: "inherit",
     env: { ...process.env, NODE_ENV: "test" },
 });
-const expected = expectedIdentities(JSON.parse(fs.readFileSync(nativeSelectionPath, "utf8")));
+const nativeSelection = JSON.parse(fs.readFileSync(nativeSelectionPath, "utf8"));
+const expected = expectedIdentities(nativeSelection);
 fs.rmSync(nativeSelectionPath);
 if (!expected.length) throw new Error("native unit selection is empty");
 const executed = [];
 const coverageReports = [];
 const expectedCoverageFiles = repositoryCoverageInventory();
-const suppliedCoverageBaseline = process.env.UNIT_COVERAGE_BASELINE;
-const coverageBaseline = suppliedCoverageBaseline
-    ? JSON.parse(fs.readFileSync(process.env.UNIT_COVERAGE_BASELINE, "utf8"))
-    : {};
-if (suppliedCoverageBaseline) validateCoverageMaps(coverageBaseline);
+const baselineSelection = nativeSelection.find((test) => relativeFile(test.file) === "src/utils/typeGuards.test.ts")
+    ?? nativeSelection[0];
+const coverageBaseline = nativeCoverageBaseline(relativeFile(baselineSelection.file));
+validateCoverageMaps(coverageBaseline);
 let nativeCoverageFiles;
 for (let shard = 1; shard <= shardCount; shard++) {
     const shardDir = path.join(artifactDir, `unit-shard-${shard}-${runId}-${runAttempt}`);
@@ -206,7 +211,6 @@ for (let shard = 1; shard <= shardCount; shard++) {
     executed.push(...identities);
     const coverage = JSON.parse(fs.readFileSync(coveragePath, "utf8"));
     const schema = JSON.parse(fs.readFileSync(schemaPath, "utf8"));
-    if (!suppliedCoverageBaseline) mergeCoverageSchema(coverageBaseline, schema);
     const coverageFiles = Object.keys(coverage).map((file) => path.resolve(file)).sort();
     if (!coverageFiles.length) throw new Error(`empty coverage for shard ${shard}`);
     const missing = expectedCoverageFiles.filter((file) => !coverageFiles.includes(file));
