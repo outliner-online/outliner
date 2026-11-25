@@ -151,6 +151,10 @@ function basePackage(directory: string, failing = true) {
 
 function artifactFixture(directory: string, run = "100", attempt = "2") {
     fs.writeFileSync(path.join(directory, "coverage-manifest.json"), JSON.stringify(["/source.ts", "/types.d.ts"]));
+    fs.writeFileSync(path.join(directory, "selection.json"), JSON.stringify([
+        { file: path.join(root, "client", "src", "a.test.ts"), name: "suite > first" },
+        { file: path.join(root, "client", "src", "b.test.ts"), name: "suite > second" },
+    ]));
     fs.writeFileSync(path.join(directory, "coverage-baseline.json"), JSON.stringify({
         "/source.ts": {
             path: "/source.ts",
@@ -401,6 +405,7 @@ describe("unit CI native shard orchestration", () => {
                         UNIT_BASE_DIR: failingBase,
                         UNIT_COVERAGE_MANIFEST: path.join(directory, "coverage-manifest.json"),
                         UNIT_COVERAGE_BASELINE: path.join(directory, "coverage-baseline.json"),
+                        UNIT_SELECTION_BASELINE: path.join(directory, "selection.json"),
                         ...extra,
                     }),
                 },
@@ -488,7 +493,7 @@ describe("unit CI native shard orchestration", () => {
         expect(workflow.jobs["unit-test"].if).toBe("always()");
         expect(workflow.jobs["unit-test"]["timeout-minutes"]).toBe(20);
         expect(workflow.jobs["unit-test"].steps.some((step: any) => step.uses === "./.github/actions/setup-test-env"))
-            .toBe(true);
+            .toBe(false);
         const verify = workflow.jobs["unit-test"].steps.find((step: any) => step.name.includes("Verify"));
         expect(verify.run).toBe("scripts/ci/finalize-unit-tests.sh");
         const baselineDownload = workflow.jobs["unit-test"].steps.find((step: any) =>
@@ -496,20 +501,21 @@ describe("unit CI native shard orchestration", () => {
         );
         expect(baselineDownload.with.path).toBe(".");
         expect(verify.env.UNIT_COVERAGE_BASELINE).toBe("coverage/unit-baseline/coverage-final.json");
+        expect(verify.env.UNIT_SELECTION_BASELINE).toBe("coverage/unit-baseline/selection.json");
         expect(
             workflow.jobs["unit-coverage-baseline"].steps.find((step: any) =>
                 step.name === "Generate native unit coverage schema"
             ).run,
         ).toContain("--project unit --coverage --passWithNoTests");
         expect(
-            workflow.jobs["unit-coverage-baseline"].steps.some((step: any) =>
-                step.uses === "./.github/actions/setup-test-env"
-            ),
-        ).toBe(false);
-        expect(
-            workflow.jobs["unit-coverage-baseline"].steps.find((step: any) => step.name === "Restore unit dependencies")
+            workflow.jobs["unit-test"].steps.find((step: any) => step.name === "Restore unit dependencies")
                 .run,
         ).toContain("/cache/client/node_modules");
+        expect(
+            workflow.jobs["unit-coverage-baseline"].steps.find((step: any) =>
+                step.name === "Record native unit selection"
+            ).run,
+        ).toContain("vitest list --project unit --no-static-parse");
         const diagnostics = workflow.jobs["unit-test"].steps.find((step: any) => step.name === "Upload logs");
         expect(diagnostics.if).toBe("failure()");
         expect(diagnostics.with.name).toBe("unit-test-logs");

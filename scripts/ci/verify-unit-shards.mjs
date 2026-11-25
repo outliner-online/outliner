@@ -197,12 +197,16 @@ function nativeCoverageBaseline(testFile) {
     return baseline;
 }
 const nativeSelectionPath = path.join(os.tmpdir(), `unit-native-selection-${runId}-${runAttempt}.json`);
-execFileSync(vitestBin, ["list", ...configArgs, "--project", "unit", "--no-static-parse",
-    `--json=${nativeSelectionPath}`], {
-    cwd: clientDir,
-    stdio: "inherit",
-    env: { ...process.env, NODE_ENV: "test" },
-});
+if (process.env.UNIT_SELECTION_BASELINE) {
+    fs.copyFileSync(process.env.UNIT_SELECTION_BASELINE, nativeSelectionPath);
+} else {
+    execFileSync(vitestBin, ["list", ...configArgs, "--project", "unit", "--no-static-parse",
+        `--json=${nativeSelectionPath}`], {
+        cwd: clientDir,
+        stdio: "inherit",
+        env: { ...process.env, NODE_ENV: "test" },
+    });
+}
 const nativeSelection = JSON.parse(fs.readFileSync(nativeSelectionPath, "utf8"));
 const expected = expectedIdentities(nativeSelection);
 fs.rmSync(nativeSelectionPath);
