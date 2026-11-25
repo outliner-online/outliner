@@ -82,6 +82,17 @@ test("regression rejects split lookup paths and substituted artifact identities"
     expect(() => expectAuthenticatedIdentity(otherRun, "${{ steps.representative-upload.outputs.artifact-id }}"))
         .toThrow();
 
+    const otherRepository = structuredClone(positive);
+    otherRepository.with.repository = "example/other-repository";
+    expect(() => expectAuthenticatedIdentity(otherRepository, "${{ steps.representative-upload.outputs.artifact-id }}"))
+        .toThrow();
+
+    const substitutedIdentity = structuredClone(positive);
+    substitutedIdentity.with["artifact-ids"] = "${{ steps.wrong-upload.outputs.artifact-id }}";
+    expect(() =>
+        expectAuthenticatedIdentity(substitutedIdentity, "${{ steps.representative-upload.outputs.artifact-id }}")
+    ).toThrow();
+
     const nameOnly = structuredClone(positive);
     delete nameOnly.with["artifact-ids"];
     nameOnly.with.name = "e2e-artifacts";
