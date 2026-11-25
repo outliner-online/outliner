@@ -11,7 +11,7 @@ import { getKanban, getKanbanHandles, getKanbanRegistry, type KanbanHandles } fr
 import { isPublicProject, projectRoute } from "../../lib/publicProject";
 import { projectKanbansRoute } from "../../lib/managementPaths";
 import { resolve } from "$app/paths";
-import { openRouteProject, type RouteProjectHandle } from "../../lib/routeProject";
+import { openRouteProject, openRouteProjectById, type RouteProjectHandle } from "../../lib/routeProject";
 import type { KanbanObservationContextV1 } from "../../../../shared/src/notifications/kanbanProjection";
 interface Props { projectName:string; kanbanId:string; observationContext?:KanbanObservationContextV1; contextError?:string; }
 let { projectName, kanbanId, observationContext, contextError }: Props = $props();
@@ -25,7 +25,7 @@ function refresh(){ if(!projectDoc)return; const definition=getKanban(projectDoc
 const observer=()=>refresh();
 function unload(){loadGeneration++;registry?.unobserveDeep(observer);registry=undefined;routeHandle?.release();routeHandle=undefined;projectDoc=undefined;handles=undefined;notFound=false;error=undefined;}
 function handleLogout(){unload();authenticated=false;loading=false;}
-async function load(){if(!canAccess){loading=false;return;} const generation=++loadGeneration;loading=true;try{routeHandle?.release();const nextHandle=await openRouteProject(projectName,()=>destroyed||generation!==loadGeneration||!canAccess);if(generation!==loadGeneration||!canAccess){nextHandle?.release();return;}routeHandle=nextHandle;if(!routeHandle){notFound=true;return;}projectDoc=store.project?.ydoc;if(!projectDoc)throw new Error("Failed to load project document.");registry=getKanbanRegistry(projectDoc);registry.observeDeep(observer);refresh();}catch(e){if(generation===loadGeneration)error=e instanceof Error?e.message:"Unable to load Kanban.";}finally{if(generation===loadGeneration)loading=false;}}
+async function load(){if(!canAccess){loading=false;return;} const generation=++loadGeneration;loading=true;try{routeHandle?.release();const stale=()=>destroyed||generation!==loadGeneration||!canAccess;const nextHandle=observationContext?await openRouteProjectById(projectName,stale):await openRouteProject(projectName,stale);if(generation!==loadGeneration||!canAccess){nextHandle?.release();return;}routeHandle=nextHandle;if(!routeHandle){notFound=true;return;}projectDoc=store.project?.ydoc;if(!projectDoc)throw new Error("Failed to load project document.");registry=getKanbanRegistry(projectDoc);registry.observeDeep(observer);refresh();}catch(e){if(generation===loadGeneration)error=e instanceof Error?e.message:"Unable to load Kanban.";}finally{if(generation===loadGeneration)loading=false;}}
 $effect(()=>{if(projectName&&kanbanId&&canAccess)void load();else{unload();loading=false;}});
 onMount(()=>{authenticated=userManager.getCurrentUser()!==null;return()=>{destroyed=true;unload();};});
 </script>

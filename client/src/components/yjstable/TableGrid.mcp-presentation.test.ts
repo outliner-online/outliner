@@ -1,7 +1,12 @@
 // Saved presentation stays separate from SELECT eligibility and physical write authorization.
 import { cleanup, fireEvent, render, waitFor } from "@testing-library/svelte";
+import { execFile } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import path from "node:path";
+import { promisify } from "node:util";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as Y from "yjs";
+import { GRID_OBSERVATION_PARITY } from "../../../../shared/tests/fixtures/gridObservationParity";
 import {
     createGrid,
     getGridHandles,
@@ -23,6 +28,8 @@ import { resetTableEngineForTests } from "../../services/yjstable/tableEngine";
 import { fakeMonacoRegistry } from "../../tests/mocks/fakeMonaco";
 import { QUERY, setupSavedPresentation } from "./__fixtures__/mcpPresentation";
 import ProjectGridView from "./ProjectGridView.svelte";
+
+const execFileAsync = promisify(execFile);
 
 // Monaco's browser editor requires layout APIs absent from jsdom; SQL execution and mutations are real.
 vi.mock("../../lib/monaco/monacoLoader", () => ({
@@ -61,22 +68,21 @@ function cell(container: HTMLElement, id: string, column: string) {
 }
 
 describe("MCP-saved Grid presentation in the production runtime (#5436)", () => {
-    it("matches the live projection to occurrence-specific automatic UNION renderers", { timeout: 60000 }, async () => {
+    it("matches the live projection and headless capture to occurrence-specific automatic UNION renderers", {
+        timeout: 120000,
+    }, async () => {
         fixture.projectDoc.destroy();
         const projectDoc = new Y.Doc({ guid: "grid-projection-union" });
         const choices = getTableHandles(projectDoc, createTable(projectDoc, "Choices", "choices"))!;
         const notes = getTableHandles(projectDoc, createTable(projectDoc, "Notes", "notes"))!;
         setSchemaText(
             choices,
-            "CREATE TABLE choices (id TEXT PRIMARY KEY, observed_on DATE NOT NULL, hidden TEXT)",
+            GRID_OBSERVATION_PARITY.choicesSchema,
         );
-        setSchemaText(notes, "CREATE TABLE notes (id TEXT PRIMARY KEY, observed_at TIMESTAMP NOT NULL, hidden TEXT)");
-        addRecord(choices, { observed_on: "2026-11-21", hidden: "choice-secret" }, "same");
-        addRecord(notes, { observed_at: "2026-11-22 12:34:56", hidden: "note-secret" }, "same");
-        const branchA =
-            "SELECT 'choices' AS source_kind, id AS source_id, observed_on AS value, hidden AS hidden FROM choices";
-        const branchB =
-            "SELECT 'notes' AS source_kind, id AS source_id, observed_at + INTERVAL '0 seconds' AS value, hidden AS hidden FROM notes";
+        setSchemaText(notes, GRID_OBSERVATION_PARITY.notesSchema);
+        addRecord(choices, GRID_OBSERVATION_PARITY.choicesRow, "same");
+        addRecord(notes, GRID_OBSERVATION_PARITY.notesRow, "same");
+        const { branchA, branchB } = GRID_OBSERVATION_PARITY;
         const grid = getGridHandles(
             projectDoc,
             createGrid(projectDoc, {
@@ -87,6 +93,41 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
         setGridComponentField(grid, "source_kind", "hidden", true);
         setGridComponentField(grid, "source_id", "hidden", true);
         setGridComponentField(grid, "hidden", "hidden", true);
+        const captureHeadless = async () => {
+            const serverDirectory = path.resolve(process.cwd(), "../server");
+            const acceptedInputs = {
+                projectUpdate: Buffer.from(Y.encodeStateAsUpdate(projectDoc)).toString("base64"),
+                gridId: grid.gridId,
+                tables: [choices, notes].map(table => ({
+                    id: table.tableId,
+                    update: Buffer.from(Y.encodeStateAsUpdate(table.doc)).toString("base64"),
+                })),
+            };
+            const { stdout } = await execFileAsync(process.execPath, [
+                "--loader",
+                "ts-node/esm",
+                "--loader",
+                "./tests/loaders/pin-server-deps.mjs",
+                "--no-warnings",
+                "--input-type=module",
+                "-e",
+                "import('./tests/view-observation-grid-probe.ts').then(async m => { "
+                + "const inputs = JSON.parse(process.env.GRID_PARITY_INPUTS); "
+                + "console.log('GRID_PARITY:' + JSON.stringify(await m.captureGridObservationParity(inputs))); "
+                + "process.exit(0) })",
+            ], {
+                cwd: serverDirectory,
+                timeout: 60_000,
+                env: {
+                    ...process.env,
+                    TS_NODE_TRANSPILE_ONLY: "1",
+                    GRID_PARITY_INPUTS: JSON.stringify(acceptedInputs),
+                },
+            });
+            const serialized = stdout.split("\n").find(line => line.startsWith("GRID_PARITY:"));
+            expect(serialized, stdout).toBeDefined();
+            return JSON.parse(serialized!.slice("GRID_PARITY:".length));
+        };
         const view = render(ProjectGridView, { props: { grid, projectDoc } });
         try {
             await waitFor(() => expect(view.container.querySelectorAll("tbody tr")).toHaveLength(2), {
@@ -106,6 +147,7 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
             expect(displayedTimestamp).not.toBe(displayedDate);
             await waitFor(() => expect(getGridProjection(grid.gridId).status).toBe("ready"));
             const initial = getGridProjection(grid.gridId);
+            if (initial.status !== "ready") throw new Error("Expected accepted heterogeneous projection");
             expect(initial).toMatchObject({
                 status: "ready",
                 projection: {
@@ -113,6 +155,40 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
                     rows: [[{ value: displayedDate }], [{ value: displayedTimestamp }]],
                 },
             });
+
+            // Cross the real server boundary in the same oracle: seed actual
+            // Hocuspocus rooms from the same fixture, execute through PGlite,
+            // and compare the retained headless snapshot with the projection
+            // whose cells were just observed in the mounted TableGrid DOM.
+            const headlessProjection = await captureHeadless();
+            expect(headlessProjection).toEqual(initial.projection);
+
+            // Remove the routing columns so both physical branches become a
+            // legitimately ambiguous mapping. TableGrid and the observer must
+            // independently select the native result-OID fallback from these
+            // same accepted Yjs inputs.
+            setGridQuery(grid, "SELECT observed_on AS value FROM choices UNION ALL "
+                + "SELECT observed_at AS value FROM notes ORDER BY value");
+            await waitFor(() => {
+                const ambiguous = getGridProjection(grid.gridId);
+                expect(ambiguous.status).toBe("ready");
+                if (ambiguous.status !== "ready") return;
+                expect(ambiguous.projection.rows).toEqual(
+                    GRID_OBSERVATION_PARITY.expectedAmbiguousValues.map(value => [{ value }]),
+                );
+            });
+            const ambiguous = getGridProjection(grid.gridId);
+            if (ambiguous.status !== "ready") throw new Error("Expected accepted ambiguous projection");
+            const ambiguousHeadless = await captureHeadless();
+            expect(ambiguousHeadless).toEqual(ambiguous.projection);
+            if (process.env.GRID_PARITY_EVIDENCE_PATH) {
+                writeFileSync(process.env.GRID_PARITY_EVIDENCE_PATH, JSON.stringify({
+                    heterogeneous: { rendered: initial.projection, headless: headlessProjection },
+                    ambiguous: { rendered: ambiguous.projection, headless: ambiguousHeadless },
+                }));
+            }
+            setGridQuery(grid, `${branchA} UNION ALL ${branchB} ORDER BY source_kind`);
+            await waitFor(() => expect(getGridProjection(grid.gridId)).toEqual(initial));
 
             // Retain renderer inputs outside equality: an explicit text
             // override changes only the date's displayed normalization.
@@ -180,7 +256,7 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
             await waitFor(() => expect(view.container.querySelectorAll("tbody tr")).toHaveLength(2));
             await waitFor(() => expect(view.container.querySelectorAll("td[data-col='value'] button")).toHaveLength(2));
             expect(view.container.querySelector("td[data-col='value'] input[type='date']")).toBeNull();
-            const ambiguousValues = ["2026-11-21T00:00:00.000Z", "2026-11-22T12:34:56.000Z"];
+            const ambiguousValues = [...GRID_OBSERVATION_PARITY.expectedAmbiguousValues];
             expect([...view.container.querySelectorAll("td[data-col='value'] button")].map(cell => cell.textContent))
                 .toEqual(ambiguousValues);
             await waitFor(() =>

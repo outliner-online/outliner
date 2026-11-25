@@ -83,7 +83,7 @@ describe("CalendarView Day projection boundary", { timeout: 30000 }, () => {
                 projectId,
                 calendarId,
                 observationContext,
-                onVisibleProjection: result => projections.push(result),
+                onVisibleProjection: (result: CalendarProjectionResult) => projections.push(result),
             },
         });
 
@@ -191,7 +191,7 @@ describe("CalendarView Day projection boundary", { timeout: 30000 }, () => {
                     monthLaneFilter: null,
                     collapsedEntryKeys: [],
                 },
-                onVisibleProjection: result => projections.push(result),
+                onVisibleProjection: (result: CalendarProjectionResult) => projections.push(result),
             },
         });
         const entry = () => component.getByTestId(`calendar-entry-item:${item.key}`);
@@ -226,7 +226,12 @@ describe("CalendarView Day projection boundary", { timeout: 30000 }, () => {
         );
         const projections: CalendarProjectionResult[] = [];
         const component = render(CalendarView, {
-            props: { project, projectId, calendarId, onVisibleProjection: result => projections.push(result) },
+            props: {
+                project,
+                projectId,
+                calendarId,
+                onVisibleProjection: (result: CalendarProjectionResult) => projections.push(result),
+            },
         });
         await waitFor(() => expect(resolveQuery).toBeDefined());
         const calendarMap = projectDoc.getMap("calendars").get(calendarId) as Y.Map<unknown>;
@@ -295,7 +300,7 @@ describe("CalendarView Day projection boundary", { timeout: 30000 }, () => {
                     monthLaneFilter: null,
                     collapsedEntryKeys: [],
                 },
-                onVisibleProjection: result => projections.push(result),
+                onVisibleProjection: (result: CalendarProjectionResult) => projections.push(result),
             },
         });
         await waitFor(() => expect(component.getByTestId("calendar-lane-time-grid")).toBeTruthy());
@@ -359,7 +364,7 @@ describe("CalendarView Day projection boundary", { timeout: 30000 }, () => {
                 monthLaneFilter: null,
                 collapsedEntryKeys: [],
             },
-            onVisibleProjection: result => results.push(result),
+            onVisibleProjection: (result: CalendarProjectionResult) => results.push(result),
         });
         await waitFor(() => expect(results.at(-1)?.ready).toBe(true));
         const result = results.at(-1)!;
@@ -396,7 +401,12 @@ describe("CalendarView Day projection boundary", { timeout: 30000 }, () => {
         });
         const projections: CalendarProjectionResult[] = [];
         const component = render(CalendarView, {
-            props: { project, projectId, calendarId, onVisibleProjection: result => projections.push(result) },
+            props: {
+                project,
+                projectId,
+                calendarId,
+                onVisibleProjection: (result: CalendarProjectionResult) => projections.push(result),
+            },
         });
         await waitFor(() => expect(calls).toBe(1));
         await fireEvent.click(component.getByTestId("calendar-nav-next"));
@@ -435,7 +445,12 @@ describe("CalendarView Day projection boundary", { timeout: 30000 }, () => {
         );
         const projections: CalendarProjectionResult[] = [];
         render(CalendarView, {
-            props: { project, projectId, calendarId, onVisibleProjection: result => projections.push(result) },
+            props: {
+                project,
+                projectId,
+                calendarId,
+                onVisibleProjection: (result: CalendarProjectionResult) => projections.push(result),
+            },
         });
         await waitFor(() => expect(resolvers).toHaveLength(1));
         const calendarMap = projectDoc.getMap("calendars").get(calendarId) as Y.Map<unknown>;

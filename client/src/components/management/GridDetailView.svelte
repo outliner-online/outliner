@@ -23,7 +23,7 @@
         projectObjectsSelectedRoute,
     } from "../../lib/managementPaths";
     import { DemoInitAborted } from "../../lib/demoInit";
-    import { openRouteProject, type RouteProjectHandle } from "../../lib/routeProject";
+    import { openRouteProject, openRouteProjectById, type RouteProjectHandle } from "../../lib/routeProject";
     import type { GridObservationContextV1 } from "../../../../shared/src/notifications/gridProjection";
 
     const logger = getLogger("GridStandalonePage");
@@ -50,6 +50,7 @@
     let releaseGridObserver: (() => void) | undefined;
     let releaseAccessListener: (() => void) | undefined;
     let isDestroyed = false;
+    let loadGeneration = 0;
     let projectHandle: RouteProjectHandle | undefined = undefined;
 
     // Public projects stay readable for anonymous visitors, matching the
@@ -79,7 +80,13 @@
     async function loadGrid() {
         if (!projectName || !routeGridId || !canAccess) return;
 
-        logger.info(`Loading standalone grid: project="${projectName}", grid="${routeGridId}"`);
+        const generation = ++loadGeneration;
+        const requestedProjectName = projectName;
+        const requestedGridId = routeGridId;
+        const requestedContext = observationContext;
+        const isStale = () => isDestroyed || generation !== loadGeneration || !canAccess;
+
+        logger.info(`Loading standalone grid: project="${requestedProjectName}", grid="${requestedGridId}"`);
         isLoading = true;
         error = undefined;
         notFound = false;
@@ -89,13 +96,19 @@
             // parameter change cannot leak a demo client reference.
             projectHandle?.release();
             projectHandle = undefined;
-            projectHandle = await openRouteProject(projectName, () => isDestroyed);
-            if (!projectHandle) {
+            const openedHandle = requestedContext
+                ? await openRouteProjectById(requestedProjectName, isStale)
+                : await openRouteProject(requestedProjectName, isStale);
+            if (isStale()) {
+                openedHandle?.release();
+                return;
+            }
+            projectHandle = openedHandle;
+            if (!openedHandle) {
                 notFound = true;
                 return;
             }
-            if (isDestroyed || !canAccess) return;
-            admittedProjectId = projectHandle.projectId;
+            admittedProjectId = openedHandle.projectId;
             releaseAccessListener?.();
             const client = yjsStore.yjsClient;
             if (client && !isPublicDemo) {
@@ -113,14 +126,15 @@
             }
 
             projectDoc = store.project.ydoc;
-            observeGrid(projectDoc, routeGridId);
+            observeGrid(projectDoc, requestedGridId);
 
         } catch (err) {
+            if (isStale()) return;
             if (err instanceof DemoInitAborted) return;
             logger.error({ error: err }, "Failed to load grid page:");
             error = err instanceof Error ? err.message : "An error occurred while loading the grid.";
         } finally {
-            isLoading = false;
+            if (!isStale()) isLoading = false;
         }
     }
 
@@ -146,6 +160,8 @@
     }
 
     $effect(() => {
+        // Query-only navigation changes project admission from title to ID.
+        void observationContext;
         const shouldLoad = canAccess && Boolean(projectName) && Boolean(routeGridId);
         if (shouldLoad) {
             // loadGrid updates its own loading/source state. Keep those writes
@@ -153,6 +169,7 @@
             // recursively reopen and tear down the same Grid.
             untrack(() => void loadGrid());
         } else {
+            loadGeneration++;
             isLoading = false;
         }
     });
@@ -163,6 +180,7 @@
 
         return () => {
             isDestroyed = true;
+            loadGeneration++;
             unsubscribeAuth();
             releaseGridObserver?.();
             releaseAccessListener?.();
