@@ -108,8 +108,10 @@ function validateCompleteCoverageMaps(coverage, baseline, schema, shard) {
     for (const [file, expected] of Object.entries(baseline)) {
         if (coverageEntryCount(expected) === 0) continue;
         if (!coverage[file]) throw new Error(`coverage is missing executable file in shard ${shard}: ${file}`);
-        if (coverageEntryCount(coverage[file]) === 0) {
-            throw new Error(`coverage maps are empty for executable file in shard ${shard}: ${file}`);
+        for (const mapName of ["statementMap", "fnMap", "branchMap"]) {
+            if (JSON.stringify(coverage[file][mapName]) !== JSON.stringify(expected[mapName])) {
+                throw new Error(`coverage ${mapName} differs from native selection for shard ${shard}: ${file}`);
+            }
         }
     }
 }
@@ -118,8 +120,8 @@ function nativeCoverageBaseline() {
         return JSON.parse(fs.readFileSync(process.env.UNIT_COVERAGE_BASELINE, "utf8"));
     }
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), `unit-coverage-baseline-${runId}-${runAttempt}-`));
-    execFileSync(vitestBin, ["run", "__unit_coverage_baseline_no_tests__", ...configArgs, "--project", "unit",
-        "--coverage", "--passWithNoTests", "--coverage.reporter=json", `--coverage.reportsDirectory=${directory}`], {
+    execFileSync(vitestBin, ["run", ...configArgs, "--project", "unit", "--coverage", "--coverage.reporter=json",
+        `--coverage.reportsDirectory=${directory}`], {
         cwd: clientDir,
         stdio: "inherit",
         env: { ...process.env, NODE_ENV: "test" },
