@@ -20,6 +20,7 @@ import {
 } from "../../../shared/src/notifications/kanbanProjection.js";
 import { OutlinerKanbanQueryService } from "../mcp/kanban-query-service.js";
 import { McpReadError } from "../mcp/mcp-error.js";
+import { savedViewOpener } from "./saved-view-producer.js";
 
 export type ViewKind = "grid" | "calendar" | "kanban";
 export interface TargetRef {
@@ -84,6 +85,8 @@ export class ViewObservationService {
         kanbanOptions: ConstructorParameters<typeof OutlinerKanbanQueryService>[2] = {},
     ) {
         this.openers = {
+            grid: savedViewOpener(kanbanHost, canAccess, "grid", kanbanOptions),
+            calendar: savedViewOpener(kanbanHost, canAccess, "calendar", kanbanOptions),
             kanban: kanbanOpener(kanbanHost, canAccess, kanbanOptions),
             ...openers,
         };
@@ -279,6 +282,9 @@ function kanbanOpener(
                             await retained.release();
                             return { status: "not_found", reason: terminalReason };
                         }
+                        if (error instanceof McpReadError && error.code === "forbidden") {
+                            return { status: "forbidden", reason: "access_revoked" };
+                        }
                         throw error;
                     }
                     if (
@@ -293,6 +299,7 @@ function kanbanOpener(
                     const candidateDocuments = observationDocuments(candidate);
                     if (
                         closed || lifecycleGeneration !== refreshGeneration
+                        || retained.definitionIdentity !== candidate.definitionIdentity
                         || !authoritiesPreserveContinuity(retainedDocuments, candidateDocuments)
                         || !documentsRetainIncarnation(host, candidateDocuments)
                     ) {

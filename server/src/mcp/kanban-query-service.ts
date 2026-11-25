@@ -71,6 +71,8 @@ export class KanbanProjectionObservation {
         public readonly routes: readonly KanbanFieldRoute[],
         public readonly reason: string | undefined,
         public readonly limit: keyof typeof LIMITS | undefined,
+        /** Exact saved-definition object captured by this observation. */
+        readonly definitionIdentity: object,
         /** Trusted handles are intentionally not part of any serialized response. */
         readonly handles: { project: DirectConnection; sources: ReadonlyMap<string, DirectConnection>; },
         private readonly currentCheck: () => boolean,
@@ -429,6 +431,7 @@ export class OutlinerKanbanQueryService {
                     routes,
                     undefined,
                     undefined,
+                    entry,
                     { project, sources },
                     currentCheck,
                     release,
@@ -498,6 +501,7 @@ export class OutlinerKanbanQueryService {
             [],
             reason,
             limit,
+            entry,
             { project, sources },
             () => false,
             releaseAll(this.host(), project, sources),

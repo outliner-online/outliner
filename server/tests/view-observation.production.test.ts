@@ -128,6 +128,65 @@ describe("retained view observation production refresh", function() {
         await held[0].disconnect();
     });
 
+    it("rejects a same-room saved definition replacement as incarnation_lost", async () => {
+        const held = await seed(server.hocuspocus, "SELECT id, status, title FROM tasks ORDER BY id", {
+            titleField: "title",
+        });
+        const service = new ViewObservationService(server.hocuspocus, async () => true);
+        const handle = await service.openViewObservation({
+            uid: UID,
+            target: { projectId: PROJECT, kind: "kanban", objectId: "board" },
+            context,
+        });
+        expect((await handle.readSnapshot({ observedAtUtcMs: 1 })).status).to.equal("ready");
+        const project = held[0].document as unknown as Y.Doc;
+        project.getMap("yjsKanbans").delete("board");
+        createKanbanEntry(project as never, "board", {
+            query: "SELECT id, status, title FROM tasks ORDER BY id",
+            groupField: "status",
+            titleField: "title",
+        });
+        expect(await handle.readSnapshot({ observedAtUtcMs: 2 })).to.deep.equal({
+            status: "stale",
+            reason: "incarnation_lost",
+        });
+        expect(await handle.readSnapshot({ observedAtUtcMs: 3 })).to.deep.equal({
+            status: "stale",
+            reason: "incarnation_lost",
+        });
+        await handle.close();
+        await Promise.all(held.map(connection => connection.disconnect()));
+    });
+
+    it("returns forbidden when access is revoked while a refresh opens its sources", async () => {
+        const held = await seed(server.hocuspocus, "SELECT id, status FROM tasks ORDER BY id");
+        const reached = deferred();
+        const resume = deferred();
+        let openings = 0;
+        let accessible = true;
+        const service = new ViewObservationService(server.hocuspocus, async () => accessible, {}, {
+            beforeSourceOpen: async () => {
+                if (++openings === 2) {
+                    reached.resolve();
+                    await resume.promise;
+                }
+            },
+        });
+        const handle = await service.openViewObservation({
+            uid: UID,
+            target: { projectId: PROJECT, kind: "kanban", objectId: "board" },
+            context,
+        });
+        (held[1].document as unknown as Y.Doc).getMap("data").delete("a");
+        const pending = handle.readSnapshot({ observedAtUtcMs: 2 });
+        await reached.promise;
+        accessible = false;
+        resume.resolve();
+        expect(await pending).to.deep.equal({ status: "forbidden", reason: "access_revoked" });
+        await handle.close();
+        await Promise.all(held.map(connection => connection.disconnect()));
+    });
+
     it("releases an arriving refresh when the handle closes during source opening", async () => {
         const held = await seed(server.hocuspocus, "SELECT id, status FROM tasks ORDER BY id");
         const reached = deferred();
