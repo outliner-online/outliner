@@ -211,6 +211,7 @@ describe("unit CI native shard orchestration", () => {
         const failingCheckout = isolatedCheckout(path.join(directory, "native-failure"), { unit: true });
         const failedWorkflow = runStableWorkflow(failingCheckout);
         expect(failedWorkflow.result.status).toBe(1);
+        expect(failedWorkflow.shardRuns.some((result) => result.status !== 0)).toBe(true);
         expect(
             failedWorkflow.shardRuns.some((result) =>
                 `${result.stdout}\n${result.stderr}`.includes("expected 1 to be 2")
@@ -263,6 +264,7 @@ describe("unit CI native shard orchestration", () => {
         const isolated = isolatedCheckout(directory);
         const successfulWorkflow = runStableWorkflow(isolated);
         expect(successfulWorkflow.result.status).toBe(0);
+        expect(successfulWorkflow.shardRuns.every((result) => result.status === 0)).toBe(true);
         expect(fs.readFileSync(path.join(isolated.checkout, "job_logs/base-test.log"), "utf8")).toContain(
             "Tests  1 passed",
         );
