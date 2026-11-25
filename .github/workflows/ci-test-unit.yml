@@ -1,15 +1,13 @@
 name: Test Unit
-
 on:
   workflow_call:
   workflow_dispatch:
-
 concurrency:
   group: unit-${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
   cancel-in-progress: true
-
 jobs:
-  unit-test:
+  unit-coverage-baseline:
+    name: native coverage schema baseline
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/${{ github.repository }}:latest
@@ -20,24 +18,81 @@ jobs:
     permissions:
       packages: read
       contents: read
-      pull-requests: write
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
         with:
           clean: true
-
       - name: Setup Test Environment
         uses: ./.github/actions/setup-test-env
-
-      - name: Run unit tests
+      - name: Generate native unit coverage schema
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p job_logs coverage/unit-baseline
+          cd client
+          ./node_modules/.bin/vitest run __unit_coverage_schema_no_tests__ \
+            --project unit --coverage --passWithNoTests --coverage.reporter=json \
+            --coverage.reportsDirectory=../coverage/unit-baseline \
+            2>&1 | tee -a ../job_logs/unit-coverage-baseline.log
+      - name: Record native unit selection
+        shell: bash
+        run: |
+          cd client
+          ./node_modules/.bin/vitest list --project unit --no-static-parse \
+            --json=../coverage/unit-baseline/selection.json
+      - name: Install unit orchestration regression dependencies
+        run: npm ci --prefix scripts/tests --ignore-scripts --no-audit --no-fund
+      - name: Verify unit shard orchestration regressions
         shell: bash
         run: |
           set -o pipefail
           mkdir -p job_logs
+          scripts/run-env-tests.sh --isolated env-ci-unit-native-shards-5995a001.spec.ts \
+            2>&1 | tee job_logs/unit-shard-regressions.log
+      - name: Upload native coverage baseline
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-coverage-baseline-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            coverage/unit-baseline/coverage-final.json
+            coverage/unit-baseline/selection.json
+            job_logs/unit-coverage-baseline.log
+            job_logs/unit-shard-regressions.log
+          archive: true
+          if-no-files-found: error
+          retention-days: 2
+  unit-shard:
+    name: unit shard ${{ matrix.shard }} of 2
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    timeout-minutes: 20
+    permissions:
+      packages: read
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          clean: true
+      - name: Setup Test Environment
+        uses: ./.github/actions/setup-test-env
+      - name: Run unit test shard
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p job_logs unit-evidence
           cd client
-          npm run github:test:unit 2>&1 | tee -a ../job_logs/unit-test.log
+          npm run github:test:unit 2>&1 | tee -a ../job_logs/unit-test-shard-${UNIT_SHARD_INDEX}.log
         env:
           CI: true
           NODE_ENV: test
@@ -45,19 +100,82 @@ jobs:
           DISPLAY: :99
           DISABLE_POSTHOG: true
           VITE_DISABLE_FLUID_TELEMETRY: true
-
-      - name: Summarise failures
-        if: failure()
+          UNIT_SHARD: ${{ matrix.shard }}/2
+          UNIT_SHARD_INDEX: ${{ matrix.shard }}
+      - name: Upload shard evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-shard-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            job_logs/unit-test-shard-${{ matrix.shard }}.log
+            unit-evidence/shard-${{ matrix.shard }}.json
+            unit-evidence/coverage-schema-${{ matrix.shard }}.json
+            coverage/unit-shard-${{ matrix.shard }}/coverage-final.json
+          archive: true
+          if-no-files-found: error
+          retention-days: 2
+  # Callers expose this stable job id/name as `unit-test / unit-test`.
+  unit-test:
+    name: unit-test
+    if: always()
+    needs: [unit-shard, unit-coverage-baseline]
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    timeout-minutes: 20
+    permissions:
+      packages: read
+      contents: read
+      actions: read
+      pull-requests: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+      - name: Restore unit dependencies
+        shell: bash
         run: |
-          echo "## ❌ Unit Test Failed" >> $GITHUB_STEP_SUMMARY
-          if [ -f "job_logs/unit-test.log" ]; then
-             grep -E -A1 -B0 "FAIL|FAILED" "job_logs/unit-test.log" >> $GITHUB_STEP_SUMMARY || true
-          fi
-
+          cp -r /cache/client/node_modules client/
+          chmod +x client/node_modules/.bin/*
+          ln -sfn ../client/node_modules shared/node_modules
+      - name: Download current-attempt shard evidence
+        uses: actions/download-artifact@v8
+        with:
+          pattern: unit-shard-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: unit-artifacts
+      - name: Download current-attempt native coverage baseline
+        uses: actions/download-artifact@v8
+        with:
+          name: unit-coverage-baseline-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .
+      - name: Reject failed or cancelled shards
+        env:
+          SHARD_RESULT: ${{ needs.unit-shard.result }}
+        run: test "$SHARD_RESULT" = success
+      - name: Reject failed or cancelled native baseline
+        env:
+          BASELINE_RESULT: ${{ needs.unit-coverage-baseline.result }}
+        run: test "$BASELINE_RESULT" = success
+      - name: Verify complete selection, merge coverage, and run base tests
+        run: scripts/ci/finalize-unit-tests.sh
+        env:
+          UNIT_COVERAGE_BASELINE: coverage/unit-baseline/coverage-final.json
+          UNIT_SELECTION_BASELINE: coverage/unit-baseline/selection.json
       - name: Upload logs
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: unit-test-logs
-          path: job_logs/
+          path: |
+            unit-artifacts/**/*.log
+            job_logs/
+          archive: true
           retention-days: 2
+      - name: Summarise failures
+        if: failure()
+        run: |
+          echo "## ❌ Unit Test Failed" >> "$GITHUB_STEP_SUMMARY"
+          find unit-artifacts job_logs -name '*.log' -type f -exec grep -E -A1 -B0 'FAIL|FAILED' {} \; >> "$GITHUB_STEP_SUMMARY" || true
