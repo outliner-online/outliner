@@ -152,11 +152,11 @@ function validateCompleteCoverageMaps(coverage, baseline) {
         if (coverageEntryCount(expected) === 0) continue;
         if (!coverage[file]) throw new Error(`merged coverage is missing executable file: ${file}`);
         for (const mapName of ["statementMap", "fnMap", "branchMap"]) {
-            if (
-                JSON.stringify(canonicalDefinitions(coverage[file][mapName]))
-                !== JSON.stringify(canonicalDefinitions(expected[mapName]))
-            ) {
-                throw new Error(`merged coverage ${mapName} differs from native selection: ${file}`);
+            const mergedDefinitions = new Set(canonicalDefinitions(coverage[file][mapName]));
+            const missingDefinitions = canonicalDefinitions(expected[mapName])
+                .filter((definition) => !mergedDefinitions.has(definition));
+            if (missingDefinitions.length) {
+                throw new Error(`merged coverage ${mapName} is missing native selection definitions: ${file}`);
             }
         }
     }

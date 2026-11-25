@@ -184,10 +184,13 @@ function artifactFixture(directory: string, run = "100", attempt = "2") {
                 statementMap: {
                     0: { start: { line: 1, column: 0 }, end: { line: 1, column: 1 } },
                     5: { start: { line: 2, column: 0 }, end: { line: 2, column: 1 } },
+                    ...(shard === 1
+                        ? { 9: { start: { line: 3, column: 0 }, end: { line: 3, column: 1 } } }
+                        : {}),
                 },
                 fnMap: {},
                 branchMap: {},
-                s: { 0: shard === 1 ? 1 : 0, 5: shard === 2 ? 1 : 0 },
+                s: { 0: shard === 1 ? 1 : 0, 5: shard === 2 ? 1 : 0, ...(shard === 1 ? { 9: 1 } : {}) },
                 f: {},
                 b: {},
             },
@@ -277,6 +280,10 @@ describe("unit CI native shard orchestration", () => {
             },
             s: { 0: 1 },
         });
+        // Shard-local Svelte instrumentation can add a definition that the full
+        // native run does not emit. It is preserved without weakening the rule
+        // that every definition from the independent native baseline exists.
+        expect(Object.keys(mergedCoverage["/source.ts"].statementMap)).toHaveLength(3);
         expect(mergedCoverage["/types.d.ts"]).toMatchObject({
             statementMap: {},
             fnMap: {},
@@ -458,7 +465,7 @@ describe("unit CI native shard orchestration", () => {
             fs.writeFileSync(schemaPath, JSON.stringify(schema));
         }
         expect(run(directory).stderr.toString()).toContain(
-            "merged coverage statementMap differs from native selection",
+            "merged coverage statementMap is missing native selection definitions",
         );
         artifactFixture(directory);
         const first = path.join(directory, "unit-shard-1-100-2/unit-evidence/shard-1.json");
