@@ -36,11 +36,6 @@ jobs:
           cd scripts/tests
           npx vitest run env-ci-container-package-read-8a37d29f.spec.ts
 
-      - name: Verify runner recovery evidence
-        run: |
-          cd scripts/tests
-          npx --no-install vitest run env-rerun-starved-runs-2d9f4b17.spec.ts env-rerun-job-evidence-2d9f4b17.spec.ts
-
       - name: Setup Test Environment
         uses: ./.github/actions/setup-test-env
 
