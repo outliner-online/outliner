@@ -96,7 +96,7 @@ jobs:
         with:
           name: unit-test-logs
           path: |
-            unit-artifacts/**/job_logs/
+            unit-artifacts/**/*.log
             job_logs/
           archive: true
           retention-days: 2

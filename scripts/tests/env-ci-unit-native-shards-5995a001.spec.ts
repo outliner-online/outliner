@@ -429,7 +429,7 @@ describe("unit CI native shard orchestration", () => {
         const diagnostics = workflow.jobs["unit-test"].steps.find((step: any) => step.name === "Upload logs");
         expect(diagnostics.if).toBe("failure()");
         expect(diagnostics.with.name).toBe("unit-test-logs");
-        expect(diagnostics.with.path).toContain("unit-artifacts/**/job_logs/");
+        expect(diagnostics.with.path).toContain("unit-artifacts/**/*.log");
         expect(diagnostics.with.path).toContain("job_logs/");
         const downloadIndex = workflow.jobs["unit-test"].steps.findIndex((step: any) => step.name.includes("Download"));
         const rejectIndex = workflow.jobs["unit-test"].steps.findIndex((step: any) => step.name.includes("Reject"));
