@@ -125,6 +125,14 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
             // and compare the retained headless snapshot with the projection
             // whose cells were just observed in the mounted TableGrid DOM.
             const serverDirectory = path.resolve(process.cwd(), "../server");
+            const acceptedInputs = {
+                projectUpdate: Buffer.from(Y.encodeStateAsUpdate(projectDoc)).toString("base64"),
+                gridId: grid.gridId,
+                tables: [choices, notes].map(table => ({
+                    id: table.tableId,
+                    update: Buffer.from(Y.encodeStateAsUpdate(table.doc)).toString("base64"),
+                })),
+            };
             const { stdout } = await execFileAsync(process.execPath, [
                 "--loader",
                 "ts-node/esm",
@@ -134,12 +142,17 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
                 "--input-type=module",
                 "-e",
                 "import('./tests/view-observation-grid-probe.ts').then(async m => { "
-                + "console.log('GRID_PARITY:' + JSON.stringify(await m.captureGridObservationParity())); "
+                + "const inputs = JSON.parse(process.env.GRID_PARITY_INPUTS); "
+                + "console.log('GRID_PARITY:' + JSON.stringify(await m.captureGridObservationParity(inputs))); "
                 + "process.exit(0) })",
             ], {
                 cwd: serverDirectory,
                 timeout: 60_000,
-                env: { ...process.env, TS_NODE_TRANSPILE_ONLY: "1" },
+                env: {
+                    ...process.env,
+                    TS_NODE_TRANSPILE_ONLY: "1",
+                    GRID_PARITY_INPUTS: JSON.stringify(acceptedInputs),
+                },
             });
             const serialized = stdout.split("\n").find(line => line.startsWith("GRID_PARITY:"));
             expect(serialized, stdout).toBeDefined();
