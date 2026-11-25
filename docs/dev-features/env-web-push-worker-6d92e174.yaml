@@ -1,0 +1,19 @@
+id: ENV-6d92e174
+title: Production-built Web Push worker generation and navigation checks
+title-ja: 本番ビルドしたWeb Pushワーカーの登録世代と遷移を検証
+status: implemented
+category: environment
+description: Serve the production app and its existing root worker in an isolated headless browser; use controlled enrollment-provider and push/activation boundaries while preserving real Settings, IndexedDB, worker handlers and navigation behavior.
+components:
+- client/src/service-worker.ts
+- client/src/services/notifications/enrollmentBinding.ts
+- client/src/services/notifications/workerNotifications.ts
+- client/src/services/notifications/notificationNavigation.ts
+tests:
+- scripts/tests/env-web-push-worker-6d92e174.spec.ts
+verification:
+- The application registers the actual production worker and an allowed current-generation push calls showNotification even with a foreground window.
+- Verified local disarm and account switching fence old payloads and taps despite failed server/browser cleanup, including after worker restart without clients.
+- A held activation cannot initiate navigation after disarm; current navigation preserves the canonical object context.
+- A failed local disarm write blocks managed logout and is not misreported as preview suppression when the prior active binding remains readable.
+notes: These controlled browser boundaries do not prove physical smartphone receipt. See docs/web-push.md for the separate bounded manual procedure and actual evidence limits.

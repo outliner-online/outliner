@@ -113,7 +113,8 @@ interface Attempt {
     invalidation?: Exclude<ViewChangeRevalidation, { status: "current"; }>;
 }
 type ReadySnapshot = Extract<ReadSnapshotResult, { status: "ready"; }>;
-type Adapter = (candidate: PreparedViewChange) => void | Promise<void>;
+// Ownership is private callback context, never part of the externally safe payload.
+type Adapter = (candidate: PreparedViewChange, ownerUid: string) => void | Promise<void>;
 
 /**
  * One server-lifetime, process-local owner of temporal visible differences.
@@ -620,7 +621,7 @@ export class NotificationObservationRuntime {
         // One invocation is the entire best-effort opportunity. A callback
         // may retain the capability, but must eventually aggregate its actual
         // first-write evidence and settle it; merely returning is not evidence.
-        Promise.resolve().then(() => adapter(attempt.prepared)).catch(() => {
+        Promise.resolve().then(() => adapter(attempt.prepared, attempt.admission.uid)).catch(() => {
             // A thrown adapter cannot prove whether any request wrote bytes.
             // Fence later writes and retain the bounded attempt until explicit
             // settlement supplies its evidence; never fabricate zero writes.

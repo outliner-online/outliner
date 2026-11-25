@@ -1,6 +1,14 @@
 /// <reference types="@sveltejs/kit" />
 /// <reference lib="webworker" />
 import { getLogger } from "./lib/logger";
+import { updateEnrollmentBinding } from "./services/notifications/enrollmentBinding";
+import {
+    handleMobileNotificationClick,
+    handleMobilePush,
+    type MobileClickEvent,
+    type MobileNotificationScope,
+    type MobilePushEvent,
+} from "./services/notifications/workerNotifications";
 const logger = getLogger("ServiceWorker");
 
 import { version } from "$app/env";
@@ -20,11 +28,13 @@ const ASSETS = [
 // Type definitions to avoid no-undef errors
 // Import idb in Service Worker environment
 
-interface SyncServiceWorkerGlobalScope {
-    clients: { claim(): Promise<void>; };
+interface SyncServiceWorkerGlobalScope extends MobileNotificationScope {
+    clients: MobileNotificationScope["clients"] & { claim(): Promise<void>; };
     skipWaiting(): Promise<void>;
     addEventListener(type: "install", listener: (event: { waitUntil(p: Promise<unknown>): void; }) => void): void;
     addEventListener(type: "activate", listener: (event: { waitUntil(p: Promise<unknown>): void; }) => void): void;
+    addEventListener(type: "push", listener: (event: MobilePushEvent) => void): void;
+    addEventListener(type: "notificationclick", listener: (event: MobileClickEvent) => void): void;
     addEventListener(
         type: "fetch",
         listener: (event: { request: Request; respondWith(r: Promise<Response> | Response): void; }) => void,
@@ -42,35 +52,19 @@ interface SyncServiceWorkerGlobalScope {
 declare const self: SyncServiceWorkerGlobalScope;
 const WORKER_BOOT_ID = crypto.randomUUID();
 
-function readEnrollmentBinding(): Promise<unknown> {
-    return new Promise((resolve, reject) => {
-        const open = indexedDB.open("outliner-web-push", 1);
-        open.onupgradeneeded = () => open.result.createObjectStore("enrollment");
-        open.onerror = () => reject(open.error);
-        open.onsuccess = () => {
-            const read = open.result.transaction("enrollment", "readonly").objectStore("enrollment").get("current");
-            read.onsuccess = () => {
-                open.result.close();
-                resolve(read.result ?? { fence: 0 });
-            };
-            read.onerror = () => {
-                open.result.close();
-                reject(read.error);
-            };
-        };
-    });
-}
-
 self.addEventListener("message", event => {
     if (event.data !== "outliner:read-web-push-binding" || !event.ports[0]) return;
     const port = event.ports[0];
     event.waitUntil(
-        readEnrollmentBinding().then(
+        updateEnrollmentBinding("read").then(
             binding => port.postMessage({ binding, workerBootId: WORKER_BOOT_ID }),
             () => port.postMessage({ error: "binding_unavailable", workerBootId: WORKER_BOOT_ID }),
         ),
     );
 });
+
+self.addEventListener("push", event => handleMobilePush(self, event));
+self.addEventListener("notificationclick", event => handleMobileNotificationClick(self, event));
 
 self.addEventListener("install", event => {
     event.waitUntil(

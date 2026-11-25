@@ -1,0 +1,28 @@
+id: FTR-4e2c8b91
+title: Smartphone notifications for displayed object changes
+title-ja: オブジェクトの表示内容の変化をスマートフォンに通知
+status: implemented
+description: Deliver private, encrypted best-effort Web Push for saved Grid, Calendar and Kanban display contexts, with a past observation time and navigation to the current authorized object.
+tests:
+- server/tests/notifications/mobile-payload.test.ts
+- server/tests/notifications/web-push-delivery.test.ts
+- server/tests/notifications/web-push-races.test.ts
+- server/tests/notifications/web-push-outcomes.test.ts
+- server/tests/notifications/web-push-isolation.test.ts
+- server/tests/notifications/web-push-lifecycle.test.ts
+- server/tests/notifications/web-push-refusal.test.ts
+- client/src/services/notifications/enrollmentBinding.test.ts
+- client/src/services/notifications/notificationNavigation.test.ts
+- client/src/services/notifications/workerNotifications.test.ts
+- client/src/services/notifications/browserPushRegistration.test.ts
+- client/src/tests/unit/service-worker.spec.ts
+- scripts/tests/env-web-push-worker-6d92e174.spec.ts
+acceptance:
+- Only a complete authoritative displayed difference from an enabled mobile rule can initiate delivery.
+- The exact candidate, owned device revision and configured VAPID key are checked at the shared HTTPS transport write boundary.
+- Every privately bounded active device gets at most one request initiation per opportunity, with no automatic retries or durable event replay.
+- Payloads contain at most 3000 UTF-8 bytes, displayed-field examples with explicit truncation, the observation time and the exact saved-context object link.
+- Verified durable local disarm prevents subsequent display and navigation initiation for an old enrollment generation, including after logout, account switch and worker restart.
+- A current-generation push remains visible with a foreground window; taps preserve the saved context and ordinary application authorization.
+- Provider acceptance, controlled browser display and real-smartphone delivery remain distinct claims.
+notes: The bounded actual-device smoke procedure and its unavailable result on 2026-11-26 are recorded in docs/web-push.md. No physical handset delivery is claimed by the automated tests.

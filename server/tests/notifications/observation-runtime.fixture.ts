@@ -64,6 +64,7 @@ export async function runtimeFixture(
     options: RuntimeOptions = {},
     hooks: ObservationHooks = {},
     directory = tempDir(),
+    captureMobile = true,
 ) {
     const acl = new AclStore();
     acl.grant("projectUsers", PROJECT, UID);
@@ -99,9 +100,11 @@ export async function runtimeFixture(
     runtime.subscribe("mcp", candidate => {
         offered.push(candidate);
     });
-    runtime.subscribe("mobile", candidate => {
-        offered.push(candidate);
-    });
+    if (captureMobile) {
+        runtime.subscribe("mobile", candidate => {
+            offered.push(candidate);
+        });
+    }
     const seed = async (projectId = PROJECT, owner = UID) => {
         acl.grant("projectUsers", projectId, owner);
         const opened = await seedRuntimeProject(server.hocuspocus, projectId, owner);

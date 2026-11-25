@@ -21,6 +21,16 @@ export interface PushDeviceStatus {
     endpointHash?: string;
     enrollmentGeneration?: string;
 }
+/** Private delivery credentials. Never return this record from the enrollment API. */
+export interface RegisteredPushDevice {
+    readonly deviceId: string;
+    readonly revision: number;
+    readonly endpoint: string;
+    readonly p256dh: string;
+    readonly auth: string;
+    readonly vapidKeyId: string;
+    readonly enrollmentGeneration: string;
+}
 export type PushDisableAuthority =
     | { admissionFence: number; }
     | { expectedRevision: number; enrollmentGeneration: string; };
@@ -89,6 +99,36 @@ export class PushDeviceStore {
         return this.db().prepare(
             "SELECT device_id deviceId, revision, state, vapid_key_id vapidKeyId, endpoint_hash endpointHash, enrollment_generation enrollmentGeneration FROM web_push_devices WHERE uid=? AND device_id=?",
         ).get(uid, deviceId) as PushDeviceStatus | undefined;
+    }
+    getRegisteredForOwner(uid: string): readonly RegisteredPushDevice[] {
+        const devices = this.db().prepare(
+            `SELECT device_id deviceId, revision, endpoint, p256dh, auth_secret auth,
+                    vapid_key_id vapidKeyId, enrollment_generation enrollmentGeneration
+             FROM web_push_devices WHERE uid=? AND state='registered' ORDER BY device_id LIMIT ?`,
+        ).all(uid, MAX_ACTIVE_PUSH_DEVICES + 1) as RegisteredPushDevice[];
+        // Registration enforces this bound. Refuse a corrupted store instead
+        // of truncating an eligible set or allocating unbounded fanout.
+        if (devices.length > MAX_ACTIVE_PUSH_DEVICES) {
+            throw new PushDeviceError("capacity", "Device capacity exceeded");
+        }
+        return Object.freeze(devices.map(device => Object.freeze(device)));
+    }
+    getCurrent(uid: string, deviceId: string): RegisteredPushDevice | undefined {
+        const device = this.db().prepare(
+            `SELECT device_id deviceId, revision, endpoint, p256dh, auth_secret auth,
+                    vapid_key_id vapidKeyId, enrollment_generation enrollmentGeneration
+             FROM web_push_devices WHERE uid=? AND device_id=? AND state='registered'`,
+        ).get(uid, deviceId) as RegisteredPushDevice | undefined;
+        return device ? Object.freeze(device) : undefined;
+    }
+    expireIfRevision(uid: string, deviceId: string, revision: number): boolean {
+        // A late provider response must not disable a renewed registration or
+        // invalidate a newly issued admission for that device.
+        return this.db().prepare(
+            `UPDATE web_push_devices SET revision=revision+1,state='disabled',endpoint_hash=NULL,endpoint=NULL,
+                    p256dh=NULL,auth_secret=NULL,enrollment_generation=NULL,updated_at=?
+             WHERE uid=? AND device_id=? AND revision=? AND state='registered'`,
+        ).run(Date.now(), uid, deviceId, revision).changes === 1;
     }
     register(uid: string, deviceId: string, input: ValidatedRegistration): PushDeviceStatus {
         const db = this.db();

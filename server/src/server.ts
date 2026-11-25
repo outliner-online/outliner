@@ -33,11 +33,13 @@ import { OutlinerTableCreationService } from "./mcp/table-creation.js";
 import { UpdateGridPresentationTool } from "./mcp/update-grid-presentation-tool.js";
 import { getMetrics, recordMessage } from "./metrics.js";
 import { NotificationObservationRuntime } from "./notifications/observation-runtime.js";
+import { loadPushConfig } from "./notifications/push-config.js";
 import { createPushDeviceRouter } from "./notifications/push-device-api.js";
 import { PushDeviceStore } from "./notifications/push-device-store.js";
 import { NotificationSettingsService } from "./notifications/settings-service.js";
 import { NotificationSettingsStore } from "./notifications/settings-store.js";
 import { ViewObservationService } from "./notifications/view-observation.js";
+import { WebPushDeliveryAdapter } from "./notifications/web-push-delivery.js";
 import { getOAuthFirebaseWebConfig } from "./oauth/authorize-page.js";
 import { createOAuthRouter } from "./oauth/oauth-api.js";
 import { createDocumentStore, createPersistence } from "./persistence.js";
@@ -461,7 +463,9 @@ export async function startServer(
         pushDeviceStore = new PushDeviceStore(persistence.db);
         pushDeviceStore.initialize();
     }
-    app.use("/api", createPushDeviceRouter({ store: pushDeviceStore, verifyToken: verifyIdTokenCached }));
+    const pushConfig = loadPushConfig();
+    app.use("/api",
+        createPushDeviceRouter({ store: pushDeviceStore, config: pushConfig, verifyToken: verifyIdTokenCached }));
 
     // Demo API - anonymous access for the public demo page
     app.use("/api", createDemoRouter(hocuspocus, config));
@@ -555,6 +559,10 @@ export async function startServer(
         checkContainerAccess,
     );
     notificationSettings.setObservationStatusProvider(uid => notificationRuntime.status(uid));
+    const mobileNotifications = new WebPushDeliveryAdapter(notificationRuntime, pushDeviceStore, {
+        config: () => pushConfig,
+        onResult: outcome => logger.debug({ event: "notification_mobile_result", ...outcome }),
+    });
     notificationRuntime.start();
     app.use(createMcpRouter(
         mcpReads,
@@ -844,6 +852,7 @@ export async function startServer(
 
     const shutdown = async () => {
         intervals.forEach(clearInterval);
+        mobileNotifications.close();
         await notificationRuntime.close();
         // Awaited so the scheduler's worker releases its Postgres WASM heap
         // before the process goes down.
