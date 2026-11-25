@@ -49,6 +49,12 @@ export async function registerPushDevice(deviceId: string, body: object): Promis
     return (await request(`/devices/${encodeURIComponent(deviceId)}`, { method: "PUT", body: JSON.stringify(body) }))
         .json();
 }
-export async function disablePushDevice(deviceId: string): Promise<PushStatus> {
-    return (await request(`/devices/${encodeURIComponent(deviceId)}/disable`, { method: "POST" })).json();
+export type PushDisableAuthority =
+    | { admissionFence: number; }
+    | { expectedRevision: number; enrollmentGeneration: string; };
+export async function disablePushDevice(deviceId: string, authority?: PushDisableAuthority): Promise<PushStatus> {
+    return (await request(`/devices/${encodeURIComponent(deviceId)}/disable`, {
+        method: "POST",
+        body: authority ? JSON.stringify(authority) : undefined,
+    })).json();
 }

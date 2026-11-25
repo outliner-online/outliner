@@ -94,6 +94,12 @@ describe("authenticated Web Push device API", () => {
             state: "registered",
             enrollmentGeneration: "uncommitted_generation_0002",
         });
+        await request(app).post(`/api/notifications/push/devices/${device}/disable`)
+            .set("Authorization", "Bearer token-owner-a").send({
+                expectedRevision: 1,
+                enrollmentGeneration: "accepted_generation_0001",
+            }).expect(200)
+            .expect(response => expect(response.body).to.deep.equal(repeated.body));
         const ownerB = await request(app).get(`/api/notifications/push/devices/${device}`)
             .set("Authorization", "Bearer token-owner-b").expect(200);
         expect(ownerB.body).to.include({ revision: 0, state: "disabled" });

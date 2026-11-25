@@ -3,7 +3,12 @@ import { ECDH } from "node:crypto";
 import { verifyIdTokenCached } from "../websocket-auth.js";
 import { validateHttpsDestination } from "./https-destination.js";
 import { loadPushConfig, type PushConfig } from "./push-config.js";
-import { PushDeviceError, PushDeviceStore, type ValidatedRegistration } from "./push-device-store.js";
+import {
+    PushDeviceError,
+    PushDeviceStore,
+    type PushDisableAuthority,
+    type ValidatedRegistration,
+} from "./push-device-store.js";
 
 const ID = /^[A-Za-z0-9_-]{16,128}$/u;
 function bytes(value: unknown): Buffer | undefined {
@@ -45,6 +50,27 @@ function validate(body: unknown, config: PushConfig): ValidatedRegistration | un
         admissionFence: value!.admissionFence as number,
         enrollmentGeneration: value!.enrollmentGeneration as string,
     };
+}
+function validateDisable(body: unknown): PushDisableAuthority | undefined | false {
+    if (body === undefined) return undefined;
+    if (!body || typeof body !== "object" || Array.isArray(body)) return false;
+    if (Object.keys(body).length === 0) return undefined;
+    const value = body as Record<string, unknown>;
+    if (
+        Object.keys(value).length === 1 && Number.isSafeInteger(value.admissionFence)
+        && (value.admissionFence as number) > 0
+    ) return { admissionFence: value.admissionFence as number };
+    if (
+        Object.keys(value).length === 2 && Number.isSafeInteger(value.expectedRevision)
+        && (value.expectedRevision as number) > 0 && typeof value.enrollmentGeneration === "string"
+        && ID.test(value.enrollmentGeneration)
+    ) {
+        return {
+            expectedRevision: value.expectedRevision as number,
+            enrollmentGeneration: value.enrollmentGeneration,
+        };
+    }
+    return false;
 }
 
 export function createPushDeviceRouter(options: {
@@ -121,11 +147,13 @@ export function createPushDeviceRouter(options: {
     });
     router.post("/notifications/push/devices/:deviceId/disable", (req, res) => {
         if (!ID.test(req.params.deviceId)) return void res.status(400).json({ error: "invalid_device" });
+        const authority = validateDisable(req.body);
+        if (authority === false) return void res.status(400).json({ error: "invalid_disable_authority" });
         try {
             const store = withStore(res);
             if (store) {
                 res.json(
-                    store.disable(res.locals.pushUid, req.params.deviceId)
+                    store.disable(res.locals.pushUid, req.params.deviceId, authority)
                         ?? { deviceId: req.params.deviceId, revision: 0, state: "disabled" },
                 );
             }

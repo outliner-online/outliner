@@ -21,6 +21,9 @@ export interface PushDeviceStatus {
     endpointHash?: string;
     enrollmentGeneration?: string;
 }
+export type PushDisableAuthority =
+    | { admissionFence: number; }
+    | { expectedRevision: number; enrollmentGeneration: string; };
 export class PushDeviceError extends Error {
     constructor(public code: "conflict" | "capacity" | "unavailable", message: string) {
         super(message);
@@ -142,10 +145,20 @@ export class PushDeviceStore {
             return this.get(uid, deviceId)!;
         }).immediate();
     }
-    disable(uid: string, deviceId: string): PushDeviceStatus | undefined {
+    disable(uid: string, deviceId: string, authority?: PushDisableAuthority): PushDeviceStatus | undefined {
         const db = this.db();
         return db.transaction(() => {
             const row = this.get(uid, deviceId);
+            if (authority && "admissionFence" in authority) {
+                db.prepare(
+                    "DELETE FROM web_push_admissions WHERE uid=? AND device_id=? AND admission_fence=?",
+                ).run(uid, deviceId, authority.admissionFence);
+                return row;
+            }
+            if (
+                authority && (!row || row.revision !== authority.expectedRevision
+                    || row.enrollmentGeneration !== authority.enrollmentGeneration)
+            ) return row;
             // Invalidate authority admitted for this exact device only. An
             // absent unrelated ID remains an allocation-free no-op.
             db.prepare("DELETE FROM web_push_admissions WHERE uid=? AND device_id=?").run(uid, deviceId);

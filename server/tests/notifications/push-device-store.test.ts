@@ -68,6 +68,43 @@ describe("private Web Push device store", () => {
         db.close();
     });
 
+    it("limits stale cleanup to its exact admission or committed generation", () => {
+        const db = new Database(":memory:");
+        const store = new PushDeviceStore(db);
+        store.initialize();
+        const staleAdmission = store.issueAdmission("owner-a", device);
+        const currentAdmission = store.issueAdmission("owner-a", device);
+        store.disable("owner-a", device, { admissionFence: staleAdmission });
+        const first = store.register("owner-a", device, {
+            endpoint: "https://push.example.test/current/1",
+            p256dh: key,
+            auth,
+            vapidKeyId: "key-1",
+            expectedRevision: 0,
+            admissionFence: currentAdmission,
+            enrollmentGeneration: "current_generation_0001",
+        });
+        const second = store.register("owner-a", device, {
+            endpoint: "https://push.example.test/current/2",
+            p256dh: key,
+            auth,
+            vapidKeyId: "key-1",
+            expectedRevision: first.revision,
+            admissionFence: store.issueAdmission("owner-a", device),
+            enrollmentGeneration: "current_generation_0002",
+        });
+
+        expect(store.disable("owner-a", device, {
+            expectedRevision: first.revision,
+            enrollmentGeneration: "current_generation_0001",
+        })).to.deep.equal(second);
+        expect(store.get("owner-a", device)).to.include({
+            state: "registered",
+            enrollmentGeneration: "current_generation_0002",
+        });
+        db.close();
+    });
+
     it("does not allocate absent disables and rejects cross-owner endpoint transfer", () => {
         const db = new Database(":memory:");
         const store = new PushDeviceStore(db);

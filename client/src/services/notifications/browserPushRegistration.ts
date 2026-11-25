@@ -167,7 +167,7 @@ export class BrowserPushRegistration {
             if (generation !== this.operation) return;
             const admissionFence = await createAdmission(currentDeviceId);
             if (generation !== this.operation) {
-                await disablePushDevice(currentDeviceId);
+                await disablePushDevice(currentDeviceId, { admissionFence });
                 return;
             }
             const status = await registerPushDevice(currentDeviceId, {
@@ -178,7 +178,10 @@ export class BrowserPushRegistration {
                 subscription: { endpoint: subscription.endpoint, keys: json.keys },
             });
             if (generation !== this.operation) {
-                await disablePushDevice(currentDeviceId);
+                await disablePushDevice(currentDeviceId, {
+                    expectedRevision: status.revision,
+                    enrollmentGeneration: status.enrollmentGeneration!,
+                });
                 return;
             }
             if (status.enrollmentGeneration !== enrollmentGeneration) {
@@ -191,7 +194,10 @@ export class BrowserPushRegistration {
                     vapidKeyId: config.vapidKeyId,
                 });
             } catch (error) {
-                await disablePushDevice(currentDeviceId);
+                await disablePushDevice(currentDeviceId, {
+                    expectedRevision: status.revision,
+                    enrollmentGeneration: status.enrollmentGeneration!,
+                });
                 throw error;
             }
             if (generation === this.operation && status.state === "registered") {
@@ -209,7 +215,12 @@ export class BrowserPushRegistration {
         ++this.operation;
         const failed: string[] = [];
         try {
-            await updateBinding("disarm");
+            const binding = await updateBinding("disarm");
+            this.bindingFence = binding.fence;
+            // The durable fence is authoritative. Never reuse a subscription
+            // object from the generation it just invalidated, even if browser
+            // cleanup later reports an incomplete result.
+            this.subscription = undefined;
         } catch {
             failed.push("local disarm");
         }
@@ -219,7 +230,7 @@ export class BrowserPushRegistration {
             return;
         }
         try {
-            await disablePushDevice(deviceId());
+            this.serverStatus = await disablePushDevice(deviceId());
         } catch {
             failed.push("server registration");
         }

@@ -23,6 +23,7 @@ describe("browser Web Push enrollment lifecycle", () => {
     let subscription: PushSubscription | undefined;
     let serverStatus: Record<string, unknown>;
     let subscribeCalls: number;
+    let unsubscribeCalls: number;
     let originalFetch: typeof fetch;
     let originalCurrentUser: PropertyDescriptor | undefined;
 
@@ -32,7 +33,9 @@ describe("browser Web Push enrollment lifecycle", () => {
             deletion.onsuccess = deletion.onerror = deletion.onblocked = () => resolve();
         });
         localStorage.clear();
+        subscription = undefined;
         subscribeCalls = 0;
+        unsubscribeCalls = 0;
         serverStatus = { deviceId: "browser", revision: 0, state: "disabled" };
         const registration = {
             pushManager: {
@@ -47,6 +50,7 @@ describe("browser Web Push enrollment lifecycle", () => {
                             keys: { p256dh: "p256dh-key", auth: "authentication-key" },
                         }),
                         unsubscribe: async () => {
+                            unsubscribeCalls++;
                             subscription = undefined;
                             return true;
                         },
@@ -81,14 +85,25 @@ describe("browser Web Push enrollment lifecycle", () => {
             }
             if (url.endsWith("/admissions")) return json({ admissionFence: 1 });
             if (url.endsWith("/disable")) {
-                serverStatus = { ...serverStatus, revision: 2, state: "disabled" };
+                const authority = init?.body ? JSON.parse(String(init.body)) as Record<string, unknown> : undefined;
+                if (
+                    !authority || (authority.expectedRevision === serverStatus.revision
+                        && authority.enrollmentGeneration === serverStatus.enrollmentGeneration)
+                ) {
+                    serverStatus = {
+                        ...serverStatus,
+                        revision: Number(serverStatus.revision) + 1,
+                        state: "disabled",
+                        enrollmentGeneration: undefined,
+                    };
+                }
                 return json(serverStatus);
             }
             if (init?.method === "PUT") {
                 const registration = JSON.parse(String(init.body)) as { enrollmentGeneration: string; };
                 serverStatus = {
                     deviceId: "browser",
-                    revision: 1,
+                    revision: Number(serverStatus.revision) + 1,
                     state: "registered",
                     vapidKeyId: "key-1",
                     endpointHash: await sha256(endpoint),
@@ -119,6 +134,60 @@ describe("browser Web Push enrollment lifecycle", () => {
         await reopenedSettings.reconcile();
         expect(reopenedSettings.status).toBe("registered");
         expect(subscribeCalls).toBe(1);
+    });
+
+    it("reenrolls through Settings after the same controller disables the browser", async () => {
+        render(PushDeviceSettings);
+        await fireEvent.click(await screen.findByRole("button", { name: "Enable notifications" }));
+        await waitFor(() => expect(screen.getByTestId("push-status")).toHaveTextContent("registered"));
+
+        await fireEvent.click(screen.getByRole("button", { name: "Disable notifications" }));
+        await waitFor(() => expect(screen.getByTestId("push-status")).toHaveTextContent("disabled"));
+        expect(unsubscribeCalls).toBe(1);
+        await fireEvent.click(screen.getByRole("button", { name: "Enable notifications" }));
+        await waitFor(() => expect(subscribeCalls).toBe(2));
+        await waitFor(() => expect(screen.getByTestId("push-status")).toHaveTextContent("registered"));
+
+        expect(serverStatus.revision).toBe(3);
+    });
+
+    it("does not let stale arm compensation disable a newer enrollment", async () => {
+        const immediateFetch = globalThis.fetch;
+        let releaseFirstRegistration!: () => void;
+        const firstRegistrationBarrier = new Promise<void>(resolve => releaseFirstRegistration = resolve);
+        let firstRegistrationCommitted!: () => void;
+        const firstCommitted = new Promise<void>(resolve => firstRegistrationCommitted = resolve);
+        let registrationCount = 0;
+        globalThis.fetch = async (input, init) => {
+            if (init?.method !== "PUT") return immediateFetch(input, init);
+            registrationCount++;
+            const response = await immediateFetch(input, init);
+            if (registrationCount === 1) {
+                firstRegistrationCommitted();
+                await firstRegistrationBarrier;
+            }
+            return response;
+        };
+
+        const staleEnrollment = new BrowserPushRegistration();
+        await staleEnrollment.reconcile();
+        const stalePending = staleEnrollment.enroll();
+        await firstCommitted;
+
+        const currentEnrollment = new BrowserPushRegistration();
+        await currentEnrollment.reconcile();
+        await currentEnrollment.enroll();
+        const currentGeneration = serverStatus.enrollmentGeneration;
+        expect(currentEnrollment.status).toBe("registered");
+
+        releaseFirstRegistration();
+        await stalePending;
+        expect(staleEnrollment.status).toBe("failed");
+        expect(serverStatus).toMatchObject({ state: "registered", enrollmentGeneration: currentGeneration });
+
+        const afterRestart = new BrowserPushRegistration();
+        await afterRestart.reconcile();
+        expect(afterRestart.status).toBe("registered");
     });
 
     it("distinguishes a persisted disabled device from a browser that was never enrolled", async () => {

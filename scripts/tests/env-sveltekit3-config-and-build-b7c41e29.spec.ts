@@ -153,6 +153,12 @@ describe("SvelteKit 3 production service worker in a browser", () => {
         uid?: string;
         enrollmentGeneration: string;
     }
+    interface PushRaceControl {
+        registrationStarted: () => void;
+        registrationFinished: () => void;
+        waitForRegistrationRelease: Promise<void>;
+        disabled: () => boolean;
+    }
 
     function tokenPayload(token: string): { email?: string; user_id?: string; } {
         try {
@@ -165,6 +171,7 @@ describe("SvelteKit 3 production service worker in a browser", () => {
     function serveBuild(
         disables: DisableObservation[] = [],
         registrations: RegistrationObservation[] = [],
+        race?: PushRaceControl,
     ): Promise<http.Server> {
         const server = http.createServer((req, res) => {
             const pathname = decodeURIComponent(new URL(req.url ?? "/", "http://localhost").pathname);
@@ -194,11 +201,18 @@ describe("SvelteKit 3 production service worker in a browser", () => {
             if (req.method === "PUT" && statusMatch) {
                 let raw = "";
                 req.on("data", chunk => raw += chunk);
-                req.on("end", () => {
+                req.on("end", async () => {
                     const body = JSON.parse(raw) as {
                         enrollmentGeneration: string;
                         subscription: { endpoint: string; };
                     };
+                    race?.registrationStarted();
+                    if (race) await race.waitForRegistrationRelease;
+                    if (race?.disabled()) {
+                        json(409, { error: "conflict" });
+                        race.registrationFinished();
+                        return;
+                    }
                     registrations.push({
                         deviceId: statusMatch[1],
                         uid,
@@ -487,6 +501,81 @@ describe("SvelteKit 3 production service worker in a browser", () => {
             const binding = await readBindingFromWorker(page);
             expect(binding.binding.generation).toBe(registrations[0].enrollmentGeneration);
         } finally {
+            await browser.close();
+            await new Promise(resolve => server.close(resolve));
+        }
+    }, 180_000);
+
+    test("a real disable overtakes registration admitted by the built Settings gesture", async () => {
+        const { chromium } = createRequire(path.join(clientDir, "package.json"))(
+            "@playwright/test",
+        ) as typeof import("@playwright/test");
+        const disables: DisableObservation[] = [];
+        const registrations: RegistrationObservation[] = [];
+        let observeRegistration!: () => void;
+        const registrationStarted = new Promise<void>(resolve => observeRegistration = resolve);
+        let releaseRegistration!: () => void;
+        const registrationRelease = new Promise<void>(resolve => releaseRegistration = resolve);
+        let observeRegistrationFinished!: () => void;
+        const registrationFinished = new Promise<void>(resolve => observeRegistrationFinished = resolve);
+        const server = await serveBuild(disables, registrations, {
+            registrationStarted: observeRegistration,
+            registrationFinished: observeRegistrationFinished,
+            waitForRegistrationRelease: registrationRelease,
+            disabled: () => disables.length > 0,
+        });
+        const executablePath = chromiumExecutable();
+        const browser = await chromium.launch({
+            args: ["--no-sandbox"],
+            ...(executablePath ? { executablePath } : {}),
+        });
+        try {
+            const context = await browser.newContext();
+            const page = await context.newPage();
+            const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+            const email = `push-race-${suffix}@example.test`;
+            const uid = `uid-race-${suffix}`;
+            await installIsolatedAuthFixture(page, new Map([[email, uid]]));
+            await page.addInitScript(() => {
+                let subscription: object | undefined;
+                Object.defineProperty(ServiceWorkerRegistration.prototype, "pushManager", {
+                    configurable: true,
+                    get: () => ({
+                        getSubscription: async () => subscription,
+                        subscribe: async (options: { applicationServerKey: ArrayBuffer; }) => {
+                            subscription = {
+                                endpoint: "https://push.example.test/built-race",
+                                options,
+                                toJSON: () => ({
+                                    endpoint: "https://push.example.test/built-race",
+                                    keys: { p256dh: "fixture-p256dh", auth: "fixture-auth" },
+                                }),
+                                unsubscribe: async () => (subscription = undefined, true),
+                            };
+                            return subscription;
+                        },
+                    }),
+                });
+            });
+            const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+            await page.goto(`${base}/`);
+            await page.locator("#email").fill(email);
+            await page.locator("#password").fill("isolated-password");
+            await page.locator("button.email-login-btn").click();
+            await expect(page.locator("button.logout-btn")).toBeVisible();
+            await page.goto(`${base}/settings`);
+            await page.getByRole("button", { name: "Enable notifications" }).click();
+            await registrationStarted;
+
+            await page.locator("button.logout-btn").click();
+            await expect(page.locator(".email-login-form")).toBeVisible();
+            await expect.poll(() => disables).toHaveLength(1);
+            releaseRegistration();
+            await registrationFinished;
+            expect(registrations).toHaveLength(0);
+            expect(disables[0]).toMatchObject({ uid });
+        } finally {
+            releaseRegistration();
             await browser.close();
             await new Promise(resolve => server.close(resolve));
         }
