@@ -2,6 +2,8 @@ import Database from "better-sqlite3";
 import { expect } from "chai";
 import express from "express";
 import { createECDH } from "node:crypto";
+import { request as nodeRequest } from "node:http";
+import type { AddressInfo } from "node:net";
 import request from "supertest";
 import { createPushDeviceRouter } from "../../src/notifications/push-device-api.js";
 import { PushDeviceStore } from "../../src/notifications/push-device-store.js";
@@ -14,8 +16,16 @@ const config = {
     subject: "mailto:push@example.test",
 };
 
-function createApp(store: PushDeviceStore) {
+function createApp(store: PushDeviceStore, onRegistrationBodyStart?: () => void) {
     const app = express();
+    if (onRegistrationBodyStart) {
+        app.use((req, _res, next) => {
+            if (req.method === "PUT" && req.path.startsWith("/api/notifications/push/devices/")) {
+                req.once("data", onRegistrationBodyStart);
+            }
+            next();
+        });
+    }
     app.use(express.json());
     app.use("/api", createPushDeviceRouter({
         store,
@@ -115,7 +125,11 @@ describe("authenticated Web Push device API", () => {
         const db = new Database(":memory:");
         const store = new PushDeviceStore(db);
         store.initialize();
-        const app = createApp(store);
+        let observeRegistrationBody!: () => void;
+        const registrationBodyStarted = new Promise<void>(resolve => observeRegistrationBody = resolve);
+        let releaseRegistrationBody!: () => void;
+        const registrationBodyReleased = new Promise<void>(resolve => releaseRegistrationBody = resolve);
+        const app = createApp(store, observeRegistrationBody);
         const admission = await request(app).post("/api/notifications/push/admissions").send({ deviceId: device })
             .set("Authorization", "Bearer token-owner-a").expect(200);
 
@@ -146,22 +160,55 @@ describe("authenticated Web Push device API", () => {
         })
             .set("Authorization", "Bearer token-owner-a").expect(200);
 
-        await request(app).post(`/api/notifications/push/devices/${device}/disable`)
-            .set("Authorization", "Bearer token-owner-a").expect(200)
-            .expect(response => expect(response.body).to.include({ revision: 3, state: "disabled" }));
+        const contestedBody = JSON.stringify({
+            ...registration,
+            expectedRevision: disabled.body.revision,
+            admissionFence: contestedAdmission.body.admissionFence,
+            enrollmentGeneration: "overtaken_generation_01",
+            subscription: {
+                ...registration.subscription,
+                endpoint: "https://push.example.test/send/overtaken",
+            },
+        });
+        const server = app.listen(0);
+        try {
+            const port = (server.address() as AddressInfo).port;
+            const contestedResponse = new Promise<{ status: number; body: string; }>((resolve, reject) => {
+                const pending = nodeRequest({
+                    hostname: "127.0.0.1",
+                    port,
+                    path: `/api/notifications/push/devices/${device}`,
+                    method: "PUT",
+                    headers: {
+                        Authorization: "Bearer token-owner-a",
+                        "Content-Type": "application/json",
+                        "Content-Length": Buffer.byteLength(contestedBody),
+                    },
+                }, response => {
+                    let body = "";
+                    response.setEncoding("utf8");
+                    response.on("data", chunk => body += chunk);
+                    response.on("end", () => resolve({ status: response.statusCode ?? 0, body }));
+                });
+                pending.on("error", reject);
+                const split = Math.floor(contestedBody.length / 2);
+                pending.write(contestedBody.slice(0, split));
+                void registrationBodyReleased.then(() => pending.end(contestedBody.slice(split)));
+            });
 
-        await request(app).put(`/api/notifications/push/devices/${device}`)
-            .set("Authorization", "Bearer token-owner-a").send({
-                ...registration,
-                expectedRevision: disabled.body.revision,
-                admissionFence: contestedAdmission.body.admissionFence,
-                enrollmentGeneration: "overtaken_generation_01",
-                subscription: {
-                    ...registration.subscription,
-                    endpoint: "https://push.example.test/send/overtaken",
-                },
-            }).expect(409);
-        expect(store.get("owner-a", device)).to.include({ state: "disabled" });
-        db.close();
+            await registrationBodyStarted;
+            await request(server).post(`/api/notifications/push/devices/${device}/disable`)
+                .set("Authorization", "Bearer token-owner-a").expect(200)
+                .expect(response => expect(response.body).to.include({ revision: 3, state: "disabled" }));
+
+            releaseRegistrationBody();
+            const overtaken = await contestedResponse;
+            expect(overtaken.status).to.equal(409);
+            expect(JSON.parse(overtaken.body)).to.deep.equal({ error: "conflict" });
+            expect(store.get("owner-a", device)).to.include({ state: "disabled" });
+        } finally {
+            server.close();
+            db.close();
+        }
     });
 });

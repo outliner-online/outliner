@@ -1,4 +1,5 @@
 import { spawnSync } from "child_process";
+import { createHash } from "crypto";
 import fs from "fs";
 import http from "http";
 import { createRequire } from "module";
@@ -147,6 +148,11 @@ describe("SvelteKit 3 production service worker in a browser", () => {
         deviceId: string;
         uid?: string;
     }
+    interface RegistrationObservation {
+        deviceId: string;
+        uid?: string;
+        enrollmentGeneration: string;
+    }
 
     function tokenPayload(token: string): { email?: string; user_id?: string; } {
         try {
@@ -156,14 +162,62 @@ describe("SvelteKit 3 production service worker in a browser", () => {
         }
     }
 
-    function serveBuild(disables: DisableObservation[] = []): Promise<http.Server> {
+    function serveBuild(
+        disables: DisableObservation[] = [],
+        registrations: RegistrationObservation[] = [],
+    ): Promise<http.Server> {
         const server = http.createServer((req, res) => {
             const pathname = decodeURIComponent(new URL(req.url ?? "/", "http://localhost").pathname);
+            const token = req.headers.authorization?.match(/^Bearer (.+)$/u)?.[1] ?? "";
+            const uid = tokenPayload(token).user_id;
+            const json = (status: number, body: object) => {
+                res.writeHead(status, { "content-type": "application/json" });
+                res.end(JSON.stringify(body));
+            };
+            if (req.method === "GET" && pathname === "/api/notifications/push/config") {
+                json(200, {
+                    available: true,
+                    publicKey: Buffer.from([4, ...new Array<number>(64).fill(1)]).toString("base64url"),
+                    vapidKeyId: "built-browser-key",
+                });
+                return;
+            }
+            const statusMatch = pathname.match(/^\/api\/notifications\/push\/devices\/([^/]+)$/u);
+            if (req.method === "GET" && statusMatch) {
+                json(200, { deviceId: statusMatch[1], revision: 0, state: "disabled" });
+                return;
+            }
+            if (req.method === "POST" && pathname === "/api/notifications/push/admissions") {
+                json(200, { admissionFence: 1 });
+                return;
+            }
+            if (req.method === "PUT" && statusMatch) {
+                let raw = "";
+                req.on("data", chunk => raw += chunk);
+                req.on("end", () => {
+                    const body = JSON.parse(raw) as {
+                        enrollmentGeneration: string;
+                        subscription: { endpoint: string; };
+                    };
+                    registrations.push({
+                        deviceId: statusMatch[1],
+                        uid,
+                        enrollmentGeneration: body.enrollmentGeneration,
+                    });
+                    json(200, {
+                        deviceId: statusMatch[1],
+                        revision: 1,
+                        state: "registered",
+                        vapidKeyId: "built-browser-key",
+                        endpointHash: createHash("sha256").update(body.subscription.endpoint).digest("hex"),
+                        enrollmentGeneration: body.enrollmentGeneration,
+                    });
+                });
+                return;
+            }
             if (req.method === "POST" && /^\/api\/notifications\/push\/devices\/[^/]+\/disable$/u.test(pathname)) {
-                const token = req.headers.authorization?.match(/^Bearer (.+)$/u)?.[1] ?? "";
-                disables.push({ deviceId: pathname.split("/").at(-2)!, uid: tokenPayload(token).user_id });
-                res.writeHead(200, { "content-type": "application/json" });
-                res.end(JSON.stringify({ deviceId: pathname.split("/").at(-2), revision: 2, state: "disabled" }));
+                disables.push({ deviceId: pathname.split("/").at(-2)!, uid });
+                json(200, { deviceId: pathname.split("/").at(-2), revision: 2, state: "disabled" });
                 return;
             }
             let file = path.join(buildDir, pathname);
@@ -373,6 +427,65 @@ describe("SvelteKit 3 production service worker in a browser", () => {
             const offline = await page.goto(`${base}/some-project/some-page`);
             expect(offline?.status()).toBe(200);
             expect(await page.content()).toContain("/_app/immutable/entry/");
+        } finally {
+            await browser.close();
+            await new Promise(resolve => server.close(resolve));
+        }
+    }, 180_000);
+
+    test("the built Settings gesture commits enrollment and arms the active worker binding", async () => {
+        const { chromium } = createRequire(path.join(clientDir, "package.json"))(
+            "@playwright/test",
+        ) as typeof import("@playwright/test");
+        const registrations: RegistrationObservation[] = [];
+        const server = await serveBuild([], registrations);
+        const executablePath = chromiumExecutable();
+        const browser = await chromium.launch({
+            args: ["--no-sandbox"],
+            ...(executablePath ? { executablePath } : {}),
+        });
+        try {
+            const context = await browser.newContext();
+            const page = await context.newPage();
+            const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+            const email = `push-settings-${suffix}@example.test`;
+            const uid = `uid-settings-${suffix}`;
+            await installIsolatedAuthFixture(page, new Map([[email, uid]]));
+            await page.addInitScript(() => {
+                let subscription: object | undefined;
+                Object.defineProperty(ServiceWorkerRegistration.prototype, "pushManager", {
+                    configurable: true,
+                    get: () => ({
+                        getSubscription: async () => subscription,
+                        subscribe: async (options: { applicationServerKey: ArrayBuffer; }) => {
+                            subscription = {
+                                endpoint: "https://push.example.test/built-settings",
+                                options,
+                                toJSON: () => ({
+                                    endpoint: "https://push.example.test/built-settings",
+                                    keys: { p256dh: "fixture-p256dh", auth: "fixture-auth" },
+                                }),
+                                unsubscribe: async () => (subscription = undefined, true),
+                            };
+                            return subscription;
+                        },
+                    }),
+                });
+            });
+            const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+            await page.goto(`${base}/`);
+            await page.locator("#email").fill(email);
+            await page.locator("#password").fill("isolated-password");
+            await page.locator("button.email-login-btn").click();
+            await expect(page.locator("button.logout-btn")).toBeVisible();
+            await page.goto(`${base}/settings`);
+            await expect(page.getByRole("button", { name: "Enable notifications" })).toBeVisible();
+            await page.getByRole("button", { name: "Enable notifications" }).click();
+            await expect(page.getByTestId("push-status")).toContainText("registered");
+            await expect.poll(() => registrations).toHaveLength(1);
+            expect(registrations[0]).toMatchObject({ uid });
+            const binding = await readBindingFromWorker(page);
+            expect(binding.binding.generation).toBe(registrations[0].enrollmentGeneration);
         } finally {
             await browser.close();
             await new Promise(resolve => server.close(resolve));

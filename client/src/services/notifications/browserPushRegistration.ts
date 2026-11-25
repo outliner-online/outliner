@@ -133,6 +133,8 @@ export class BrowserPushRegistration {
                     && server.vapidKeyId === config.vapidKeyId && !!binding.generation
                     && binding.generation === server.enrollmentGeneration
                 ? "registered"
+                : server.state === "disabled" && server.revision > 0
+                ? "disabled"
                 : "not-enrolled";
         } catch (error) {
             this.status = "unavailable";
@@ -162,22 +164,36 @@ export class BrowserPushRegistration {
             const json = subscription.toJSON();
             const enrollmentGeneration = randomId();
             const currentDeviceId = deviceId();
+            if (generation !== this.operation) return;
+            const admissionFence = await createAdmission(currentDeviceId);
+            if (generation !== this.operation) {
+                await disablePushDevice(currentDeviceId);
+                return;
+            }
             const status = await registerPushDevice(currentDeviceId, {
                 expectedRevision: this.serverStatus?.revision ?? 0,
-                admissionFence: await createAdmission(currentDeviceId),
+                admissionFence,
                 enrollmentGeneration,
                 vapidKeyId: config.vapidKeyId,
                 subscription: { endpoint: subscription.endpoint, keys: json.keys },
             });
-            if (generation !== this.operation) return;
+            if (generation !== this.operation) {
+                await disablePushDevice(currentDeviceId);
+                return;
+            }
             if (status.enrollmentGeneration !== enrollmentGeneration) {
                 throw new Error("Committed enrollment generation does not match this enrollment");
             }
-            await updateBinding("arm", {
-                fence: this.bindingFence,
-                generation: status.enrollmentGeneration,
-                vapidKeyId: config.vapidKeyId,
-            });
+            try {
+                await updateBinding("arm", {
+                    fence: this.bindingFence,
+                    generation: status.enrollmentGeneration,
+                    vapidKeyId: config.vapidKeyId,
+                });
+            } catch (error) {
+                await disablePushDevice(currentDeviceId);
+                throw error;
+            }
             if (generation === this.operation && status.state === "registered") {
                 this.serverStatus = status;
                 this.status = "registered";

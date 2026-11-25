@@ -121,6 +121,17 @@ describe("browser Web Push enrollment lifecycle", () => {
         expect(subscribeCalls).toBe(1);
     });
 
+    it("distinguishes a persisted disabled device from a browser that was never enrolled", async () => {
+        const neverEnrolled = new BrowserPushRegistration();
+        await neverEnrolled.reconcile();
+        expect(neverEnrolled.status).toBe("not-enrolled");
+
+        serverStatus = { deviceId: "browser", revision: 4, state: "disabled" };
+        const reopenedDisabled = new BrowserPushRegistration();
+        await reopenedDisabled.reconcile();
+        expect(reopenedDisabled.status).toBe("disabled");
+    });
+
     it("shows a stale Settings binding as inactive until a fresh button gesture repairs it", async () => {
         subscription = {
             endpoint: "https://push.example.test/stale-subscription",
@@ -223,12 +234,12 @@ describe("browser Web Push enrollment lifecycle", () => {
         expect(localStorage.getItem("outliner:web-push-armed")).toBeNull();
     });
 
-    it("keeps a completed cross-context disarm effective against a delayed enrollment arm", async () => {
-        let releaseRegistration!: () => void;
-        const registrationBarrier = new Promise<void>(resolve => releaseRegistration = resolve);
+    it("compensates when a delayed admission is created after cross-context disable completes", async () => {
+        let releaseAdmission!: () => void;
+        const admissionBarrier = new Promise<void>(resolve => releaseAdmission = resolve);
         const immediateFetch = globalThis.fetch;
         globalThis.fetch = async (input, init) => {
-            if (init?.method === "PUT") await registrationBarrier;
+            if (String(input).endsWith("/admissions")) await admissionBarrier;
             return immediateFetch(input, init);
         };
 
@@ -241,13 +252,14 @@ describe("browser Web Push enrollment lifecycle", () => {
         await otherContext.disable();
         expect(["disabled", "incomplete"]).toContain(otherContext.status);
         expect(otherContext.detail).not.toBe("Could not verify local disarm");
-        releaseRegistration();
+        releaseAdmission();
         await pending;
         expect(delayedEnrollment.status).toBe("failed");
+        expect(serverStatus.state).toBe("disabled");
 
         const afterRestart = new BrowserPushRegistration();
         await afterRestart.reconcile();
-        expect(afterRestart.status).toBe("not-enrolled");
+        expect(afterRestart.status).toBe("disabled");
         expect(localStorage.getItem("outliner:web-push-armed")).toBeNull();
     });
 });
