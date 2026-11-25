@@ -23,6 +23,11 @@ jobs:
         uses: actions/checkout@v7
         with:
           clean: true
+      - name: Restore unit dependencies
+        shell: bash
+        run: |
+          cp -r /cache/client/node_modules client/
+          chmod +x client/node_modules/.bin/*
       - name: Generate native unit coverage schema
         shell: bash
         run: |

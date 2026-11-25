@@ -506,6 +506,10 @@ describe("unit CI native shard orchestration", () => {
                 step.uses === "./.github/actions/setup-test-env"
             ),
         ).toBe(false);
+        expect(
+            workflow.jobs["unit-coverage-baseline"].steps.find((step: any) => step.name === "Restore unit dependencies")
+                .run,
+        ).toContain("/cache/client/node_modules");
         const diagnostics = workflow.jobs["unit-test"].steps.find((step: any) => step.name === "Upload logs");
         expect(diagnostics.if).toBe("failure()");
         expect(diagnostics.with.name).toBe("unit-test-logs");
