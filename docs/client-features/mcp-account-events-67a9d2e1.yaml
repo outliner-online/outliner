@@ -1,0 +1,18 @@
+id: MCP-67a9d2e1
+title: Account-wide MCP Events for selected view changes
+title-ja: 選択したビューの変更をアカウント単位の MCP Events で通知
+status: implemented
+area: MCP
+description: >-
+  One authenticated, token-bounded webhook lease per user carries bounded semantic
+  display changes from selected objects across authorized projects. Rules remain
+  mutable without resubscription. Delivery is best effort with no replay or history.
+tests:
+  - server/tests/mcp-events-protocol-http.test.ts
+  - server/tests/mcp-events-lease.test.ts
+  - server/tests/mcp-events-lifecycle-races.test.ts
+  - server/tests/mcp-events-observer-delivery.test.ts
+  - server/tests/mcp-events-currentness.test.ts
+  - server/tests/mcp-events-live-currentness.test.ts
+  - server/tests/mcp-events-best-effort.test.ts
+  - server/tests/mcp-events-restart.test.ts

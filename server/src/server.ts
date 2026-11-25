@@ -32,6 +32,7 @@ import { OutlinerScheduleService } from "./mcp/schedule-service.js";
 import { OutlinerTableCreationService } from "./mcp/table-creation.js";
 import { UpdateGridPresentationTool } from "./mcp/update-grid-presentation-tool.js";
 import { getMetrics, recordMessage } from "./metrics.js";
+import { NotificationEventsService } from "./notifications/mcp-events-service.js";
 import { NotificationObservationRuntime } from "./notifications/observation-runtime.js";
 import { createPushDeviceRouter } from "./notifications/push-device-api.js";
 import { PushDeviceStore } from "./notifications/push-device-store.js";
@@ -556,6 +557,11 @@ export async function startServer(
     );
     notificationSettings.setObservationStatusProvider(uid => notificationRuntime.status(uid));
     notificationRuntime.start();
+    const notificationEvents = NotificationEventsService.create(
+        () => persistence?.db,
+        config.NOTIFICATION_CREDENTIAL_KEY,
+        notificationRuntime,
+    );
     app.use(createMcpRouter(
         mcpReads,
         undefined,
@@ -602,6 +608,7 @@ export async function startServer(
             ),
         ),
         notificationSettings,
+        notificationEvents,
     ));
 
     // Log rotation endpoint
@@ -844,6 +851,7 @@ export async function startServer(
 
     const shutdown = async () => {
         intervals.forEach(clearInterval);
+        await notificationEvents.close();
         await notificationRuntime.close();
         // Awaited so the scheduler's worker releases its Postgres WASM heap
         // before the process goes down.

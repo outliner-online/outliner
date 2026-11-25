@@ -12,10 +12,17 @@ export interface ViewChangeSummary {
     };
     readonly examples: readonly { readonly text: string; readonly truncated: boolean; }[];
     readonly examplesTruncated: boolean;
+    readonly samples: readonly {
+        readonly oldDisplay: string;
+        readonly newDisplay: string;
+        readonly oldTruncated: boolean;
+        readonly newTruncated: boolean;
+    }[];
 }
 
 /** The bounded, externally safe part of one immutable delivery opportunity. */
 export interface ViewChangePayload {
+    readonly uid: string;
     readonly eventId: string;
     readonly ruleId: string;
     readonly channel: NotificationChannel;
@@ -74,10 +81,21 @@ interface DisplayedPart {
  */
 export function summarizeViewChange(before: VisibleProjection, after: VisibleProjection): ViewChangeSummary {
     const examples: { readonly text: string; readonly truncated: boolean; }[] = [];
+    const samples: ViewChangeSummary["samples"][number][] = [];
     let exampleCount = 0;
     const collect = (prior: DisplayedPart | undefined, next: DisplayedPart | undefined) => {
         exampleCount++;
         if (examples.length >= 3) return;
+        const oldValue = boundedExample("", prior?.text() ?? []);
+        const newValue = boundedExample("", next?.text() ?? []);
+        samples.push(
+            Object.freeze({
+                oldDisplay: oldValue.text,
+                newDisplay: newValue.text,
+                oldTruncated: oldValue.truncated,
+                newTruncated: newValue.truncated,
+            }),
+        );
         const prefix = prior === undefined ? "Added: " : next === undefined ? "Removed: " : "Changed: ";
         examples.push(boundedExample(prefix, (next ?? prior)!.text()));
     };
@@ -95,6 +113,7 @@ export function summarizeViewChange(before: VisibleProjection, after: VisiblePro
     return Object.freeze({
         counts: Object.freeze({ previousItems, currentItems, changedItems, changedLabels }),
         examples: Object.freeze(examples),
+        samples: Object.freeze(samples),
         examplesTruncated: exampleCount > examples.length,
     });
 }

@@ -64,6 +64,7 @@ export async function runtimeFixture(
     options: RuntimeOptions = {},
     hooks: ObservationHooks = {},
     directory = tempDir(),
+    ownMcpAdapter = true,
 ) {
     const acl = new AclStore();
     acl.grant("projectUsers", PROJECT, UID);
@@ -96,9 +97,11 @@ export async function runtimeFixture(
         ...options,
     });
     const offered: PreparedViewChange[] = [];
-    runtime.subscribe("mcp", candidate => {
-        offered.push(candidate);
-    });
+    if (ownMcpAdapter) {
+        runtime.subscribe("mcp", candidate => {
+            offered.push(candidate);
+        });
+    }
     runtime.subscribe("mobile", candidate => {
         offered.push(candidate);
     });

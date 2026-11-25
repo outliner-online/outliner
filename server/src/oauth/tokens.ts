@@ -41,9 +41,13 @@ export function verifyAccessToken(token: string): VerifiedOAuthAccessToken {
         algorithms: ["HS256"],
     }) as jwt.JwtPayload;
 
-    if (!decoded.sub || typeof decoded.scope !== "string" || typeof decoded.client_id !== "string") {
+    if (
+        typeof decoded.exp !== "number" || !Number.isSafeInteger(decoded.exp * 1000)
+        || decoded.exp * 1000 <= Date.now() || !decoded.sub || typeof decoded.scope !== "string"
+        || typeof decoded.client_id !== "string"
+    ) {
         throw new Error("invalid_token_claims");
     }
 
-    return { uid: decoded.sub, scope: decoded.scope, clientId: decoded.client_id };
+    return { uid: decoded.sub, scope: decoded.scope, clientId: decoded.client_id, expiresAtMs: decoded.exp * 1000 };
 }
