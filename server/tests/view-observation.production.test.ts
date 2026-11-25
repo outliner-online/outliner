@@ -15,6 +15,7 @@ import { computeViewRange } from "../../shared/src/services/calendarGridRange.js
 import { createGridEntry, getGridDefinitionTarget, setGridQuery } from "../../shared/src/services/gridDefinition.js";
 import { GRID_OBSERVATION_PARITY } from "../../shared/tests/fixtures/gridObservationParity.js";
 import { releaseWithoutStore } from "../src/mcp/live-room.js";
+import { OutlinerRelationService } from "../src/mcp/relation-service.js";
 import { ViewObservationService } from "../src/notifications/view-observation.js";
 import { seedGridObservationParity } from "./view-observation-grid-fixture.js";
 
@@ -160,6 +161,40 @@ describe("default saved Grid and Calendar observation producers", function() {
             columns: [{ label: "value" }],
             rows: [[{ value: "2026-11-21" }]],
         });
+        await handle.close();
+    });
+
+    it("invalidates and refreshes through the supported MCP Table writer", async () => {
+        const service = new ViewObservationService(server.hocuspocus, async () => true);
+        const handle = await service.openViewObservation({
+            uid: UID,
+            target: { projectId: PROJECT, kind: "grid", objectId: "heterogeneous" },
+            context: gridContext,
+        });
+        const first = await handle.readSnapshot({ observedAtUtcMs: 1 });
+        expect(first.status).to.equal("ready");
+        if (first.status !== "ready") throw new Error("Grid not ready");
+        let invalidations = 0;
+        handle.onInvalidate(() => invalidations++);
+
+        const writer = new OutlinerRelationService(server.hocuspocus, async () => true);
+        const written = await writer.writeRelation(UID, PROJECT, "choices", {
+            op: "UPDATE",
+            rowId: "same",
+            column: "observed_on",
+            value: "2026-11-26",
+        });
+        expect(written).to.include({ applied: true, replayed: false, rowId: "same" });
+        expect(invalidations).to.equal(1);
+        expect(handle.isCurrent(first.versionToken)).to.equal(false);
+
+        const refreshed = await handle.readSnapshot({ observedAtUtcMs: 2 });
+        expect(refreshed.status).to.equal("ready");
+        if (refreshed.status !== "ready" || refreshed.projection.kind !== "grid") throw new Error("Grid not ready");
+        expect(refreshed.projection.rows).to.deep.equal([
+            [{ value: "2026-11-26" }],
+            [{ value: "2026-11-22T12:34:56.000Z" }],
+        ]);
         await handle.close();
     });
 
