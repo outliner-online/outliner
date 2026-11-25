@@ -130,6 +130,7 @@ jobs:
         run: |
           cp -r /cache/client/node_modules client/
           chmod +x client/node_modules/.bin/*
+          ln -sfn ../client/node_modules shared/node_modules
       - name: Download current-attempt shard evidence
         uses: actions/download-artifact@v8
         with:

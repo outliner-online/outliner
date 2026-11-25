@@ -512,6 +512,10 @@ describe("unit CI native shard orchestration", () => {
                 .run,
         ).toContain("/cache/client/node_modules");
         expect(
+            workflow.jobs["unit-test"].steps.find((step: any) => step.name === "Restore unit dependencies")
+                .run,
+        ).toContain("shared/node_modules");
+        expect(
             workflow.jobs["unit-coverage-baseline"].steps.find((step: any) =>
                 step.name === "Record native unit selection"
             ).run,
