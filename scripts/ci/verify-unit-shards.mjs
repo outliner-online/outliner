@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 
@@ -12,8 +11,6 @@ const runId = process.env.GITHUB_RUN_ID;
 const runAttempt = process.env.GITHUB_RUN_ATTEMPT;
 if (!runId || !runAttempt) throw new Error("GITHUB_RUN_ID and GITHUB_RUN_ATTEMPT are required");
 const clientDir = path.resolve("client");
-const clientRequire = createRequire(path.join(clientDir, "package.json"));
-const { createCoverageMap } = clientRequire("@vitest/istanbul-lib-coverage");
 const vitestBin = process.env.UNIT_VITEST_BIN ?? path.join(clientDir, "node_modules/.bin/vitest");
 const configArgs = process.env.UNIT_VITEST_CONFIG ? [`--config=${process.env.UNIT_VITEST_CONFIG}`] : [];
 
@@ -121,6 +118,47 @@ function mergeCoverageSchema(baseline, schema) {
         }
     }
 }
+function mergeCoverageReports(reports) {
+    const result = {};
+    for (const coverage of reports) {
+        for (const [file, data] of Object.entries(coverage)) {
+            const target = result[file] ??= {
+                ...data,
+                statementMap: {},
+                fnMap: {},
+                branchMap: {},
+                s: {},
+                f: {},
+                b: {},
+            };
+            for (const [mapName, counterName] of [["statementMap", "s"], ["fnMap", "f"], ["branchMap", "b"]]) {
+                const definitions = new Map(Object.entries(target[mapName]).map(([key, definition]) => [
+                    JSON.stringify(definition),
+                    key,
+                ]));
+                for (const [key, definition] of Object.entries(data[mapName])) {
+                    const serialized = JSON.stringify(definition);
+                    let targetKey = definitions.get(serialized);
+                    if (targetKey === undefined) {
+                        targetKey = String(definitions.size);
+                        definitions.set(serialized, targetKey);
+                        target[mapName][targetKey] = definition;
+                        target[counterName][targetKey] = counterName === "b" ? [] : 0;
+                    }
+                    if (counterName === "b") {
+                        const counts = data[counterName][key];
+                        target[counterName][targetKey] = counts.map((count, index) =>
+                            count + (target[counterName][targetKey][index] ?? 0)
+                        );
+                    } else {
+                        target[counterName][targetKey] += data[counterName][key];
+                    }
+                }
+            }
+        }
+    }
+    return result;
+}
 function validateCompleteCoverageMaps(coverage, baseline) {
     for (const [file, expected] of Object.entries(baseline)) {
         if (coverageEntryCount(expected) === 0) continue;
@@ -146,7 +184,7 @@ const expected = expectedIdentities(JSON.parse(fs.readFileSync(nativeSelectionPa
 fs.rmSync(nativeSelectionPath);
 if (!expected.length) throw new Error("native unit selection is empty");
 const executed = [];
-const mergedCoverage = createCoverageMap({});
+const coverageReports = [];
 const expectedCoverageFiles = repositoryCoverageInventory();
 const suppliedCoverageBaseline = process.env.UNIT_COVERAGE_BASELINE;
 const coverageBaseline = suppliedCoverageBaseline
@@ -186,14 +224,15 @@ for (let shard = 1; shard <= shardCount; shard++) {
     }
     validateCoverageMaps(coverage);
     validateCoverageSchema(coverage, schema, shard);
-    mergedCoverage.merge(coverage);
+    coverageReports.push(coverage);
 }
 compareIdentities(executed, expected);
-if (mergedCoverage.files().length !== nativeCoverageFiles.length) {
+const mergedCoverage = mergeCoverageReports(coverageReports);
+if (Object.keys(mergedCoverage).length !== nativeCoverageFiles.length) {
     throw new Error("merged coverage is incomplete");
 }
-validateCompleteCoverageMaps(mergedCoverage.toJSON(), coverageBaseline);
+validateCompleteCoverageMaps(mergedCoverage, coverageBaseline);
 const output = path.resolve("coverage/unit_and_integration/coverage-final.json");
 fs.mkdirSync(path.dirname(output), { recursive: true });
-fs.writeFileSync(output, JSON.stringify(mergedCoverage.toJSON()));
+fs.writeFileSync(output, JSON.stringify(mergedCoverage));
 console.log(`Verified ${expected.length} executed unit tests and ${expectedCoverageFiles.length} coverage files.`);
