@@ -484,7 +484,11 @@ describe("unit CI native shard orchestration", () => {
             .toBe(true);
         const verify = workflow.jobs["unit-test"].steps.find((step: any) => step.name.includes("Verify"));
         expect(verify.run).toBe("scripts/ci/finalize-unit-tests.sh");
-        expect(verify.env.UNIT_COVERAGE_BASELINE).toBe("unit-baseline/coverage-final.json");
+        const baselineDownload = workflow.jobs["unit-test"].steps.find((step: any) =>
+            step.name === "Download current-attempt native coverage baseline"
+        );
+        expect(baselineDownload.with.path).toBe(".");
+        expect(verify.env.UNIT_COVERAGE_BASELINE).toBe("coverage/unit-baseline/coverage-final.json");
         expect(
             workflow.jobs["unit-coverage-baseline"].steps.find((step: any) =>
                 step.name === "Run native unit coverage baseline"

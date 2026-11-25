@@ -128,7 +128,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: unit-coverage-baseline-${{ github.run_id }}-${{ github.run_attempt }}
-          path: unit-baseline
+          path: .
       - name: Reject failed or cancelled shards
         env:
           SHARD_RESULT: ${{ needs.unit-shard.result }}
@@ -140,7 +140,7 @@ jobs:
       - name: Verify complete selection, merge coverage, and run base tests
         run: scripts/ci/finalize-unit-tests.sh
         env:
-          UNIT_COVERAGE_BASELINE: unit-baseline/coverage-final.json
+          UNIT_COVERAGE_BASELINE: coverage/unit-baseline/coverage-final.json
       - name: Upload logs
         if: failure()
         uses: actions/upload-artifact@v7
