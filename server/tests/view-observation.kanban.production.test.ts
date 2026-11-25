@@ -1,3 +1,4 @@
+import { HocuspocusProvider } from "@hocuspocus/provider";
 import { expect } from "chai";
 import * as Y from "yjs";
 import type { KanbanObservationContextV1 } from "../../shared/src/notifications/kanbanProjection.js";
@@ -21,7 +22,17 @@ function deferred() {
     return { promise, resolve };
 }
 
-async function seed(host: any, query: string, settings: Record<string, unknown> = {}) {
+function providerSynced(provider: HocuspocusProvider) {
+    return new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("Provider sync timeout")), 10_000);
+        provider.on("synced", () => {
+            clearTimeout(timer);
+            resolve();
+        });
+    });
+}
+
+async function seed(host: any, query: string, settings: Record<string, unknown> = {}, projectId = PROJECT) {
     const canonical = Project.createInstance("Kanban production");
     const tableDoc = new Y.Doc({ guid: `${PROJECT}--table--tasks` });
     tableDoc.getText("schema").insert(0, "CREATE TABLE tasks(id TEXT PRIMARY KEY, status TEXT, title TEXT)");
@@ -44,9 +55,9 @@ async function seed(host: any, query: string, settings: Record<string, unknown> 
         laneOrder: ["done", "todo"],
         ...settings,
     });
-    const project = await host.openDirectConnection(`projects/${PROJECT}`, { context: { uid: UID } });
+    const project = await host.openDirectConnection(`projects/${projectId}`, { context: { uid: UID } });
     Y.applyUpdate(project.document as unknown as Y.Doc, Y.encodeStateAsUpdate(canonical.ydoc as never));
-    const source = await host.openDirectConnection(`projects/${PROJECT}/tables/tasks`, { context: { uid: UID } });
+    const source = await host.openDirectConnection(`projects/${projectId}/tables/tasks`, { context: { uid: UID } });
     Y.applyUpdate(source.document as unknown as Y.Doc, Y.encodeStateAsUpdate(tableDoc));
     return [project, source];
 }
@@ -164,13 +175,14 @@ describe("retained view observation production refresh", function() {
     });
 
     it("invalidates an issued token when the saved target is deleted", async () => {
+        const browserProject = "demo";
         const held = await seed(server.hocuspocus, "SELECT id, status, title FROM tasks ORDER BY id", {
             titleField: "title",
-        });
+        }, browserProject);
         const service = new ViewObservationService(server.hocuspocus, async () => true);
         const handle = await service.openViewObservation({
             uid: UID,
-            target: { projectId: PROJECT, kind: "kanban", objectId: "board" },
+            target: { projectId: browserProject, kind: "kanban", objectId: "board" },
             context,
         });
         const ready = await handle.readSnapshot({ observedAtUtcMs: 1 });
@@ -178,13 +190,29 @@ describe("retained view observation production refresh", function() {
         if (ready.status !== "ready") throw new Error("Kanban not ready");
         expect(handle.isCurrent(ready.versionToken)).to.equal(true);
 
-        const project = held[0].document as unknown as Y.Doc;
-        getKanbanRegistry(project).delete("board");
-        expect(handle.isCurrent(ready.versionToken)).to.equal(false);
-        expect(await handle.readSnapshot({ observedAtUtcMs: 2 })).to.deep.equal({
-            status: "not_found",
-            reason: "not_found",
+        const invalidated = deferred();
+        handle.onInvalidate(() => invalidated.resolve());
+        const address = server.server.address() as { port: number; };
+        const browserDoc = new Y.Doc();
+        const room = `projects/${browserProject}`;
+        const provider = new HocuspocusProvider({
+            url: `ws://127.0.0.1:${address.port}/${room}`,
+            name: room,
+            document: browserDoc,
         });
+        try {
+            await providerSynced(provider);
+            getKanbanRegistry(browserDoc).delete("board");
+            await invalidated.promise;
+            expect(handle.isCurrent(ready.versionToken)).to.equal(false);
+            expect(await handle.readSnapshot({ observedAtUtcMs: 2 })).to.deep.equal({
+                status: "not_found",
+                reason: "not_found",
+            });
+        } finally {
+            provider.destroy();
+            browserDoc.destroy();
+        }
 
         await handle.close();
         await Promise.all(held.map(connection => connection.disconnect()));
