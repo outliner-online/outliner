@@ -14,6 +14,7 @@ import type { GridObservationContextV1 } from "../../shared/src/notifications/gr
 import { computeViewRange } from "../../shared/src/services/calendarGridRange.js";
 import { createGridEntry, getGridDefinitionTarget, setGridQuery } from "../../shared/src/services/gridDefinition.js";
 import { GRID_OBSERVATION_PARITY } from "../../shared/tests/fixtures/gridObservationParity.js";
+import { releaseWithoutStore } from "../src/mcp/live-room.js";
 import { ViewObservationService } from "../src/notifications/view-observation.js";
 import { seedGridObservationParity } from "./view-observation-grid-fixture.js";
 
@@ -44,9 +45,13 @@ describe("Grid observation production UI parity", function() {
                 env: { ...process.env, NODE_OPTIONS: "", GRID_PARITY_EVIDENCE_PATH: evidencePath },
             });
             const compared = JSON.parse(await readFile(evidencePath, "utf8"));
-            expect(compared.rendered).to.deep.equal(compared.headless);
-            expect(compared.rendered.rows).to.deep.equal(
+            expect(compared.heterogeneous.rendered).to.deep.equal(compared.heterogeneous.headless);
+            expect(compared.heterogeneous.rendered.rows).to.deep.equal(
                 GRID_OBSERVATION_PARITY.expectedVisibleValues.map(value => [{ value }]),
+            );
+            expect(compared.ambiguous.rendered).to.deep.equal(compared.ambiguous.headless);
+            expect(compared.ambiguous.rendered.rows).to.deep.equal(
+                GRID_OBSERVATION_PARITY.expectedAmbiguousValues.map(value => [{ value }]),
             );
         } finally {
             await rm(evidencePath, { force: true });
@@ -199,6 +204,41 @@ describe("default saved Grid and Calendar observation producers", function() {
             name: "Replacement",
             query: "SELECT observed_on AS value FROM choices",
         });
+        resume.resolve();
+        expect(await pending).to.deep.equal({ status: "stale", reason: "incarnation_lost" });
+        expect(await handle.readSnapshot({ observedAtUtcMs: 3 })).to.deep.equal({
+            status: "stale",
+            reason: "incarnation_lost",
+        });
+        await handle.close();
+    });
+
+    it("refuses a held Grid capture when a live source-room incarnation is replaced", async () => {
+        const reached = deferred();
+        const resume = deferred();
+        let openings = 0;
+        const service = new ViewObservationService(server.hocuspocus, async () => true, {}, {
+            beforeSourceOpen: async () => {
+                if (++openings === 3) {
+                    reached.resolve();
+                    await resume.promise;
+                }
+            },
+        });
+        const handle = await service.openViewObservation({
+            uid: UID,
+            target: { projectId: PROJECT, kind: "grid", objectId: "heterogeneous" },
+            context: gridContext,
+        });
+        const source = (held[1] as any).document as Y.Doc;
+        source.getMap<Y.Map<unknown>>("data").get("same")!.set("observed_on", "2026-11-25");
+        const pending = handle.readSnapshot({ observedAtUtcMs: 2 });
+        await reached.promise;
+        const room = `projects/${PROJECT}/tables/choices`;
+        releaseWithoutStore(held[1] as any);
+        server.hocuspocus.documents.delete(room);
+        const replacement = await server.hocuspocus.openDirectConnection(room, { context: { uid: UID } });
+        held[1] = replacement;
         resume.resolve();
         expect(await pending).to.deep.equal({ status: "stale", reason: "incarnation_lost" });
         expect(await handle.readSnapshot({ observedAtUtcMs: 3 })).to.deep.equal({

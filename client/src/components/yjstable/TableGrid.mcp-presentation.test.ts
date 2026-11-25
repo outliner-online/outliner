@@ -93,37 +93,7 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
         setGridComponentField(grid, "source_kind", "hidden", true);
         setGridComponentField(grid, "source_id", "hidden", true);
         setGridComponentField(grid, "hidden", "hidden", true);
-        const view = render(ProjectGridView, { props: { grid, projectDoc } });
-        try {
-            await waitFor(() => expect(view.container.querySelectorAll("tbody tr")).toHaveLength(2), {
-                timeout: 30000,
-            });
-            // PostgreSQL promotes DATE and TIMESTAMP branches to one result
-            // OID. The first occurrence uses its accepted DATE field; the
-            // second is a computed output with no physical candidate and uses
-            // the typed fallback. Tie both controls and projection cells to
-            // their occurrences so a source-blind fallback cannot pass.
-            const dateCell = view.container.querySelector("tr[data-record-id='choices:same'] td[data-col='value']")!;
-            const textCell = view.container.querySelector("tr[data-record-id='notes:same'] td[data-col='value']")!;
-            await waitFor(() => expect(dateCell.querySelector("input[type='date']")).toHaveValue("2026-11-21"));
-            expect(textCell.querySelector("button")).toHaveTextContent("2026-11-22T12:34:56.000Z");
-            const displayedDate = (dateCell.querySelector("input[type='date']") as HTMLInputElement).value;
-            const displayedTimestamp = textCell.querySelector("button")!.textContent!;
-            expect(displayedTimestamp).not.toBe(displayedDate);
-            await waitFor(() => expect(getGridProjection(grid.gridId).status).toBe("ready"));
-            const initial = getGridProjection(grid.gridId);
-            expect(initial).toMatchObject({
-                status: "ready",
-                projection: {
-                    columns: [{ label: "value" }],
-                    rows: [[{ value: displayedDate }], [{ value: displayedTimestamp }]],
-                },
-            });
-
-            // Cross the real server boundary in the same oracle: seed actual
-            // Hocuspocus rooms from the same fixture, execute through PGlite,
-            // and compare the retained headless snapshot with the projection
-            // whose cells were just observed in the mounted TableGrid DOM.
+        const captureHeadless = async () => {
             const serverDirectory = path.resolve(process.cwd(), "../server");
             const acceptedInputs = {
                 projectUpdate: Buffer.from(Y.encodeStateAsUpdate(projectDoc)).toString("base64"),
@@ -156,14 +126,68 @@ describe("MCP-saved Grid presentation in the production runtime (#5436)", () => 
             });
             const serialized = stdout.split("\n").find(line => line.startsWith("GRID_PARITY:"));
             expect(serialized, stdout).toBeDefined();
-            const headlessProjection = JSON.parse(serialized!.slice("GRID_PARITY:".length));
+            return JSON.parse(serialized!.slice("GRID_PARITY:".length));
+        };
+        const view = render(ProjectGridView, { props: { grid, projectDoc } });
+        try {
+            await waitFor(() => expect(view.container.querySelectorAll("tbody tr")).toHaveLength(2), {
+                timeout: 30000,
+            });
+            // PostgreSQL promotes DATE and TIMESTAMP branches to one result
+            // OID. The first occurrence uses its accepted DATE field; the
+            // second is a computed output with no physical candidate and uses
+            // the typed fallback. Tie both controls and projection cells to
+            // their occurrences so a source-blind fallback cannot pass.
+            const dateCell = view.container.querySelector("tr[data-record-id='choices:same'] td[data-col='value']")!;
+            const textCell = view.container.querySelector("tr[data-record-id='notes:same'] td[data-col='value']")!;
+            await waitFor(() => expect(dateCell.querySelector("input[type='date']")).toHaveValue("2026-11-21"));
+            expect(textCell.querySelector("button")).toHaveTextContent("2026-11-22T12:34:56.000Z");
+            const displayedDate = (dateCell.querySelector("input[type='date']") as HTMLInputElement).value;
+            const displayedTimestamp = textCell.querySelector("button")!.textContent!;
+            expect(displayedTimestamp).not.toBe(displayedDate);
+            await waitFor(() => expect(getGridProjection(grid.gridId).status).toBe("ready"));
+            const initial = getGridProjection(grid.gridId);
+            expect(initial).toMatchObject({
+                status: "ready",
+                projection: {
+                    columns: [{ label: "value" }],
+                    rows: [[{ value: displayedDate }], [{ value: displayedTimestamp }]],
+                },
+            });
+
+            // Cross the real server boundary in the same oracle: seed actual
+            // Hocuspocus rooms from the same fixture, execute through PGlite,
+            // and compare the retained headless snapshot with the projection
+            // whose cells were just observed in the mounted TableGrid DOM.
+            const headlessProjection = await captureHeadless();
             expect(headlessProjection).toEqual(initial.projection);
+
+            // Remove the routing columns so both physical branches become a
+            // legitimately ambiguous mapping. TableGrid and the observer must
+            // independently select the native result-OID fallback from these
+            // same accepted Yjs inputs.
+            setGridQuery(grid, "SELECT observed_on AS value FROM choices UNION ALL "
+                + "SELECT observed_at AS value FROM notes ORDER BY value");
+            await waitFor(() => {
+                const ambiguous = getGridProjection(grid.gridId);
+                expect(ambiguous.status).toBe("ready");
+                if (ambiguous.status !== "ready") return;
+                expect(ambiguous.projection.rows).toEqual(
+                    GRID_OBSERVATION_PARITY.expectedAmbiguousValues.map(value => [{ value }]),
+                );
+            });
+            const ambiguous = getGridProjection(grid.gridId);
+            if (ambiguous.status !== "ready") throw new Error("Expected accepted ambiguous projection");
+            const ambiguousHeadless = await captureHeadless();
+            expect(ambiguousHeadless).toEqual(ambiguous.projection);
             if (process.env.GRID_PARITY_EVIDENCE_PATH) {
                 writeFileSync(process.env.GRID_PARITY_EVIDENCE_PATH, JSON.stringify({
-                    rendered: initial.projection,
-                    headless: headlessProjection,
+                    heterogeneous: { rendered: initial.projection, headless: headlessProjection },
+                    ambiguous: { rendered: ambiguous.projection, headless: ambiguousHeadless },
                 }));
             }
+            setGridQuery(grid, `${branchA} UNION ALL ${branchB} ORDER BY source_kind`);
+            await waitFor(() => expect(getGridProjection(grid.gridId)).toEqual(initial));
 
             // Retain renderer inputs outside equality: an explicit text
             // override changes only the date's displayed normalization.
