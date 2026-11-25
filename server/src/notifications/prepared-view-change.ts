@@ -28,9 +28,15 @@ export interface ViewChangePayload {
     readonly summary: ViewChangeSummary;
 }
 
+export type ViewChangeCurrentness =
+    | { readonly status: "current"; }
+    | { readonly status: "cancelled" | "deferred"; readonly reason: string; };
+
 export interface CurrentViewChange extends ViewChangePayload {
     /** Check synchronously after all awaits, immediately before the first write/end. */
     isCurrent(): boolean;
+    /** Producer-owned refusal distinguishes terminal send-lease expiry from invalidated content. */
+    checkCurrent(): ViewChangeCurrentness;
 }
 
 export type ViewChangeRevalidation =

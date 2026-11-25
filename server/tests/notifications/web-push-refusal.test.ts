@@ -12,17 +12,55 @@ describe("Web Push terminal local refusals", function() {
     let f: WebPushFixture;
     afterEach(async () => f?.close());
 
-    it("settles producer lease expiry without a first write or repeat of unchanged B", async () => {
+    for (const phase of ["before", "after"] as const) {
+        it(`settles lease expiry ${phase} revalidation without a write or repeat of unchanged B`, async () => {
+            const clock = new RuntimeClock();
+            const reached = deferred(), resume = deferred();
+            let held = false;
+            const hold = async (_input: unknown, index: number) => {
+                if (index !== 0) return;
+                held = true;
+                reached.resolve();
+                await resume.promise;
+            };
+            f = await webPushFixture({
+                runtimeOptions: { clock, reconcileMs: 60_000, attemptTimeoutMs: 1000 },
+                transportControls: phase === "before" ? { beforeAuthorize: hold } : { afterAuthorize: hold },
+            });
+            const receiver = await f.enroll();
+            const { source } = await f.seed();
+            f.runtime.start();
+            await f.update([mobileRule()]);
+            await clock.until(() => f.runtime.status(UID).some(status => status.state === "watching"));
+            edit(source, "B");
+            await clock.until(() => held);
+            await reached.promise;
+            await clock.advance(1001);
+            const reads = f.reads.length;
+            resume.resolve();
+            await waitFor(() => f.settlements.length === 1);
+            expect(f.settlements).to.deep.equal([{ initiated: false, outcome: "expired" }]);
+            expect(f.captured.requests).to.have.length(0);
+            await clock.until(() => f.reads.length > reads && f.runtime.diagnostics().evaluating === 0);
+            expect(f.captured.calls).to.have.length(1);
+            expect(f.settlements).to.have.length(1);
+            edit(source, "C");
+            await clock.until(() => f.settlements.length === 2);
+            expect(f.captured.requests).to.have.length(1);
+            expect(decryptPush(f.captured.requests[0], receiver).payload.body).to.contain("C");
+        });
+    }
+
+    it("does not treat a changed source as terminal expiry when both invalidate the final write", async () => {
         const clock = new RuntimeClock();
-        const reached = deferred(), resume = deferred();
+        const resume = deferred();
         let held = false;
         f = await webPushFixture({
             runtimeOptions: { clock, reconcileMs: 60_000, attemptTimeoutMs: 1000 },
             transportControls: {
-                beforeAuthorize: async (_input, index) => {
+                afterAuthorize: async (_input, index) => {
                     if (index !== 0) return;
                     held = true;
-                    reached.resolve();
                     await resume.promise;
                 },
             },
@@ -34,17 +72,12 @@ describe("Web Push terminal local refusals", function() {
         await clock.until(() => f.runtime.status(UID).some(status => status.state === "watching"));
         edit(source, "B");
         await clock.until(() => held);
-        await reached.promise;
         await clock.advance(1001);
-        const reads = f.reads.length;
+        edit(source, "C");
         resume.resolve();
         await waitFor(() => f.settlements.length === 1);
-        expect(f.settlements).to.deep.equal([{ initiated: false, outcome: "expired" }]);
+        expect(f.settlements).to.deep.equal([{ initiated: false, outcome: "deferred" }]);
         expect(f.captured.requests).to.have.length(0);
-        await clock.until(() => f.reads.length > reads && f.runtime.diagnostics().evaluating === 0);
-        expect(f.captured.calls).to.have.length(1);
-        expect(f.settlements).to.have.length(1);
-        edit(source, "C");
         await clock.until(() => f.settlements.length === 2);
         expect(f.captured.requests).to.have.length(1);
         expect(decryptPush(f.captured.requests[0], receiver).payload.body).to.contain("C");

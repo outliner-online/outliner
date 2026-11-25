@@ -172,8 +172,9 @@ export class WebPushDeliveryAdapter {
                                 refusal = "cancelled";
                                 return false;
                             }
-                            if (!checked.candidate.isCurrent()) {
-                                refusal = "cancelled";
+                            const currentness = checked.candidate.checkCurrent();
+                            if (currentness.status !== "current") {
+                                refusal = currentness.reason === "expired" ? "expired" : currentness.status;
                                 return false;
                             }
                             return this.currentDevice(uid, device, config);

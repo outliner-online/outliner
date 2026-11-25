@@ -7,6 +7,7 @@ import {
     type PreparedViewChange,
     summarizeViewChange,
     type ViewChangeAttemptOutcome,
+    type ViewChangeCurrentness,
     type ViewChangePayload,
     type ViewChangeRevalidation,
 } from "./prepared-view-change.js";
@@ -702,7 +703,8 @@ export class NotificationObservationRuntime {
                 if (!this.authorized(attempt)) return this.refusal(attempt);
                 const candidate: CurrentViewChange = Object.freeze({
                     ...attempt.payload,
-                    isCurrent: () => this.current(attempt) && this.clock.now() < attempt.expiresAt,
+                    isCurrent: () => this.checkCurrent(attempt).status === "current",
+                    checkCurrent: () => this.checkCurrent(attempt),
                 });
                 if (!this.current(attempt)) {
                     return this.invalidate(attempt, "deferred", "source_stale");
@@ -782,6 +784,17 @@ export class NotificationObservationRuntime {
 
     private current(attempt: Attempt): boolean {
         return this.authorized(attempt) && Boolean(attempt.admission.handle?.isCurrent(attempt.token));
+    }
+
+    private checkCurrent(attempt: Attempt): ViewChangeCurrentness {
+        if (!this.authorized(attempt)) return this.refusal(attempt);
+        if (!attempt.admission.handle?.isCurrent(attempt.token)) {
+            return { status: "deferred", reason: "source_stale" };
+        }
+        // Only a still-current semantic opportunity expires terminally. The
+        // adapter must not turn lease expiry into a retry of unchanged content.
+        if (this.clock.now() >= attempt.expiresAt) return { status: "cancelled", reason: "expired" };
+        return { status: "current" };
     }
 
     private async nonReady(entry: Admission, result: Exclude<ReadSnapshotResult, { status: "ready"; }>): Promise<void> {

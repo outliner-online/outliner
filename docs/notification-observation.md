@@ -47,16 +47,20 @@ The prior and proposed next projections remain internal runtime state.
 Before initiating a send, call `revalidate()` from the HTTPS transport's
 `beforeSend` preparation boundary. This freshly checks project access and source
 currency, together with the current rule/channel generation. A `current` result
-authorizes the same captured payload and event ID. Pass its synchronous
-`isCurrent()` guard into the transport and combine it with the destination's own
-lease guard. Check after all asynchronous work, immediately before the first HTTP
-body `write`/`end`, without an intervening await. A local guard does not claim
+authorizes the same captured payload and event ID. In the transport's final guard,
+require `checkCurrent().status === "current"` and the destination's own lease
+guard to pass. This synchronous producer-owned result distinguishes terminal lease
+expiry from revoked authority or stale content. The Boolean `isCurrent()` helper
+remains available when the caller does not need the refusal reason. Check after
+all asynchronous work, immediately before the first HTTP body `write`/`end`,
+without an intervening await. A local guard does not claim
 atomic serialization with an external ACL change.
 By default, thirty seconds after preparation the candidate's currentness guard
 refuses new send initiation. Expiry does not fabricate an initiation outcome or
 settle the baseline; the adapter must still report its actual aggregate outcome.
-When revalidation returns `cancelled` with reason `expired`, report a terminal
-`expired` outcome, rather than the revocation outcome `cancelled`. If the captured
+When revalidation or the final synchronous guard returns `cancelled` with reason
+`expired`, report a terminal `expired` outcome, rather than the revocation outcome
+`cancelled`. If the captured
 semantic change is still current and no destination wrote bytes, settlement skips
 that opportunity once; the send deadline alone must not cause the same change to
 be offered repeatedly.

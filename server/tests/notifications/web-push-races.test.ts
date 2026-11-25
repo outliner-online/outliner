@@ -75,9 +75,10 @@ describe("Web Push exact-candidate pre-write races", function() {
             else if (change === "vapid") {
                 const key = createECDH("prime256v1");
                 const publicKey = key.generateKeys();
+                const scalar = key.getPrivateKey();
                 Object.assign(f.config, {
                     publicKey: publicKey.toString("base64url"),
-                    privateKey: key.getPrivateKey().toString("base64url"),
+                    privateKey: Buffer.concat([Buffer.alloc(32 - scalar.length), scalar]).toString("base64url"),
                     vapidKeyId: createHash("sha256").update(publicKey).digest("base64url"),
                 });
             } else await f.enroll(receiver.deviceId);

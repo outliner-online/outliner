@@ -17,9 +17,12 @@ export function mobileRule(input: NotificationRule = rule()): NotificationRule {
 function pushConfig(): PushConfig {
     const ecdh = createECDH("prime256v1");
     const publicKey = ecdh.generateKeys();
+    // ECDH omits leading zeroes; VAPID requires the fixed-width P-256 scalar.
+    const scalar = ecdh.getPrivateKey();
+    const privateKey = Buffer.concat([Buffer.alloc(32 - scalar.length), scalar]);
     return {
         publicKey: publicKey.toString("base64url"),
-        privateKey: ecdh.getPrivateKey().toString("base64url"),
+        privateKey: privateKey.toString("base64url"),
         vapidKeyId: createHash("sha256").update(publicKey).digest("base64url"),
         subject: "mailto:push-tests@example.test",
     };

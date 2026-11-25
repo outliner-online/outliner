@@ -1,5 +1,5 @@
 import { decodeCalendarObservationContext, encodeCalendarObservationContext } from "./calendarProjection.js";
-import { parseGridObservationContext } from "./gridProjection.js";
+import { parseGridObservationContext } from "./gridObservationContext.js";
 import { parseKanbanObservationContext } from "./kanbanProjection.js";
 import type { NotificationTarget } from "./notification-settings.js";
 

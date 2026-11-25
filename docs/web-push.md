@@ -84,6 +84,20 @@ context-free, and unrelated fallback links are refused. Navigation shows the
 current object, normal login, or its ordinary unavailable/access-denied state.
 No historical snapshot is restored.
 
+## Automated browser evidence
+
+The production-build regression uses the application's actual root worker,
+controlled browser push delivery, and real `showNotification` calls. It checks
+durable disarm across logout, account switches, delayed enrollment responses,
+and worker restart, along with exact saved-context navigation in an existing
+window. External API/provider traffic is isolated at the test boundary.
+
+Notification activation is synthetic in this harness. With no application
+window, Chromium requires a trusted platform interaction token to complete
+`openWindow`; the test verifies the real handler's canonical opening attempt and
+records that browser refusal. This does not establish successful native
+background-tap behavior. The physical-device procedure below covers that step.
+
 ## Bounded real-smartphone smoke procedure
 
 Use one explicitly authorized smartphone, one private test object, and one
