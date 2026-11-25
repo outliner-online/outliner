@@ -111,7 +111,6 @@ NODE
     echo OBSERVED_LOOKALIKE_LEGACY_ONLY
     ;;
   observed-unsafe-rejected)
-    warm_observed_control
     write_observed_layout
     echo 'Allow-Insecure: yes' >> /etc/apt/sources.list.d/ubuntu.sources
     status=0
