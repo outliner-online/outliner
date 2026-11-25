@@ -14,6 +14,7 @@ import YAML from "yaml";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const workflowPath = path.join(root, ".github/workflows/ci-test-e2e.yml");
 const unavailableControl = path.join(root, "scripts/ci/reject-unavailable-artifact.sh");
+const authenticatedDownload = path.join(root, "scripts/ci/download-run-artifact-by-id.sh");
 
 function artifactJob(): Record<string, any> {
     return YAML.parse(fs.readFileSync(workflowPath, "utf8")).jobs["artifact-roundtrip"];
@@ -29,14 +30,12 @@ function expectAuthenticatedIdentity(
     download: Record<string, any>,
     artifactId: string,
 ): void {
-    expect(download.uses).toBe("actions/download-artifact@v8");
-    expect(download.with).toMatchObject({
-        "artifact-ids": artifactId,
-        "github-token": "${{ github.token }}",
-        repository: "${{ github.repository }}",
-        "run-id": "${{ github.run_id }}",
+    expect(download.env).toEqual({
+        GH_TOKEN: "${{ github.token }}",
+        ARTIFACT_ID: artifactId,
     });
-    expect(download.with.name).toBeUndefined();
+    expect(download.run).toContain("scripts/ci/download-run-artifact-by-id.sh");
+    expect(download.run).toContain('"$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$ARTIFACT_ID"');
 }
 
 function expectUnavailableControl(control: Record<string, any>): void {
@@ -77,32 +76,78 @@ test("regression rejects split lookup paths and substituted artifact identities"
     const positive = step(artifactJob(), "Download representative E2E evidence");
 
     const defaultInventory = structuredClone(positive);
-    delete defaultInventory.with["github-token"];
+    delete defaultInventory.env.GH_TOKEN;
     expect(() =>
         expectAuthenticatedIdentity(defaultInventory, "${{ steps.representative-upload.outputs.artifact-id }}")
     ).toThrow();
 
     const otherRun = structuredClone(positive);
-    otherRun.with["run-id"] = "1234";
+    otherRun.run = otherRun.run.replace("$GITHUB_RUN_ID", "1234");
     expect(() => expectAuthenticatedIdentity(otherRun, "${{ steps.representative-upload.outputs.artifact-id }}"))
         .toThrow();
 
     const otherRepository = structuredClone(positive);
-    otherRepository.with.repository = "example/other-repository";
+    otherRepository.run = otherRepository.run.replace("$GITHUB_REPOSITORY", "example/other-repository");
     expect(() => expectAuthenticatedIdentity(otherRepository, "${{ steps.representative-upload.outputs.artifact-id }}"))
         .toThrow();
 
     const substitutedIdentity = structuredClone(positive);
-    substitutedIdentity.with["artifact-ids"] = "${{ steps.wrong-upload.outputs.artifact-id }}";
+    substitutedIdentity.env.ARTIFACT_ID = "${{ steps.wrong-upload.outputs.artifact-id }}";
     expect(() =>
         expectAuthenticatedIdentity(substitutedIdentity, "${{ steps.representative-upload.outputs.artifact-id }}")
     ).toThrow();
 
     const nameOnly = structuredClone(positive);
-    delete nameOnly.with["artifact-ids"];
-    nameOnly.with.name = "e2e-artifacts";
+    delete nameOnly.env.ARTIFACT_ID;
+    nameOnly.env.ARTIFACT_NAME = "e2e-artifacts";
     expect(() => expectAuthenticatedIdentity(nameOnly, "${{ steps.representative-upload.outputs.artifact-id }}"))
         .toThrow();
+});
+
+test("authenticated download retries the exact run artifact until its archive is readable", () => {
+    const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "artifact-download-readiness-"));
+    const contents = path.join(fixtureRoot, "contents");
+    const archive = path.join(fixtureRoot, "artifact.zip");
+    fs.mkdirSync(contents);
+    fs.writeFileSync(path.join(contents, "execution.json"), '{"status":"passed"}\n');
+    expect(spawnSync("zip", ["-q", archive, "execution.json"], { cwd: contents }).status).toBe(0);
+    fs.writeFileSync(
+        path.join(fixtureRoot, "gh"),
+        `#!/bin/bash
+set -euo pipefail
+test "$1" = api
+if [[ "$2" == repos/outliner-online/outliner/actions/runs/999/artifacts* ]]; then
+  printf '111\\n'
+  exit 0
+fi
+test "$2" = repos/outliner-online/outliner/actions/artifacts/111/zip
+count=$(($(cat "$FIXTURE_STATE" 2>/dev/null || echo 0) + 1))
+printf '%s' "$count" > "$FIXTURE_STATE"
+if [ "$count" -eq 1 ]; then
+  exit 1
+fi
+cat "$FIXTURE_ARCHIVE"
+`,
+        { mode: 0o755 },
+    );
+
+    const destination = path.join(fixtureRoot, "downloaded");
+    try {
+        const result = spawnSync(authenticatedDownload, ["outliner-online/outliner", "999", "111", destination], {
+            encoding: "utf8",
+            env: {
+                ...process.env,
+                FIXTURE_ARCHIVE: archive,
+                FIXTURE_STATE: path.join(fixtureRoot, "state"),
+                GH_TOKEN: "short-lived-test-token",
+                PATH: `${fixtureRoot}:${process.env.PATH}`,
+            },
+        });
+        expect(result.status, result.stderr).toBe(0);
+        expect(fs.readFileSync(path.join(destination, "execution.json"), "utf8")).toBe('{"status":"passed"}\n');
+    } finally {
+        fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    }
 });
 
 test("unavailable control requires both download failure and authenticated absence evidence", () => {

@@ -316,10 +316,11 @@ test("artifact and Pages deployment producers retain their consumer-facing contr
             .replace("${{ matrix.project }}", "artifact-roundtrip"),
     );
     expect(roundtripUpload.id).toBe("representative-upload");
-    expect(roundtripDownload.with["artifact-ids"]).toBe(
+    expect(roundtripDownload.env.ARTIFACT_ID).toBe(
         "${{ steps.representative-upload.outputs.artifact-id }}",
     );
-    expect(roundtripDownload.with.name).toBeUndefined();
+    expect(roundtripDownload.env.GH_TOKEN).toBe("${{ github.token }}");
+    expect(roundtripDownload.run).toContain("download-run-artifact-by-id.sh");
     expect(wrongUpload.id).toBe("wrong-upload");
     expectMultiFileArtifactArchive(wrongUpload);
     expect(findStep(e2e, "artifact-roundtrip", "Verify downloaded E2E evidence").run).toContain(
