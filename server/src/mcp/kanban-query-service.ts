@@ -35,7 +35,14 @@ import {
     SYSTEM_SCHEMA,
 } from "./relation-service.js";
 
-const LIMITS = { queryBytes: 16 * 1024, rows: 10_000, columns: 100, lanes: 1_000, jsonBytes: 8 * 1024 * 1024 } as const;
+const LIMITS = {
+    queryBytes: 16 * 1024,
+    rows: 10_000,
+    columns: 100,
+    lanes: 1_000,
+    jsonBytes: 8 * 1024 * 1024,
+    sourceRooms: 32,
+} as const;
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 // Size the JSON wire representation without changing rows used for provenance.
 const sqlJsonReplacer = (_key: string, value: unknown) => typeof value === "bigint" ? value.toString() : value;
@@ -62,13 +69,19 @@ export interface KanbanObservedLane {
 
 export class KanbanProjectionObservation {
     private released = false;
+    private result: {
+        settings: KanbanSettings | undefined;
+        lanes: readonly KanbanObservedLane[];
+        columns: readonly { name: string; type: string; enum?: unknown; }[];
+        routes: readonly KanbanFieldRoute[];
+    };
     constructor(
         public readonly status: KanbanObservationStatus,
         public readonly current: boolean,
-        public readonly settings: KanbanSettings | undefined,
-        public readonly lanes: readonly KanbanObservedLane[],
-        public readonly columns: readonly { name: string; type: string; enum?: unknown; }[],
-        public readonly routes: readonly KanbanFieldRoute[],
+        settings: KanbanSettings | undefined,
+        lanes: readonly KanbanObservedLane[],
+        columns: readonly { name: string; type: string; enum?: unknown; }[],
+        routes: readonly KanbanFieldRoute[],
         public readonly reason: string | undefined,
         public readonly limit: keyof typeof LIMITS | undefined,
         /** Exact saved-definition object captured by this observation. */
@@ -77,7 +90,25 @@ export class KanbanProjectionObservation {
         readonly handles: { project: DirectConnection; sources: ReadonlyMap<string, DirectConnection>; },
         private readonly currentCheck: () => boolean,
         private readonly releaseHandles: () => Promise<void>,
-    ) {}
+    ) {
+        this.result = { settings, lanes, columns, routes };
+    }
+    get settings() {
+        return this.result.settings;
+    }
+    get lanes() {
+        return this.result.lanes;
+    }
+    get columns() {
+        return this.result.columns;
+    }
+    get routes() {
+        return this.result.routes;
+    }
+    /** A notification consumer needs only its bounded projection and source lease after capture. */
+    releaseResult(): void {
+        this.result = { settings: undefined, lanes: [], columns: [], routes: [] };
+    }
     isCurrent(): boolean {
         return !this.released && this.current && this.currentCheck();
     }
@@ -112,13 +143,22 @@ export class OutlinerKanbanQueryService {
         private readonly hocuspocus: Pick<Hocuspocus, "openDirectConnection"> & Partial<Pick<Hocuspocus, "documents">>,
         private readonly canAccess: (uid: string, projectId: string) => Promise<boolean>,
         private readonly options: {
+            maxSourceRooms?: number;
             /** Keep non-ready captures alive until their observation owner releases them. */
             retainNonReady?: boolean;
             beforeCertification?: () => Promise<void>;
             beforeFinalCertification?: () => Promise<void>;
             beforeSourceOpen?: (tableId: string, index: number) => Promise<void>;
         } = {},
-    ) {}
+    ) {
+        const maxSourceRooms = options.maxSourceRooms;
+        if (
+            maxSourceRooms !== undefined
+            && (!Number.isInteger(maxSourceRooms) || maxSourceRooms < 0 || maxSourceRooms > 256)
+        ) {
+            throw new RangeError("observation source room limit must be 0..256");
+        }
+    }
 
     async openObservation(uid: string, projectId: string, kanbanId: string): Promise<KanbanProjectionObservation> {
         if (!/^[A-Za-z0-9_-]{1,200}$/.test(projectId) || !/^[A-Za-z0-9_-]{1,200}$/.test(kanbanId)) {
@@ -190,12 +230,18 @@ export class OutlinerKanbanQueryService {
             }
 
             const identifiers = parseSqlIdentifiers(query);
-            const tables = [...doc.getMap<Y.Map<unknown>>("yjsTables").entries()].flatMap(([id, value]) => {
+            const tables: { id: string; sqlName: string; }[] = [];
+            for (const [id, value] of doc.getMap<Y.Map<unknown>>("yjsTables").entries()) {
                 const sqlName = String(value.get("sqlName") ?? "");
-                return IDENT.test(sqlName) && (identifiers.has(sqlName) || identifiers.has(sqlName.toLowerCase()))
-                    ? [{ id, sqlName }]
-                    : [];
-            });
+                if (!IDENT.test(sqlName) || (!identifiers.has(sqlName) && !identifiers.has(sqlName.toLowerCase()))) {
+                    continue;
+                }
+                if (tables.length === this.options.maxSourceRooms) {
+                    return await finish(uid, projectId, project, sources, doc, entry, settings, "unavailable",
+                        "resource_limit", "sourceRooms");
+                }
+                tables.push({ id, sqlName });
+            }
             // Bind the detached settings and dependency selection to the exact
             // Project state which produced them, before opening any source.
             // Never refresh this baseline after an asynchronous boundary.
@@ -380,7 +426,11 @@ export class OutlinerKanbanQueryService {
                 }
                 await this.options.beforeCertification?.();
                 await this.authorize(uid, projectId);
-                const currentCheck = () => this.inputsCurrent(host, projectId, doc, entry, inputs, projectRevision);
+                // Currency retains exact room/version evidence, not copied
+                // source record arrays or schema strings from materialization.
+                const currentInputs = inputs.map(({ id, doc, revision }) => ({ id, doc, revision }));
+                const currentCheck = () =>
+                    this.inputsCurrent(host, projectId, doc, entry, currentInputs, projectRevision);
                 if (!currentCheck()) {
                     return await finish(
                         uid,
@@ -521,7 +571,7 @@ export class OutlinerKanbanQueryService {
         projectId: string,
         doc: Y.Doc,
         entry: KanbanEntry,
-        inputs: TableInput[],
+        inputs: readonly Pick<TableInput, "id" | "doc" | "revision">[],
         projectRevision: string,
     ) {
         return getKanbanRegistry(doc as never).get(

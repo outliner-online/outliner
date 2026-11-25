@@ -202,6 +202,13 @@ const kanbanCounts = z.strictObject({
  */
 export const toolOutputSchemas = {
     get_notification_settings: notificationSettings,
+    get_notification_status: z.array(z.strictObject({
+        ruleId: z.string(),
+        channel: z.enum(["mcp", "mobile"]),
+        state: z.enum(["warming", "watching", "blocked", "disabled"]),
+        reason: z.enum(["capacity_deferred", "evaluation_error", "incomplete", "source_stale", "forbidden", "not_found",
+            "attempt_pending", "resource_limit", "unavailable"]).optional(),
+    })).max(256),
     update_notification_settings: z.strictObject({
         applied: z.boolean(),
         priorRevision: z.number().int().nonnegative(),

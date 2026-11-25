@@ -10,6 +10,17 @@ export class NotificationSettingsStoreError extends Error {
         super(message);
     }
 }
+export interface NotificationRuleCursor {
+    readonly uid: string;
+    readonly ruleId: string;
+}
+
+export interface DiscoveredNotificationRule {
+    readonly uid: string;
+    readonly revision: number;
+    readonly rule: NotificationRule;
+}
+
 export class NotificationSettingsStore {
     private initializedDb?: Database.Database;
     constructor(private readonly database: () => Database.Database | undefined) {}
@@ -70,6 +81,50 @@ export class NotificationSettingsStore {
     enabled(uid: string): NotificationRule[] {
         return this.get(uid).rules.filter(rule => rule.enabled);
     }
+    /** Bounded keyset discovery; the caller owns one process-local reconciliation cursor. */
+    listEnabledPage(input: { after?: NotificationRuleCursor; limit: number; }): {
+        entries: DiscoveredNotificationRule[];
+        cursor?: NotificationRuleCursor;
+    } {
+        if (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 128) {
+            throw new RangeError("notification discovery limit must be 1..128");
+        }
+        if (input.after && (typeof input.after.uid !== "string" || typeof input.after.ruleId !== "string")) {
+            throw new TypeError("notification discovery cursor is invalid");
+        }
+        const db = this.requireDb();
+        try {
+            const cursorClause = input.after ? "AND (rules.uid, rules.rule_id) > (?, ?)" : "";
+            const parameters = input.after ? [input.after.uid, input.after.ruleId, input.limit + 1] : [input.limit + 1];
+            const rows = db.prepare(`
+                SELECT rules.uid, rules.rule_id, rules.rule_json, heads.revision
+                FROM notification_rules AS rules
+                JOIN notification_settings_heads AS heads ON heads.uid = rules.uid
+                WHERE rules.enabled = 1
+                    ${cursorClause}
+                ORDER BY rules.uid, rules.rule_id
+                LIMIT ?
+            `).all(...parameters) as { uid: string; rule_id: string; rule_json: string; revision: number; }[];
+            const page = rows.slice(0, input.limit);
+            const entries = page.map(row => {
+                if (!Number.isSafeInteger(row.revision) || row.revision < 0) {
+                    throw new Error("invalid persisted revision");
+                }
+                return {
+                    uid: row.uid,
+                    revision: row.revision,
+                    rule: normalizeNotificationRule(JSON.parse(row.rule_json)),
+                };
+            });
+            const last = page[page.length - 1];
+            return {
+                entries,
+                ...(rows.length > input.limit && last ? { cursor: { uid: last.uid, ruleId: last.rule_id } } : {}),
+            };
+        } catch (error) {
+            throw unavailable(error);
+        }
+    }
     private requireDb(): Database.Database {
         const db = this.database();
         if (!db?.open) {
@@ -81,7 +136,8 @@ export class NotificationSettingsStore {
                     `CREATE TABLE IF NOT EXISTS notification_settings_heads(uid TEXT PRIMARY KEY, revision INTEGER NOT NULL);
               CREATE TABLE IF NOT EXISTS notification_rules(uid TEXT NOT NULL, rule_id TEXT NOT NULL, project_id TEXT NOT NULL,
               enabled INTEGER NOT NULL, rule_json TEXT NOT NULL, PRIMARY KEY(uid, rule_id));
-              CREATE INDEX IF NOT EXISTS notification_rules_project ON notification_rules(project_id);`,
+              CREATE INDEX IF NOT EXISTS notification_rules_project ON notification_rules(project_id);
+              CREATE INDEX IF NOT EXISTS notification_rules_enabled ON notification_rules(enabled, uid, rule_id);`,
                 );
             } catch (error) {
                 throw unavailable(error);

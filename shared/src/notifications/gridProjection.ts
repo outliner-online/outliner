@@ -101,7 +101,7 @@ export interface GridProjectionInput {
     readonly componentTypes: Readonly<Record<string, string | undefined>>;
     readonly resultColumns: readonly { readonly name: string; readonly typeId?: number; }[];
     readonly physicalColumns: readonly GridProjectionPhysicalColumn[];
-    readonly metadataStatus: "resolved" | "relation-free" | "partial" | "unsupported" | "unavailable";
+    readonly metadataStatus: "resolved" | "relation-free" | "result-only" | "partial" | "unsupported" | "unavailable";
 }
 
 export function isGridCellType(value: unknown): value is GridCellType {
@@ -188,8 +188,20 @@ export function projectGridTable(input: GridProjectionInput): GridProjectionResu
     if (!input.context.locale || !input.context.timeZone) {
         return { status: "unavailable", reason: "Grid observation locale and time zone are required" };
     }
-    if (input.metadataStatus !== "resolved" && input.metadataStatus !== "relation-free") {
+    if (
+        input.metadataStatus !== "resolved" && input.metadataStatus !== "relation-free"
+        && input.metadataStatus !== "result-only"
+    ) {
         return { status: "unavailable", reason: "Grid result or schema metadata is incomplete or stale" };
+    }
+    // A completed aggregate/join can have fully proven read dependencies and
+    // native result types without writable row lineage. Its displayed cells
+    // use the same result-OID fallback as TableGrid, never guessed fields.
+    if (
+        input.metadataStatus === "result-only"
+        && (input.physicalColumns.length > 0 || input.rowTargets.some(target => target.source))
+    ) {
+        return { status: "unavailable", reason: "Result-only Grid evidence contains an unproven source" };
     }
     if (input.rowTargets.length !== input.rows.length || input.rowTargets.some(target => !target.logicalRowId)) {
         return { status: "unavailable", reason: "Grid row-target evidence is incomplete" };

@@ -404,6 +404,9 @@ export function createMcpRouter(
             };
             tool("get_notification_settings", "Read the authenticated owner's notification settings.", {},
                 () => settingsCall(() => notificationSettings.get(uid)), { strict: true });
+            tool("get_notification_status",
+                "Read the authenticated owner's transient view-observation status; this is not delivery evidence.", {},
+                () => settingsCall(() => notificationSettings.getObservationStatus(uid)), { strict: true });
             tool("update_notification_settings", "Atomically change the authenticated owner's notification settings.", {
                 expectedRevision: z.number().int().nonnegative(),
                 upsert: z.array(z.unknown()),

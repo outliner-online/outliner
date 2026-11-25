@@ -1,0 +1,27 @@
+id: FTR-bc2e0a85
+title: Transient observation of displayed object changes
+title-ja: オブジェクトの表示結果の変化を一時的に監視
+status: implemented
+description: Observe private Grid, Calendar, and Kanban notification rules without an open browser, with silent startup baselines and bounded process-local delivery opportunities.
+tests:
+- server/tests/notifications/prepared-view-change.test.ts
+- server/tests/notifications/observation-runtime.production.test.ts
+- server/tests/notifications/observation-runtime.browser.test.ts
+- server/tests/notifications/observation-runtime.races.test.ts
+- server/tests/notifications/observation-runtime.authority.test.ts
+- server/tests/notifications/observation-runtime.recovery.test.ts
+- server/tests/notifications/observation-runtime.capacity.test.ts
+- server/tests/notifications/observation-runtime.capacity-dispatch.test.ts
+- server/tests/notifications/observation-runtime.concurrent.test.ts
+- server/tests/notifications/observation-runtime.incarnation.test.ts
+- server/tests/notifications/observation-runtime.settlement.test.ts
+- server/tests/notifications/observation-runtime.expiry.test.ts
+- server/tests/notifications/observation-runtime.scheduling.test.ts
+- server/tests/notifications/observation-runtime.pending-scheduling.test.ts
+- server/tests/notifications/observation-runtime.startup.test.ts
+- server/tests/notifications/observation-runtime.limits.test.ts
+- server/tests/notification-settings-discovery.test.ts
+- server/tests/view-observation-resource-bounds.production.test.ts
+- server/tests/view-observation-projection-bounds.production.test.ts
+- client/src/components/yjstable/TableGrid.aggregate-observation.test.ts
+- client/src/services/yjstable/gridProjection.test.ts

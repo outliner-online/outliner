@@ -23,8 +23,9 @@ import {
     isKanbanObservationContextV1,
 } from "../../../shared/src/notifications/kanbanProjection.js";
 import { getKanbanRegistry } from "../../../shared/src/services/kanbanDefinition.js";
-import { OutlinerKanbanQueryService } from "../mcp/kanban-query-service.js";
+import { type KanbanProjectionObservation, OutlinerKanbanQueryService } from "../mcp/kanban-query-service.js";
 import { McpReadError } from "../mcp/mcp-error.js";
+import { observationProjectionLimit, retainedJsonBytes } from "./observation-memory.js";
 import { savedViewOpener } from "./saved-view-producer.js";
 
 export type ViewKind = "grid" | "calendar" | "kanban";
@@ -75,7 +76,12 @@ export type ViewProducerOpener = (input: {
     readonly uid: string;
     readonly target: TargetRef;
     readonly context: ObservationContext;
+    readonly maxProjectionBytes?: number;
 }) => Promise<CapturedViewProducer>;
+
+export type ViewObservationOptions = NonNullable<ConstructorParameters<typeof OutlinerKanbanQueryService>[2]> & {
+    readonly maxProjectionBytes?: number;
+};
 
 const ID = /^[A-Za-z0-9_-]{1,200}$/;
 
@@ -89,8 +95,9 @@ export class ViewObservationService {
             & Partial<Pick<Hocuspocus, "documents">>,
         private readonly canAccess: (uid: string, projectId: string) => Promise<boolean>,
         openers: Partial<Record<ViewKind, ViewProducerOpener>> = {},
-        kanbanOptions: ConstructorParameters<typeof OutlinerKanbanQueryService>[2] = {},
+        kanbanOptions: ViewObservationOptions = {},
     ) {
+        observationProjectionLimit(kanbanOptions.maxProjectionBytes);
         this.openers = {
             grid: savedViewOpener(this.observationHost, canAccess, "grid", kanbanOptions),
             calendar: savedViewOpener(this.observationHost, canAccess, "calendar", kanbanOptions),
@@ -103,6 +110,7 @@ export class ViewObservationService {
         readonly uid: string;
         readonly target: TargetRef;
         readonly context: ObservationContext;
+        readonly maxProjectionBytes?: number;
     }): Promise<ViewObservationHandle> {
         validateRequest(input.target, input.context);
         if (!await this.canAccess(input.uid, input.target.projectId)) {
@@ -136,7 +144,16 @@ class RetainedViewObservation implements ViewObservationHandle {
     }
 
     private synchronizeListeners(): void {
-        for (const doc of this.producer.documents) {
+        const documents = this.producer.documents;
+        // Rebinding can drop sources. Their listeners must not accumulate
+        // across an otherwise long-lived observation admission.
+        for (let index = this.listeners.length - 1; index >= 0; index--) {
+            const retained = this.listeners[index]!;
+            if (documents.includes(retained.doc)) continue;
+            retained.doc.off("update", retained.listener);
+            this.listeners.splice(index, 1);
+        }
+        for (const doc of documents) {
             if (this.listeners.some(candidate => candidate.doc === doc)) continue;
             const listener = () => {
                 if (this.closed) return;
@@ -254,12 +271,18 @@ function deepLink(target: TargetRef, context: ObservationContext): string {
 function kanbanOpener(
     host: Pick<Hocuspocus, "openDirectConnection"> & Partial<Pick<Hocuspocus, "documents">>,
     canAccess: (uid: string, projectId: string) => Promise<boolean>,
-    options: ConstructorParameters<typeof OutlinerKanbanQueryService>[2],
+    options: ViewObservationOptions,
 ): ViewProducerOpener {
-    return async ({ uid, target, context }) => {
-        const service = new OutlinerKanbanQueryService(host, canAccess, { ...options, retainNonReady: true });
+    return async ({ uid, target, context, maxProjectionBytes }) => {
+        const projectionLimit = observationProjectionLimit(options.maxProjectionBytes, maxProjectionBytes);
+        const service = new OutlinerKanbanQueryService(host, canAccess, {
+            ...options,
+            maxSourceRooms: options?.maxSourceRooms ?? 32,
+            retainNonReady: true,
+        });
         let observed = await service.openObservation(uid, target.projectId, target.objectId);
         let documents = observationDocuments(observed);
+        let projection = captureKanbanProjection(observed, context as KanbanObservationContextV1, projectionLimit);
         let closed = false;
         let lifecycleGeneration = 0;
         let terminalReason: "incarnation_lost" | "not_found" | undefined;
@@ -356,20 +379,13 @@ function kanbanOpener(
                     }
                     observed = candidate;
                     documents = candidateDocuments;
+                    projection = captureKanbanProjection(observed, context as KanbanObservationContextV1,
+                        projectionLimit);
                     await retained.release();
                 }
-                if (observed.status !== "success" || !observed.settings) return observationNonReady(observed);
+                if (projection.status !== "ready") return projection;
                 if (!observed.isCurrent()) return { status: "stale", reason: "inputs_changed" };
-                const rows = observed.lanes.flatMap(lane => lane.cards.map(card => card.row));
-                const projected = createKanbanVisibleProjection({
-                    rows,
-                    settings: observed.settings,
-                    declaredGroupingChoices: observed.lanes.map(lane => lane.key),
-                    columns: observed.columns.map(column => column.name),
-                    readiness: { status: "ready", complete: true, current: true },
-                }, context as KanbanObservationContextV1);
-                if (projected.status !== "ready") return { status: "unavailable", reason: projected.reason };
-                return { status: "ready", projection: projected.content, revision: observationRevision(documents) };
+                return { ...projection, revision: observationRevision(documents) };
             },
             isCurrent(revision) {
                 return !closed && observed.isCurrent() && revision === observationRevision(documents);
@@ -382,6 +398,36 @@ function kanbanOpener(
             },
         };
     };
+}
+
+function captureKanbanProjection(
+    observed: KanbanProjectionObservation,
+    context: KanbanObservationContextV1,
+    maxProjectionBytes: number,
+):
+    | { readonly status: "ready"; readonly projection: VisibleProjection; }
+    | Exclude<ReadSnapshotResult, { status: "ready"; }>
+{
+    try {
+        if (observed.status !== "success" || !observed.settings) return observationNonReady(observed);
+        if (!observed.isCurrent()) return { status: "stale", reason: "inputs_changed" };
+        const projected = createKanbanVisibleProjection({
+            rows: observed.lanes.flatMap(lane => lane.cards.map(card => card.row)),
+            settings: observed.settings,
+            declaredGroupingChoices: observed.lanes.map(lane => lane.key),
+            columns: observed.columns.map(column => column.name),
+            readiness: { status: "ready", complete: true, current: true },
+        }, context);
+        if (projected.status !== "ready") return { status: "unavailable", reason: projected.reason };
+        if (retainedJsonBytes(projected.content) > maxProjectionBytes) {
+            return { status: "unavailable", reason: "resource_limit" };
+        }
+        return { status: "ready", projection: projected.content };
+    } finally {
+        // Raw diagnostic rows can include large hidden values. They are no
+        // longer needed once notification semantics have been captured.
+        observed.releaseResult();
+    }
 }
 
 function observationNonReady(

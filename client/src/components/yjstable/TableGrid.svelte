@@ -155,7 +155,7 @@ interface Props {
     /** Committed Grid identity/context used by the live notification projection source. */
     projectionTitle?: string;
     observationContext?: GridObservationContextV1;
-    projectionMetadataStatus?: "resolved" | "relation-free" | "partial" | "unsupported" | "unavailable";
+    projectionMetadataStatus?: "resolved" | "relation-free" | "result-only" | "partial" | "unsupported" | "unavailable";
     /** Current accepted metadata for projection publication; display metadata may intentionally be stale. */
     projectionPhysicalColumns?: readonly GridPhysicalColumnMetadata[];
     projectionResultColumns?: readonly GridResultColumnMetadata[];
@@ -507,7 +507,7 @@ const columnByName = $derived(new Map((schema?.columns ?? []).map((c) => [c.name
 function fieldFor(columnId: string, rowTarget?: GridCommandRowTarget): TableColumnSchema | undefined {
     if (!grid) return columnByName.get(columnId);
     const projectionTarget: GridProjectionRowTarget = {
-        logicalRowId: rowTarget ? selectionRowId(rowTarget.row, rowTarget.rowIndex) : "column",
+        logicalRowId: rowTarget?.rowIndex !== undefined ? selectionRowId(rowTarget.row, rowTarget.rowIndex) : "column",
         source: rowTarget?.source,
     };
     return gridFieldFor(columnId, projectionTarget, mutationPhysicalColumns, resultColumnMetadata) as TableColumnSchema;
@@ -1051,8 +1051,8 @@ function selectCell(event: MouseEvent, cell: GridCellAddress): void {
     pasteStatus = undefined;
 }
 
-function sameCell(left: GridCellAddress | undefined, right: GridCellAddress): boolean {
-    return left?.rowId === right.rowId && left.columnId === right.columnId;
+function sameCell(left: GridCellAddress | undefined, right: GridCellAddress | undefined): boolean {
+    return Boolean(left && right && left.rowId === right.rowId && left.columnId === right.columnId);
 }
 
 function finishSelectionChange(): void {

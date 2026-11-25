@@ -44,7 +44,12 @@ describe("browser Web Push enrollment lifecycle", () => {
                     subscribeCalls++;
                     subscription = {
                         endpoint,
-                        options: { applicationServerKey: options.applicationServerKey as ArrayBuffer },
+                        expirationTime: null,
+                        getKey: () => null,
+                        options: {
+                            applicationServerKey: options.applicationServerKey as ArrayBuffer,
+                            userVisibleOnly: true,
+                        },
                         toJSON: () => ({
                             endpoint,
                             keys: { p256dh: "p256dh-key", auth: "authentication-key" },
