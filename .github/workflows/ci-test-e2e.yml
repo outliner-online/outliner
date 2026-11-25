@@ -348,6 +348,10 @@ jobs:
             if grep -Fxq "$EXPECTED_ARTIFACT_ID" <<<"$artifact_ids" && \
               grep -Fxq "$WRONG_ARTIFACT_ID" <<<"$artifact_ids"; then
               printf 'uploaded artifacts became discoverable after %s check(s)\n' "$attempt"
+              # The REST inventory can precede download-artifact's artifact-service
+              # view. Give that service a bounded propagation window before the
+              # exact-ID positive and negative-control downloads.
+              sleep 30
               break
             fi
             if (( attempt == 30 )); then
@@ -479,7 +483,11 @@ jobs:
   # later runs; there is no shared mutable state between shards.
   e2e-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The test command remains bounded to 20 minutes below. Allow additional
+    # time for cold dependency/cache restoration, server build, startup,
+    # diagnostics, and artifact retention instead of cancelling the runner
+    # before its bounded command can publish an outcome.
+    timeout-minutes: 45
     permissions:
       contents: read
       pull-requests: write
@@ -608,8 +616,8 @@ jobs:
                 PLAYWRIGHT_COLLECTION_OUTPUT="../job_logs/${project}-expected-${E2E_EXECUTION_ID}.json" \
                 node node_modules/playwright/cli.js test --list --project=new-4 --shard="$shard" \
                 --reporter=../scripts/ci/playwright-collection-reporter.mjs
-              # Keep the original 30-minute job deadline. Native Playwright
-              # retries must not lose time merely because the selection is sharded.
+              # Native Playwright retries must not lose time merely because
+              # the selection is sharded; the outer job retains cleanup time.
               PLAYWRIGHT_HTML_OPEN=never npm run github:test:e2e -- \
                 --project=new-4 --shard="$shard" \
                 --reporter=line,list,json,html,../scripts/ci/new4-execution-reporter.mjs \

@@ -113,6 +113,18 @@ def main():
     console_written = 0
     console = None
     console_was_blocking = None
+    interrupted = [None]
+
+    def handle_signal(signum, _frame):
+        interrupted[0] = signum
+        if not structured:
+            record['received_signal'] = signum
+
+    # Install the handlers before launching the child. A command can signal
+    # its supervisor immediately after fork, before the parent reaches the
+    # supervision loop.
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, handle_signal)
 
     def save(**patch):
         record.update(patch)
@@ -194,14 +206,6 @@ def main():
             deadline = time.monotonic() + budget
             stopping = None
             stop_at = None
-            interrupted = [None]
-            def handle_signal(signum, _frame):
-                interrupted[0] = signum
-                if not structured:
-                    record['received_signal'] = signum
-
-            for sig in (signal.SIGTERM, signal.SIGINT):
-                signal.signal(sig, handle_signal)
 
             def pump():
                 nonlocal console_written

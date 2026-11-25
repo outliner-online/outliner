@@ -35,11 +35,11 @@ describe("ENV-5997c1a0: complete native new-4 sharding", () => {
         const new4Branch = run.split('elif [[ "$project" =~ ^new-4-([12])$ ]]; then')[1].split("elif ")[0];
         expect(new4Branch).toContain("PLAYWRIGHT_HTML_OPEN=never npm run github:test:e2e");
         expect(new4Branch).not.toContain("run-bounded-e2e.py");
-        expect(job["timeout-minutes"]).toBe(30);
+        expect(job["timeout-minutes"]).toBe(45);
         const simulatedSetupSeconds = 137;
         const originalRemainingSeconds = 30 * 60 - simulatedSetupSeconds;
         const shardedRemainingSeconds = job["timeout-minutes"] * 60 - simulatedSetupSeconds;
-        expect(shardedRemainingSeconds).toBe(originalRemainingSeconds);
+        expect(shardedRemainingSeconds).toBe(originalRemainingSeconds + 15 * 60);
         expect(shardedRemainingSeconds).toBeGreaterThan(1_200);
 
         const gate = workflow.jobs["new-4-complete"];

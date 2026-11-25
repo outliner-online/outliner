@@ -1,0 +1,11 @@
+id: FTR-a83f20d1
+title: Smartphone Web Push enrollment
+title-ja: スマートフォン Web Push 登録
+status: implemented
+description: Enroll or disable the current browser for private, account-bound Web Push from Settings.
+tests:
+- client/e2e/auth/not-web-push-signin-disarm-5f83d1a9.spec.ts
+- client/src/services/notifications/browserPushRegistration.test.ts
+- scripts/tests/env-sveltekit3-config-and-build-b7c41e29.spec.ts
+- server/tests/notifications/push-config.test.ts
+- server/tests/notifications/push-device-store.test.ts

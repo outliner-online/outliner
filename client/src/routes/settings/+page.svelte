@@ -2,6 +2,7 @@
     import { projectStore } from "../../stores/projectStore.svelte";
     import { userPreferencesStore } from "../../stores/UserPreferencesStore.svelte";
     import { projectSettingsRoute } from "../../lib/managementPaths";
+    import PushDeviceSettings from "../../components/notifications/PushDeviceSettings.svelte";
 </script>
 
 <div class="container mx-auto px-4 py-8">
@@ -45,4 +46,5 @@
             </button>
         </div>
     </section>
+    <PushDeviceSettings />
 </div>
