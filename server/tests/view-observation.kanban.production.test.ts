@@ -174,7 +174,7 @@ describe("retained view observation production refresh", function() {
         await Promise.all(held.map(connection => connection.disconnect()));
     });
 
-    it("invalidates an issued token when the saved target is deleted", async () => {
+    it("invalidates an issued token when a live source record is deleted", async () => {
         const browserProject = "demo";
         const held = await seed(server.hocuspocus, "SELECT id, status, title FROM tasks ORDER BY id", {
             titleField: "title",
@@ -194,7 +194,7 @@ describe("retained view observation production refresh", function() {
         handle.onInvalidate(() => invalidated.resolve());
         const address = server.server.address() as { port: number; };
         const browserDoc = new Y.Doc();
-        const room = `projects/${browserProject}`;
+        const room = `projects/${browserProject}/tables/tasks`;
         const provider = new HocuspocusProvider({
             url: `ws://127.0.0.1:${address.port}/${room}`,
             name: room,
@@ -202,13 +202,17 @@ describe("retained view observation production refresh", function() {
         });
         try {
             await providerSynced(provider);
-            getKanbanRegistry(browserDoc).delete("board");
+            browserDoc.getMap("data").delete("a");
             await invalidated.promise;
             expect(handle.isCurrent(ready.versionToken)).to.equal(false);
-            expect(await handle.readSnapshot({ observedAtUtcMs: 2 })).to.deep.equal({
-                status: "not_found",
-                reason: "not_found",
-            });
+            const refreshed = await handle.readSnapshot({ observedAtUtcMs: 2 });
+            expect(refreshed.status).to.equal("ready");
+            if (refreshed.status !== "ready" || refreshed.projection.kind !== "kanban") {
+                throw new Error("Kanban not ready");
+            }
+            expect(refreshed.projection.lanes.flatMap(lane => lane.cards.map(card => card.title))).to.deep.equal([
+                "B",
+            ]);
         } finally {
             provider.destroy();
             browserDoc.destroy();
