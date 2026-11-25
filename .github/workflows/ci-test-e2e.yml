@@ -281,6 +281,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      actions: read
       contents: read
     steps:
       - name: Checkout artifact verifier
@@ -362,10 +363,14 @@ jobs:
           done
 
       - name: Download representative E2E evidence
-        uses: actions/download-artifact@v8
-        with:
-          artifact-ids: ${{ steps.representative-upload.outputs.artifact-id }}
-          path: artifact-roundtrip/downloaded
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ steps.representative-upload.outputs.artifact-id }}
+        run: |
+          scripts/ci/download-run-artifact-by-id.sh \
+            "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$ARTIFACT_ID" \
+            artifact-roundtrip/downloaded
 
       - name: Verify downloaded E2E evidence
         shell: bash
@@ -374,27 +379,26 @@ jobs:
           scripts/ci/verify-artifact-roundtrip.sh artifact-roundtrip/source artifact-roundtrip/downloaded
 
       - name: Reject an unavailable artifact
-        id: unavailable-download
-        continue-on-error: true
-        uses: actions/download-artifact@v8
-        with:
-          artifact-ids: '0'
-          path: artifact-roundtrip/unavailable
-
-      - name: Confirm unavailable artifact is non-success
-        if: always()
         shell: bash
         env:
-          DOWNLOAD_OUTCOME: ${{ steps.unavailable-download.outcome }}
+          GH_TOKEN: ${{ github.token }}
+          UNAVAILABLE_ARTIFACT_ID: '0'
         run: |
           set -euo pipefail
-          test "$DOWNLOAD_OUTCOME" = failure
+          scripts/ci/reject-unavailable-artifact.sh \
+            "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$UNAVAILABLE_ARTIFACT_ID" \
+            "${{ steps.representative-upload.outputs.artifact-id }}" \
+            "${{ steps.wrong-upload.outputs.artifact-id }}"
 
       - name: Download wrong-artifact control
-        uses: actions/download-artifact@v8
-        with:
-          artifact-ids: ${{ steps.wrong-upload.outputs.artifact-id }}
-          path: artifact-roundtrip/wrong-downloaded
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ steps.wrong-upload.outputs.artifact-id }}
+        run: |
+          scripts/ci/download-run-artifact-by-id.sh \
+            "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$ARTIFACT_ID" \
+            artifact-roundtrip/wrong-downloaded
 
       - name: Confirm wrong, missing, and corrupted evidence are non-success
         shell: bash

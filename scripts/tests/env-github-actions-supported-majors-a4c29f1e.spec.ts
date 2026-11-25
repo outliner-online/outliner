@@ -316,10 +316,11 @@ test("artifact and Pages deployment producers retain their consumer-facing contr
             .replace("${{ matrix.project }}", "artifact-roundtrip"),
     );
     expect(roundtripUpload.id).toBe("representative-upload");
-    expect(roundtripDownload.with["artifact-ids"]).toBe(
+    expect(roundtripDownload.env.ARTIFACT_ID).toBe(
         "${{ steps.representative-upload.outputs.artifact-id }}",
     );
-    expect(roundtripDownload.with.name).toBeUndefined();
+    expect(roundtripDownload.env.GH_TOKEN).toBe("${{ github.token }}");
+    expect(roundtripDownload.run).toContain("download-run-artifact-by-id.sh");
     expect(wrongUpload.id).toBe("wrong-upload");
     expectMultiFileArtifactArchive(wrongUpload);
     const discoverability = findStep(
@@ -333,10 +334,9 @@ test("artifact and Pages deployment producers retain their consumer-facing contr
     expect(findStep(e2e, "artifact-roundtrip", "Verify downloaded E2E evidence").run).toContain(
         "scripts/ci/verify-artifact-roundtrip.sh artifact-roundtrip/source artifact-roundtrip/downloaded",
     );
-    expect(findStep(e2e, "artifact-roundtrip", "Reject an unavailable artifact")["continue-on-error"]).toBe(true);
-    expect(findStep(e2e, "artifact-roundtrip", "Confirm unavailable artifact is non-success").run).toContain(
-        'test "$DOWNLOAD_OUTCOME" = failure',
-    );
+    const unavailableControl = findStep(e2e, "artifact-roundtrip", "Reject an unavailable artifact");
+    expect(unavailableControl["continue-on-error"]).toBeUndefined();
+    expect(unavailableControl.run).toContain("reject-unavailable-artifact.sh");
     const negativeControls = findStep(
         e2e,
         "artifact-roundtrip",
