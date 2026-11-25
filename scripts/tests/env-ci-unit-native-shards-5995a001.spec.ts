@@ -68,17 +68,21 @@ function isolatedCheckout(directory: string, failures: { unit?: boolean; base?: 
         path.join(client, "src", "covered-source.js"),
         "export const coveredValue = 1;\nexport function coveredFunction() { return coveredValue; }\n",
     );
+    fs.writeFileSync(
+        path.join(client, "src", "CoveredComponent.svelte"),
+        "<script>const first = 1; const second = first + 1;</script><p>{second}</p>\n",
+    );
     for (const file of ["first.test.js", "second.test.js"]) {
         fs.writeFileSync(
             path.join(client, "src", file),
-            `import { test, expect } from "vitest"; import { coveredFunction } from "./covered-source.js"; test(${
+            `import { test, expect } from "vitest"; import Component from "./CoveredComponent.svelte"; import { coveredFunction } from "./covered-source.js"; test(${
                 JSON.stringify(file)
-            }, () => expect(coveredFunction()).toBe(${failures.unit ? 2 : 1}));\n`,
+            }, () => { expect(Component).toBeTruthy(); expect(coveredFunction()).toBe(${failures.unit ? 2 : 1}); });\n`,
         );
     }
     fs.writeFileSync(
         path.join(client, "vite.config.ts"),
-        'export default { test: { projects: [{ test: { name: "unit", include: ["src/*.test.js"], coverage: { enabled: true, provider: "v8", reporter: ["json"], include: ["src/covered-source.js"] } } }] } };\n',
+        'import { svelte } from "@sveltejs/vite-plugin-svelte"; export default { plugins: [svelte()], test: { projects: [{ test: { name: "unit", include: ["src/*.test.js"], coverage: { enabled: true, provider: "v8", reporter: ["json"], include: ["src/covered-source.js", "src/CoveredComponent.svelte"] } } }] } };\n',
     );
     fs.writeFileSync(
         path.join(client, "base.test.js"),
@@ -150,7 +154,10 @@ function basePackage(directory: string, failing = true) {
 }
 
 function artifactFixture(directory: string, run = "100", attempt = "2") {
-    fs.writeFileSync(path.join(directory, "coverage-manifest.json"), JSON.stringify(["/source.ts", "/types.d.ts"]));
+    fs.writeFileSync(
+        path.join(directory, "coverage-manifest.json"),
+        JSON.stringify(["/source.ts", "/Component.svelte", "/types.d.ts"]),
+    );
     fs.writeFileSync(path.join(directory, "selection.json"), JSON.stringify([
         { file: path.join(root, "client", "src", "a.test.ts"), name: "suite > first" },
         { file: path.join(root, "client", "src", "b.test.ts"), name: "suite > second" },
@@ -165,6 +172,18 @@ function artifactFixture(directory: string, run = "100", attempt = "2") {
             fnMap: {},
             branchMap: {},
             s: { 0: 0, 5: 0 },
+            f: {},
+            b: {},
+        },
+        "/Component.svelte": {
+            path: "/Component.svelte",
+            statementMap: {
+                0: { start: { line: 1, column: 0 }, end: { line: 1, column: 10 } },
+                1: { start: { line: 1, column: 11 }, end: { line: 1, column: 20 } },
+            },
+            fnMap: {},
+            branchMap: {},
+            s: { 0: 0, 1: 0 },
             f: {},
             b: {},
         },
@@ -204,6 +223,18 @@ function artifactFixture(directory: string, run = "100", attempt = "2") {
                 fnMap: {},
                 branchMap: {},
                 s: {},
+                f: {},
+                b: {},
+            },
+            "/Component.svelte": {
+                path: "/Component.svelte",
+                statementMap: {
+                    0: { start: { line: 10 + shard, column: 0 }, end: { line: 10 + shard, column: 10 } },
+                    1: { start: { line: 20 + shard, column: 0 }, end: { line: 20 + shard, column: 10 } },
+                },
+                fnMap: {},
+                branchMap: {},
+                s: { 0: shard === 1 ? 1 : 0, 1: shard === 2 ? 1 : 0 },
                 f: {},
                 b: {},
             },
@@ -277,7 +308,7 @@ describe("unit CI native shard orchestration", () => {
         const mergedCoverage = JSON.parse(
             fs.readFileSync(path.join(root, "coverage/unit_and_integration/coverage-final.json"), "utf8"),
         );
-        expect(Object.keys(mergedCoverage).sort()).toEqual(["/source.ts", "/types.d.ts"]);
+        expect(Object.keys(mergedCoverage).sort()).toEqual(["/Component.svelte", "/source.ts", "/types.d.ts"]);
         expect(mergedCoverage["/source.ts"]).toMatchObject({
             statementMap: {
                 0: { start: { line: 1, column: 0 }, end: { line: 1, column: 1 } },
@@ -336,6 +367,12 @@ describe("unit CI native shard orchestration", () => {
                 + Object.keys(coveredSource.branchMap).length,
         ).toBeGreaterThan(1);
         expect(mergedCoverage).toEqual(nativeCoverage);
+        const coveredSvelte = nativeCoverage[path.join(isolated.client, "src/CoveredComponent.svelte")];
+        expect(coveredSvelte).toBeDefined();
+        for (const mapName of ["statementMap", "fnMap", "branchMap"] as const) {
+            expect(Object.keys(mergedCoverage[path.join(isolated.client, "src/CoveredComponent.svelte")][mapName]))
+                .toHaveLength(Object.keys(coveredSvelte[mapName]).length);
+        }
         expect(fs.readFileSync(path.join(isolated.checkout, "job_logs/base-test.log"), "utf8")).toContain(
             "passed",
         );
@@ -432,6 +469,27 @@ describe("unit CI native shard orchestration", () => {
         artifactFixture(directory);
         fs.writeFileSync(path.join(directory, "coverage-manifest.json"), JSON.stringify(["/source.ts", "/omitted.ts"]));
         expect(run(directory).stderr.toString()).toContain("coverage differs from repository inventory");
+        artifactFixture(directory);
+        for (const shard of [1, 2]) {
+            const shardCoverage = path.join(
+                directory,
+                `unit-shard-${shard}-100-2/coverage/unit-shard-${shard}/coverage-final.json`,
+            );
+            const data = JSON.parse(fs.readFileSync(shardCoverage, "utf8"));
+            delete data["/Component.svelte"].statementMap[1];
+            delete data["/Component.svelte"].s[1];
+            fs.writeFileSync(shardCoverage, JSON.stringify(data));
+            const schemaPath = path.join(
+                directory,
+                `unit-shard-${shard}-100-2/unit-evidence/coverage-schema-${shard}.json`,
+            );
+            const schema = JSON.parse(fs.readFileSync(schemaPath, "utf8"));
+            delete schema["/Component.svelte"].statementMap[1];
+            fs.writeFileSync(schemaPath, JSON.stringify(schema));
+        }
+        expect(run(directory).stderr.toString()).toContain(
+            "shard coverage statementMap has fewer definitions than native Svelte selection",
+        );
         artifactFixture(directory);
         for (const shard of [1, 2]) {
             const shardCoverage = path.join(

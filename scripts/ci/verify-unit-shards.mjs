@@ -161,14 +161,34 @@ function mergeCoverageReports(reports) {
     }
     return result;
 }
-function validateCompleteCoverageMaps(coverage, baseline) {
+function validateCompleteCoverageMaps(coverage, baseline, shardReports) {
     for (const [file, expected] of Object.entries(baseline)) {
         if (coverageEntryCount(expected) === 0) continue;
         if (!coverage[file]) throw new Error(`merged coverage is missing executable file: ${file}`);
         for (const mapName of ["statementMap", "fnMap", "branchMap"]) {
             if (file.endsWith(".svelte")) {
-                if (Object.keys(expected[mapName]).length && !Object.keys(coverage[file][mapName]).length) {
-                    throw new Error(`merged coverage ${mapName} is empty for executable Svelte file: ${file}`);
+                const expectedCount = Object.keys(expected[mapName]).length;
+                const mergedCount = Object.keys(coverage[file][mapName]).length;
+                // Svelte's discovery and execution transforms can assign different
+                // generated locations to the same source definition, so location
+                // signatures are not stable across those two native runs. The
+                // independent baseline still provides a strict completeness floor:
+                // every executable definition kind it discovers must be represented
+                // by at least as many definitions in the merged shard result.
+                if (mergedCount < expectedCount) {
+                    throw new Error(
+                        `merged coverage ${mapName} has fewer definitions than native Svelte selection: ${file}`,
+                    );
+                }
+                // Do not let independently generated shard locations inflate the
+                // merged count and conceal that every shard omitted the same
+                // source definition. Vitest emits the full instrumented map for
+                // each included file, even when a particular counter is zero, so
+                // each current-run report must meet the native completeness floor.
+                if (shardReports.some((report) => Object.keys(report[file]?.[mapName] ?? {}).length < expectedCount)) {
+                    throw new Error(
+                        `shard coverage ${mapName} has fewer definitions than native Svelte selection: ${file}`,
+                    );
                 }
                 continue;
             }
@@ -262,7 +282,7 @@ const mergedCoverage = mergeCoverageReports(coverageReports);
 if (Object.keys(mergedCoverage).length !== nativeCoverageFiles.length) {
     throw new Error("merged coverage is incomplete");
 }
-validateCompleteCoverageMaps(mergedCoverage, coverageBaseline);
+validateCompleteCoverageMaps(mergedCoverage, coverageBaseline, coverageReports);
 const output = path.resolve("coverage/unit_and_integration/coverage-final.json");
 fs.mkdirSync(path.dirname(output), { recursive: true });
 fs.writeFileSync(output, JSON.stringify(mergedCoverage));
