@@ -109,6 +109,18 @@ function validateCoverageSchema(coverage, schema, shard) {
         }
     }
 }
+function mergeCoverageSchema(baseline, schema) {
+    for (const [file, data] of Object.entries(schema)) {
+        const target = baseline[file] ??= { statementMap: {}, fnMap: {}, branchMap: {} };
+        for (const mapName of ["statementMap", "fnMap", "branchMap"]) {
+            const definitions = new Set(canonicalDefinitions(target[mapName]));
+            for (const definition of canonicalDefinitions(data[mapName])) definitions.add(definition);
+            target[mapName] = Object.fromEntries(
+                [...definitions].map((definition, index) => [index, JSON.parse(definition)]),
+            );
+        }
+    }
+}
 function validateCompleteCoverageMaps(coverage, baseline) {
     for (const [file, expected] of Object.entries(baseline)) {
         if (coverageEntryCount(expected) === 0) continue;
@@ -136,10 +148,11 @@ if (!expected.length) throw new Error("native unit selection is empty");
 const executed = [];
 const mergedCoverage = createCoverageMap({});
 const expectedCoverageFiles = repositoryCoverageInventory();
-let coverageBaseline = process.env.UNIT_COVERAGE_BASELINE
+const suppliedCoverageBaseline = process.env.UNIT_COVERAGE_BASELINE;
+const coverageBaseline = suppliedCoverageBaseline
     ? JSON.parse(fs.readFileSync(process.env.UNIT_COVERAGE_BASELINE, "utf8"))
-    : undefined;
-if (coverageBaseline) validateCoverageMaps(coverageBaseline);
+    : {};
+if (suppliedCoverageBaseline) validateCoverageMaps(coverageBaseline);
 let nativeCoverageFiles;
 for (let shard = 1; shard <= shardCount; shard++) {
     const shardDir = path.join(artifactDir, `unit-shard-${shard}-${runId}-${runAttempt}`);
@@ -155,7 +168,7 @@ for (let shard = 1; shard <= shardCount; shard++) {
     executed.push(...identities);
     const coverage = JSON.parse(fs.readFileSync(coveragePath, "utf8"));
     const schema = JSON.parse(fs.readFileSync(schemaPath, "utf8"));
-    coverageBaseline ??= schema;
+    if (!suppliedCoverageBaseline) mergeCoverageSchema(coverageBaseline, schema);
     const coverageFiles = Object.keys(coverage).map((file) => path.resolve(file)).sort();
     if (!coverageFiles.length) throw new Error(`empty coverage for shard ${shard}`);
     const missing = expectedCoverageFiles.filter((file) => !coverageFiles.includes(file));
