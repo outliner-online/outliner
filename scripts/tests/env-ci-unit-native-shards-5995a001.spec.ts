@@ -283,6 +283,22 @@ describe("unit CI native shard orchestration", () => {
         });
         expect(result.status).toBe(0);
         expect(`${result.stdout}\n${result.stderr}`).toContain("> test:base");
+
+        const unitFailure = isolatedCheckout(temporaryDirectory(), { unit: true });
+        const failedUnit = spawnSync("npm", ["run", "github:test:unit"], {
+            cwd: unitFailure.client,
+            env: env({ UNIT_SHARD: "" }),
+        });
+        expect(failedUnit.status).toBe(1);
+        expect(`${failedUnit.stdout}\n${failedUnit.stderr}`).not.toContain("> test:base");
+
+        const baseFailure = isolatedCheckout(temporaryDirectory(), { base: true });
+        const failedBase = spawnSync("npm", ["run", "github:test:unit"], {
+            cwd: baseFailure.client,
+            env: env({ UNIT_SHARD: "" }),
+        });
+        expect(failedBase.status).toBe(1);
+        expect(`${failedBase.stdout}\n${failedBase.stderr}`).toContain("BASE PACKAGE ENTRY");
     });
 
     test("the aggregate propagates base failure and rejects missing, empty, stale, and duplicate evidence", () => {
