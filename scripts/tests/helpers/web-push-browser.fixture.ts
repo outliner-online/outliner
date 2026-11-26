@@ -255,7 +255,11 @@ export async function startPushBrowser(): Promise<PushBrowserFixture> {
         "@playwright/test",
     ) as typeof import("../../../client/node_modules/@playwright/test");
     const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
-    const browser = await chromium.launch({ args: ["--no-sandbox"], ...(executablePath ? { executablePath } : {}) });
+    // Chrome Headless Shell denies notifications even after grantPermissions. Use full Chromium's headless mode.
+    const browser = await chromium.launch({
+        args: ["--no-sandbox"],
+        ...(executablePath ? { executablePath } : { channel: "chromium" }),
+    });
     const context = await browser.newContext({ permissions: ["notifications"] });
     // Production keeps its configured API origin. Only the external HTTP boundary is redirected into this fixture.
     await context.route("**/*", async route => {
@@ -329,6 +333,17 @@ export async function startPushBrowser(): Promise<PushBrowserFixture> {
     };
     try {
         await page.goto(base, { waitUntil: "domcontentloaded", timeout: 30_000 });
+        expect(await page.evaluate(() => ({
+            secureContext: isSecureContext,
+            serviceWorker: "serviceWorker" in navigator,
+            pushManager: "PushManager" in window,
+            notificationPermission: typeof Notification === "undefined" ? "unavailable" : Notification.permission,
+        })), "The fixture requires native Web Push support and granted notification permission").toEqual({
+            secureContext: true,
+            serviceWorker: true,
+            pushManager: true,
+            notificationPermission: "granted",
+        });
         await expect.poll(
             () => page.evaluate(async () => (await navigator.serviceWorker.getRegistration("/"))?.active?.state),
             { timeout: 30_000 },
