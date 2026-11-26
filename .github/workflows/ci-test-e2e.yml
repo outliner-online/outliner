@@ -438,6 +438,15 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Use Python for E2E supervision
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install E2E supervision dependencies
+        timeout-minutes: 2
+        run: python3 -m pip install --disable-pip-version-check --timeout 15 --retries 1 loguru==0.7.3 PyYAML==6.0.3
+
       - name: Install collection guard dependencies
         shell: bash
         run: |
@@ -540,6 +549,15 @@ jobs:
           }, null, 2) + '\n');
           NODE
 
+      - name: Use Python for E2E supervision
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install E2E supervision dependencies
+        timeout-minutes: 2
+        run: python3 -m pip install --disable-pip-version-check --timeout 15 --retries 1 loguru==0.7.3 PyYAML==6.0.3
+
       - name: Setup E2E dependencies
         id: setup
         uses: ./.github/actions/setup-e2e-deps
@@ -586,6 +604,8 @@ jobs:
 
       - name: Run E2E tests (${{ matrix.project }})
         id: tests
+        # Independent of the in-process deadline, with time left for evidence.
+        timeout-minutes: 23
         shell: bash
         run: |
           set -euo pipefail
@@ -602,7 +622,7 @@ jobs:
             cd client
             if [[ "$project" =~ ^new-2-([12])$ ]]; then
               shard="${BASH_REMATCH[1]}/2"
-              PLAYWRIGHT_HTML_OPEN=never python3 ../scripts/ci/run-bounded-e2e.py \
+              PLAYWRIGHT_HTML_OPEN=never exec python3 ../scripts/ci/run-bounded-e2e.py \
                 --context=../job_logs/execution-context.json \
                 --status="../job_logs/${project}-command-status.json" \
                 --log="../job_logs/e2e-${E2E_BROWSER}-${project}-${E2E_EXECUTION_ID}.log" \
@@ -629,9 +649,7 @@ jobs:
             elif [[ "$project" =~ ^new-3[ab]$ ]]; then
               # Bound the command before the job deadline so timeout evidence
               # can upload. Line output identifies started, unfinished cases.
-              # Also bound supervisor report verification outside its child loop.
-              PLAYWRIGHT_HTML_OPEN=never timeout --signal=TERM --kill-after=10s 1320s \
-                python3 ../scripts/ci/run-bounded-e2e.py \
+              PLAYWRIGHT_HTML_OPEN=never exec python3 ../scripts/ci/run-bounded-e2e.py \
                 --context=../job_logs/execution-context.json \
                 --status="../job_logs/${project}-command-status.json" \
                 --log="../job_logs/e2e-${E2E_BROWSER}-${project}-${E2E_EXECUTION_ID}.log" \
@@ -639,7 +657,7 @@ jobs:
                 --timeout-seconds=1200 --job-budget-seconds=1320 --grace-seconds=10 \
                 -- npm run github:test:e2e -- --project="$project" --reporter=line,json,html
             elif [[ "$project" =~ ^tables-([12])$ ]]; then
-              python3 ../scripts/ci/run-bounded-e2e.py \
+              exec python3 ../scripts/ci/run-bounded-e2e.py \
                 --context=../job_logs/execution-context.json \
                 --status="../job_logs/${project}-command-status.json" \
                 --log="../job_logs/e2e-${E2E_BROWSER}-${project}-${E2E_EXECUTION_ID}.log" \
@@ -745,6 +763,7 @@ jobs:
           VITE_DISABLE_FLUID_TELEMETRY: true
 
       - name: Summarise failures
+        timeout-minutes: 1
         if: failure()
         run: |
           echo "## ❌ E2E Test Failed (${{ matrix.project }})" >> $GITHUB_STEP_SUMMARY
@@ -753,6 +772,7 @@ jobs:
           fi
 
       - name: Verify startup evidence
+        timeout-minutes: 1
         id: startup_evidence
         if: always()
         shell: bash
@@ -760,6 +780,7 @@ jobs:
           python3 scripts/ci/verify-startup-evidence.py --stage-upload
 
       - name: Record setup and execution status
+        timeout-minutes: 1
         if: always()
         shell: bash
         env:
@@ -775,6 +796,7 @@ jobs:
             2>&1 | tee job_logs/execution-status.log
 
       - name: Upload Logs & Artifacts
+        timeout-minutes: 3
         # Retain Playwright command evidence, reports and attachments. Raw service
         # files may still contain startup-origin bytes after readiness succeeds;
         # omit them entirely rather than infer a safe byte boundary or mutate logs.
@@ -791,6 +813,7 @@ jobs:
           retention-days: 2
 
       - name: Upload safe startup diagnostics
+        timeout-minutes: 3
         # Services may write secrets directly to logs/ or firebase-debug.log.
         # Before verified E2E entry, retain only the verifier's structured snapshot.
         if: always() && steps.tests.outputs.startup_verified != 'true' && steps.startup_evidence.outputs.upload_path != ''

@@ -95,7 +95,17 @@ export function createNotificationHttpsSender(dependencies: NotificationTranspor
             socket?.destroy();
             stopReject(new AttemptStopped(reason));
         };
-        const timer = setTimeout(() => stop("deadline"), Math.max(0, deadline - Date.now())).unref();
+        let timer: NodeJS.Timeout;
+        const checkDeadline = () => {
+            // A timer wakeup does not prove the fixed absolute deadline has elapsed.
+            const remaining = deadline - Date.now();
+            if (remaining > 0) {
+                timer = setTimeout(checkDeadline, remaining).unref();
+                return;
+            }
+            stop("deadline");
+        };
+        timer = setTimeout(checkDeadline, Math.max(0, deadline - Date.now())).unref();
         const onAbort = () => stop("cancelled");
         input.signal?.addEventListener("abort", onAbort, { once: true });
         const bounded = <T>(operation: Promise<T>): Promise<T> => Promise.race([operation, stopped]);
