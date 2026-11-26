@@ -1,0 +1,20 @@
+id: ENV-84f6a1c2
+title: Observe and bound E2E cancellation cleanup
+title-ja: E2Eキャンセル時の監視情報と終了時間を制御する
+description: Supervised Chromium commands emit bounded heartbeat and lifecycle evidence through Loguru to a retained file and nonblocking stdout. The actual Bash entry uses exec so external cancellation reaches the supervisor directly. External signals shorten cleanup to a fixed deadline, including cleanup already started by an internal timeout, while detached owned descendants are reaped and unrelated processes survive. The E2E test step, finalizers and artifact uploads have independent time limits. Genuine failures, incomplete reports, startup secrecy, test selection and required-check behavior remain intact; hosted-runner loss and control-plane finalization are outside these guarantees.
+category: environment
+status: implemented
+components:
+- .github/workflows/ci-test-e2e.yml
+- scripts/ci/run-bounded-e2e.py
+- docs/ci-e2e-cancellation-bounds.md
+tests:
+- scripts/tests/test_bounded_e2e.py
+- scripts/tests/test_bounded_e2e_cancellation.py
+- scripts/tests/test_bounded_e2e_diagnostics.py
+- scripts/tests/test_bounded_e2e_finalization.py
+- scripts/tests/test_bounded_e2e_workflow_cancellation.py
+- scripts/tests/test_bounded_e2e_playwright.py
+- scripts/tests/test_bounded_e2e_startup_workflow.py
+- scripts/tests/test_bounded_e2e_startup_cancellation.py
+- scripts/tests/test_bounded_e2e_startup_artifacts.py
