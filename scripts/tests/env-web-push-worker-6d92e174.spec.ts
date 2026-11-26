@@ -1,9 +1,11 @@
 import { beforeAll, describe, expect, test } from "vitest";
-import type { MobilePayloadV1 } from "../../shared/src/notifications/mobile-payload";
 import {
     activateNotification,
     buildPushWorker,
+    type CapturedProducerDelivery,
+    captureProductionMobileDelivery,
     deliverPush,
+    deliverPushData,
     enrollCurrentDevice,
     holdClientDiscovery,
     installPushBrowserPage,
@@ -106,58 +108,78 @@ describe("production-built Web Push worker", () => {
             }
         }, 180_000);
 
-    test("activation opens the same saved context and a disarm during client discovery prevents navigation",
+    test(
+        "encrypted Grid/Calendar/Kanban deliveries open saved contexts and disarm during discovery prevents navigation",
         async () => {
             const fixture = await startPushBrowser();
             try {
                 const generation = await loginAndEnroll(fixture, "worker-tap@example.test");
                 const worker = await instrumentPushWorker(fixture);
-                const payload = pushPayload(generation);
-                const targets: MobilePayloadV1[] = [payload, {
-                    ...payload,
-                    ruleId: "calendar-tap-rule",
-                    target: { projectId: "project-one", kind: "calendar", objectId: "calendar-one" },
-                    title: "Calendar changed",
-                    href: `/project-one/-/calendars/calendar-one?${new URLSearchParams({
-                        context: JSON.stringify({
-                            version: 1,
-                            locale: "ja-JP",
-                            timeZone: "UTC",
-                            weekStart: 1,
-                            viewType: "month",
-                            anchorUtcMs: Date.UTC(2026, 0, 16, 12),
-                            rangeStartUtcMs: Date.UTC(2025, 11, 29),
-                            rangeEndUtcMs: Date.UTC(2026, 1, 2),
-                            monthLaneFilter: "focus-lane",
-                            collapsedEntryKeys: [],
-                        }),
-                    })}`,
-                }, {
-                    ...payload,
-                    ruleId: "kanban-tap-rule",
-                    target: { projectId: "project-one", kind: "kanban", objectId: "kanban-one" },
-                    title: "Kanban changed",
-                    href: `/project-one/-/kanbans/kanban-one?${new URLSearchParams({
-                        surface: "board",
-                        version: "1",
-                        locale: "en-GB",
-                        timeZone: "Asia/Tokyo",
-                    })}`,
-                }];
-                for (const target of targets) {
-                    const before = (await observations(worker)).operations.length;
-                    await deliverPush(fixture, worker, target);
-                    await activateNotification(worker, target.ruleId);
-                    await expect.poll(() => fixture.page.url()).toBe(`${fixture.base}${target.href}`);
-                    expect((await observations(worker)).operations[before]).toBe(
-                        `navigate:${fixture.base}${target.href}`,
+                let held: CapturedProducerDelivery | undefined;
+                for (const kind of ["grid", "calendar", "kanban"] as const) {
+                    const captured = await captureProductionMobileDelivery(kind, generation);
+                    const { payload, rule } = captured;
+                    if (kind === "grid") held = captured;
+                    expect(captured.capture).toMatchObject({ requestCount: 1, vapidVerified: true, accepted: true });
+                    expect(captured.capture.encryptedBytes).toBeGreaterThan(Buffer.byteLength(captured.plaintext));
+                    expect(payload.enrollmentGeneration).toBe(generation);
+                    expect(payload.ruleId).toBe(rule.ruleId);
+                    expect(payload.target).toEqual(rule.target);
+                    expect(rule.target.kind).toBe(kind);
+                    const destination = new URL(payload.href, fixture.base);
+                    expect(destination.origin).toBe(fixture.base);
+                    expect(destination.pathname).toBe(
+                        `/${encodeURIComponent(rule.target.projectId)}/-/${kind}s/${
+                            encodeURIComponent(rule.target.objectId)
+                        }`,
                     );
+                    expect(destination.hash).toBe("");
+                    // Expected context comes from the committed rule, independently of the captured payload/href.
+                    if (kind === "kanban") {
+                        expect(Object.fromEntries(destination.searchParams)).toEqual({ ...rule.context, version: "1" });
+                    } else {
+                        const key = kind === "grid" ? "observation" : "context";
+                        expect([...destination.searchParams.keys()]).toEqual([key]);
+                        expect(JSON.parse(destination.searchParams.get(key)!)).toEqual(rule.context);
+                    }
+                    expect(rule.context).toMatchObject({
+                        locale: kind === "calendar" ? "ja-JP" : "en-GB",
+                        timeZone: "Asia/Tokyo",
+                        ...(kind === "calendar" ? { viewType: "month", monthLaneFilter: "todo" } : {}),
+                    });
+                    const before = (await observations(worker)).operations.length;
+                    await deliverPushData(fixture, worker, captured.plaintext);
+                    const displayed = await worker.evaluate(async tag => {
+                        const notifications = await (globalThis as unknown as ServiceWorkerGlobalScope).registration
+                            .getNotifications({ tag });
+                        return notifications.map(notification => ({
+                            title: notification.title,
+                            body: notification.body,
+                            data: notification.data,
+                        }));
+                    }, rule.ruleId);
+                    expect(displayed).toEqual([{
+                        title: payload.title,
+                        body: `${payload.body}\nObserved ${payload.observedAt}`,
+                        data: payload,
+                    }]);
+                    await activateNotification(worker, rule.ruleId);
+                    await expect.poll(() => fixture.page.url()).toBe(`${fixture.base}${payload.href}`);
+                    expect((await observations(worker)).operations[before]).toBe(
+                        `navigate:${fixture.base}${payload.href}`,
+                    );
+                    const label = { grid: "Grids", calendar: "Calendars", kanban: "Kanbans" }[kind];
+                    await expect.poll(() =>
+                        fixture.page.getByRole("navigation", { name: "Breadcrumb" })
+                            .getByRole("link", { name: label, exact: true }).isVisible()
+                    ).toBe(true);
                 }
                 await openNotificationSettings(fixture);
-                await deliverPush(fixture, worker, { ...payload, ruleId: "held-tap-rule" });
+                expect(held).toBeDefined();
+                await deliverPushData(fixture, worker, held!.plaintext);
                 const prior = (await observations(worker)).operations.length;
                 await holdClientDiscovery(worker);
-                await activateNotification(worker, "held-tap-rule", false);
+                await activateNotification(worker, held!.rule.ruleId, false);
                 await expect.poll(() =>
                     worker.evaluate(() =>
                         (self as unknown as { observations: { discoveryReached: boolean; }; }).observations
@@ -173,7 +195,9 @@ describe("production-built Web Push worker", () => {
             } finally {
                 await fixture.close();
             }
-        }, 180_000);
+        },
+        180_000,
+    );
 
     test("failed local disarm does not acknowledge disable or claim suppression after a worker restart", async () => {
         const fixture = await startPushBrowser();

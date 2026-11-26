@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 
-import { spawnSync } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
@@ -8,13 +8,16 @@ import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { expect } from "vitest";
 import type { Browser, BrowserContext, CDPSession, Page, Worker } from "../../../client/node_modules/@playwright/test";
 import type { MobilePayloadV1 } from "../../../shared/src/notifications/mobile-payload";
+import type { NotificationRule, NotificationTargetKind } from "../../../shared/src/notifications/notification-settings";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const client = path.join(root, "client");
 const build = path.join(root, "build");
+const executeFile = promisify(execFile);
 const mime: Record<string, string> = {
     ".html": "text/html",
     ".js": "text/javascript",
@@ -38,6 +41,44 @@ export function buildPushWorker(): void {
         expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     }
     expect(fs.existsSync(path.join(build, "service-worker.js"))).toBe(true);
+}
+
+export interface CapturedProducerDelivery {
+    plaintext: string;
+    payload: MobilePayloadV1;
+    rule: NotificationRule;
+    capture: { requestCount: number; encryptedBytes: number; vapidVerified: boolean; accepted: boolean; };
+}
+
+/** Preserve the server producer's decrypted wire text across the controlled browser push boundary. */
+export async function captureProductionMobileDelivery(
+    kind: NotificationTargetKind,
+    enrollmentGeneration: string,
+): Promise<CapturedProducerDelivery> {
+    // The existing server loader pins Yjs for server/shared sources without changing the browser's dependency graph.
+    const { stdout } = await executeFile(process.execPath, [
+        "--loader",
+        "ts-node/esm",
+        "--loader",
+        "./tests/loaders/pin-server-deps.mjs",
+        "--no-warnings",
+        "tests/notifications/web-push.fixture.ts",
+        kind,
+        enrollmentGeneration,
+    ], {
+        cwd: path.join(root, "server"),
+        env: { ...process.env, TS_NODE_TRANSPILE_ONLY: "1" },
+        encoding: "utf8",
+        timeout: 90_000,
+        maxBuffer: 1024 * 1024,
+    });
+    const marker = "OUTLINER_MOBILE_DELIVERY:";
+    const deliveries = stdout.split(/\r?\n/u).filter(line => line.startsWith(marker));
+    expect(deliveries, "Expected exactly one completed encrypted producer capture").toHaveLength(1);
+    const captured = JSON.parse(deliveries[0].slice(marker.length)) as CapturedProducerDelivery;
+    expect(typeof captured.plaintext).toBe("string");
+    expect(JSON.parse(captured.plaintext)).toEqual(captured.payload);
+    return captured;
 }
 
 function fixtureToken(email: string): string {
@@ -523,13 +564,17 @@ export async function instrumentPushWorker(fixture: PushBrowserFixture): Promise
 }
 
 export async function deliverPush(fixture: PushBrowserFixture, worker: Worker, payload: unknown): Promise<void> {
+    await deliverPushData(fixture, worker, JSON.stringify(payload));
+}
+
+export async function deliverPushData(fixture: PushBrowserFixture, worker: Worker, data: string): Promise<void> {
     const completed = await worker.evaluate(() =>
         (globalThis as unknown as InstrumentedWorker).observations.completedPush
     );
     await fixture.cdp.send("ServiceWorker.deliverPushMessage", {
         origin: fixture.base,
         registrationId: fixture.registrationId,
-        data: JSON.stringify(payload),
+        data,
     });
     await expect.poll(() =>
         worker.evaluate(() => (globalThis as unknown as InstrumentedWorker).observations.completedPush)

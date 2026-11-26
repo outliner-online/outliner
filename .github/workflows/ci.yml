@@ -127,6 +127,7 @@ jobs:
         run: |
           npm ci
           npm ci --prefix client
+          npm ci --prefix server
           npm ci --prefix scripts/tests --ignore-scripts --no-audit --no-fund
       - name: Install production worker browser
         working-directory: client

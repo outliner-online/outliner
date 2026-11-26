@@ -92,6 +92,18 @@ durable disarm across logout, account switches, delayed enrollment responses,
 and worker restart, along with exact saved-context navigation in an existing
 window. External API/provider traffic is isolated at the test boundary.
 
+For Grid, Calendar, and Kanban, the integration case starts with a real saved
+rule and displayed source change. It captures the production adapter's encrypted
+HTTP request, independently verifies VAPID and decrypts it, and passes the original
+JSON text to the built worker without rebuilding its payload or link. The device
+record uses the browser's authoritative enrollment generation. Notification data,
+the current target path, and every saved-context field are checked against the
+committed rule, including a non-default Calendar month and lane filter.
+
+The built app's target-specific route breadcrumb and URL are observed after
+activation. This isolated harness does not load a real account's project data
+through the external backend.
+
 Notification activation is synthetic in this harness. With no application
 window, Chromium requires a trusted platform interaction token to complete
 `openWindow`; the test verifies the real handler's canonical opening attempt and
