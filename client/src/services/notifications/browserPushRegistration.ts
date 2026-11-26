@@ -1,3 +1,4 @@
+import { type EnrollmentBinding, updateEnrollmentBinding } from "./enrollmentBinding";
 import {
     createAdmission,
     disablePushDevice,
@@ -9,8 +10,6 @@ import {
 
 const DEVICE_KEY = "outliner:web-push-device";
 const ARMED_HINT_KEY = "outliner:web-push-armed";
-const DB = "outliner-web-push";
-const STORE = "enrollment";
 export type EnrollmentView =
     | "unsupported"
     | "denied"
@@ -46,48 +45,14 @@ function deviceId(): string {
     }
     return id;
 }
-interface EnrollmentBinding {
-    fence: number;
-    generation?: string;
-    vapidKeyId?: string;
-}
-function updateBinding(operation: "read" | "disarm" | "arm", value?: EnrollmentBinding): Promise<EnrollmentBinding> {
-    return new Promise((resolve, reject) => {
-        const open = indexedDB.open(DB, 1);
-        open.onupgradeneeded = () => open.result.createObjectStore(STORE);
-        open.onerror = () => reject(open.error);
-        open.onsuccess = () => {
-            const tx = open.result.transaction(STORE, operation === "read" ? "readonly" : "readwrite");
-            const store = tx.objectStore(STORE);
-            const request = store.get("current");
-            let result: EnrollmentBinding = { fence: 0 };
-            request.onsuccess = () => {
-                const current = (request.result as EnrollmentBinding | undefined) ?? { fence: 0 };
-                if (operation === "read") result = current;
-                else if (operation === "disarm") {
-                    result = { fence: current.fence + 1 };
-                    store.put(result, "current");
-                } else {
-                    if (!value || current.fence !== value.fence || current.generation) {
-                        tx.abort();
-                        return;
-                    }
-                    result = value;
-                    store.put(result, "current");
-                }
-            };
-            tx.oncomplete = () => {
-                if (result.generation) localStorage.setItem(ARMED_HINT_KEY, "true");
-                else if (operation === "disarm") localStorage.removeItem(ARMED_HINT_KEY);
-                open.result.close();
-                resolve(result);
-            };
-            tx.onabort = tx.onerror = () => {
-                open.result.close();
-                reject(tx.error ?? new Error("Enrollment binding changed"));
-            };
-        };
-    });
+async function updateBinding(
+    operation: "read" | "disarm" | "arm",
+    value?: EnrollmentBinding,
+): Promise<EnrollmentBinding> {
+    const result = await updateEnrollmentBinding(operation, value);
+    if (result.generation) localStorage.setItem(ARMED_HINT_KEY, "true");
+    else if (operation === "disarm") localStorage.removeItem(ARMED_HINT_KEY);
+    return result;
 }
 async function worker(): Promise<ServiceWorkerRegistration> {
     return navigator.serviceWorker.ready;

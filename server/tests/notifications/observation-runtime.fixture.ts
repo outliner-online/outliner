@@ -64,7 +64,7 @@ export async function runtimeFixture(
     options: RuntimeOptions = {},
     hooks: ObservationHooks = {},
     directory = tempDir(),
-    ownMcpAdapter = true,
+    { captureMcp = true, captureMobile = true }: { captureMcp?: boolean; captureMobile?: boolean; } = {},
 ) {
     const acl = new AclStore();
     acl.grant("projectUsers", PROJECT, UID);
@@ -97,14 +97,16 @@ export async function runtimeFixture(
         ...options,
     });
     const offered: PreparedViewChange[] = [];
-    if (ownMcpAdapter) {
+    if (captureMcp) {
         runtime.subscribe("mcp", candidate => {
             offered.push(candidate);
         });
     }
-    runtime.subscribe("mobile", candidate => {
-        offered.push(candidate);
-    });
+    if (captureMobile) {
+        runtime.subscribe("mobile", candidate => {
+            offered.push(candidate);
+        });
+    }
     const seed = async (projectId = PROJECT, owner = UID) => {
         acl.grant("projectUsers", projectId, owner);
         const opened = await seedRuntimeProject(server.hocuspocus, projectId, owner);

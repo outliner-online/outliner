@@ -7,6 +7,7 @@ import {
     type PreparedViewChange,
     summarizeViewChange,
     type ViewChangeAttemptOutcome,
+    type ViewChangeCurrentness,
     type ViewChangePayload,
     type ViewChangeRevalidation,
 } from "./prepared-view-change.js";
@@ -706,7 +707,8 @@ export class NotificationObservationRuntime {
                 if (!this.authorized(attempt)) return this.refusal(attempt);
                 const candidate: CurrentViewChange = Object.freeze({
                     ...attempt.payload,
-                    isCurrent: () => this.current(attempt) && this.clock.now() < attempt.expiresAt,
+                    isCurrent: () => this.checkCurrent(attempt).status === "current",
+                    checkCurrent: () => this.checkCurrent(attempt),
                 });
                 if (!this.current(attempt)) {
                     return this.invalidate(attempt, "deferred", "source_stale");
@@ -737,7 +739,8 @@ export class NotificationObservationRuntime {
         const sameBaseline = entry.alive && !this.stopped && state.generation === attempt.generation
             && state.baselineGeneration === attempt.baselineGeneration && state.candidate === attempt;
         const terminal = outcome.outcome !== "cancelled" && outcome.outcome !== "deferred";
-        const advance = sameBaseline && (outcome.initiated || (terminal && this.current(attempt)));
+        const wasCurrent = sameBaseline && this.current(attempt);
+        const advance = sameBaseline && (outcome.initiated || (terminal && wasCurrent));
         attempt.settled = true;
         attempt.valid = false;
         if (advance) {
@@ -750,7 +753,10 @@ export class NotificationObservationRuntime {
             state.reason = undefined;
         }
         if (!attempt.callbackActive) this.attempts.delete(attempt.payload.eventId);
-        if (sameBaseline) this.dirty(entry, true);
+        // A current advancement already has the fresh projection. Preserve
+        // real source invalidations without making another channel compete
+        // with a redundant settlement-triggered evaluation.
+        if (sameBaseline && (!advance || !wasCurrent)) this.dirty(entry, true);
         this.schedule();
     }
 
@@ -786,6 +792,17 @@ export class NotificationObservationRuntime {
 
     private current(attempt: Attempt): boolean {
         return this.authorized(attempt) && Boolean(attempt.admission.handle?.isCurrent(attempt.token));
+    }
+
+    private checkCurrent(attempt: Attempt): ViewChangeCurrentness {
+        if (!this.authorized(attempt)) return this.refusal(attempt);
+        if (!attempt.admission.handle?.isCurrent(attempt.token)) {
+            return { status: "deferred", reason: "source_stale" };
+        }
+        // Only a still-current semantic opportunity expires terminally. The
+        // adapter must not turn lease expiry into a retry of unchanged content.
+        if (this.clock.now() >= attempt.expiresAt) return { status: "cancelled", reason: "expired" };
+        return { status: "current" };
     }
 
     private async nonReady(entry: Admission, result: Exclude<ReadSnapshotResult, { status: "ready"; }>): Promise<void> {

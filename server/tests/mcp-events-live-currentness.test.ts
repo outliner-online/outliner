@@ -21,7 +21,7 @@ describe("live observer authority after delayed connection", function() {
     let events: NotificationEventsService;
     let network: ReturnType<typeof receiver>;
     beforeEach(async () => {
-        f = await runtimeFixture({}, {}, undefined, false);
+        f = await runtimeFixture({}, {}, undefined, { captureMcp: false });
         await f.seed();
         network = receiver();
         events = new NotificationEventsService(

@@ -393,6 +393,7 @@ describe("SvelteKit 3 production service worker in a browser", () => {
                 src: "/favicon.png",
                 sizes: "512x512",
                 type: "image/png",
+                purpose: "any maskable",
             });
 
             // No test code registers anything: this is the app's own manual

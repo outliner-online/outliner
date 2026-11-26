@@ -21,7 +21,7 @@ describe("restart retains route and settings without delivery replay", function(
         await f?.close();
     });
     it("reopens real SQLite and live project rooms with silent baselines and absent delivery evidence", async () => {
-        f = await runtimeFixture({}, {}, undefined, false);
+        f = await runtimeFixture({}, {}, undefined, { captureMcp: false });
         await f.seed();
         let network = receiver();
         const create = () =>
@@ -47,7 +47,7 @@ describe("restart retains route and settings without delivery replay", function(
         const directory = f.directory;
         await events.close();
         await f.close();
-        f = await runtimeFixture({}, {}, directory, false);
+        f = await runtimeFixture({}, {}, directory, { captureMcp: false });
         network = receiver();
         events = create();
         expect(events.status(UID)).to.deep.equal({ state: "active", expiresAtMs: expiry, latestAttempt: null });

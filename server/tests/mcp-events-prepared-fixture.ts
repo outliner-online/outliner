@@ -30,7 +30,14 @@ export function preparedFixture() {
         summary: summarizeViewChange(grid("A"), grid("B")),
         async revalidate(): Promise<ViewChangeRevalidation> {
             return status === "current"
-                ? { status, candidate: { ...prepared, isCurrent: () => current } }
+                ? {
+                    status,
+                    candidate: {
+                        ...prepared,
+                        isCurrent: () => current,
+                        checkCurrent: () => current ? { status: "current" } : { status: "deferred", reason: "changed" },
+                    },
+                }
                 : { status, reason: "changed" };
         },
         settleAttempt(value) {

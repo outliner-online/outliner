@@ -23,7 +23,7 @@ describe("account Events from actual live saved views", function() {
         await f?.close();
     });
     it("uses one callback for two projects and follows mutable rules in a third without resubscription", async () => {
-        f = await runtimeFixture({}, {}, undefined, false);
+        f = await runtimeFixture({}, {}, undefined, { captureMcp: false });
         const first = await f.seed();
         await f.seed("second-project");
         await f.seed("third-project");

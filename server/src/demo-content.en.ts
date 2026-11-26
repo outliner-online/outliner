@@ -337,6 +337,10 @@ export function demoContentEn(): DemoLocaleContent {
                     },
                     {
                         text:
+                            "Smartphone notifications: in your signed-in cloud account, enroll this browser from Settings, then ask your MCP client to watch a Grid, Calendar, or Kanban with its saved display settings. A displayed change produces a timestamped notification; tapping opens the current object. Hidden-field edits do not trigger it. This public demo does not enroll a device or send a notification.",
+                    },
+                    {
+                        text:
                             "Unified Find: open Find on this page to search outline text and every visible Grid result cell in one session; choose Selection to constrain Grid hits to the selected logical cells. "
                             + "Replace and Replace All work the same way across both: a writable Grid cell is replaced through the table's own "
                             + "write path, while a computed or read-only cell stays searchable but is never overwritten. "
