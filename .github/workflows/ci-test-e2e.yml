@@ -629,7 +629,9 @@ jobs:
             elif [[ "$project" =~ ^new-3[ab]$ ]]; then
               # Bound the command before the job deadline so timeout evidence
               # can upload. Line output identifies started, unfinished cases.
-              PLAYWRIGHT_HTML_OPEN=never python3 ../scripts/ci/run-bounded-e2e.py \
+              # Also bound supervisor report verification outside its child loop.
+              PLAYWRIGHT_HTML_OPEN=never timeout --signal=TERM --kill-after=10s 1320s \
+                python3 ../scripts/ci/run-bounded-e2e.py \
                 --context=../job_logs/execution-context.json \
                 --status="../job_logs/${project}-command-status.json" \
                 --log="../job_logs/e2e-${E2E_BROWSER}-${project}-${E2E_EXECUTION_ID}.log" \
