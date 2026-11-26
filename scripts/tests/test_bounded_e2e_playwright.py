@@ -51,8 +51,8 @@ class PlaywrightBoundaryTest(unittest.TestCase):
                 branch = workflow.split('elif [[ "$project" =~ ^tables-([12])$ ]]; then')[1].split('else')[0]
                 branch = branch.replace('${BASH_REMATCH[1]}/2', tables_shard)
                 tokens = shlex.split(branch.replace('\\\n', ' '))
-                self.assertEqual(tokens[:2], ['python3', '../scripts/ci/run-bounded-e2e.py'])
-                prefix, command = tokens[2:tokens.index('--')], tokens[tokens.index('--') + 1:]
+                self.assertEqual(tokens[:3], ['exec', 'python3', '../scripts/ci/run-bounded-e2e.py'])
+                prefix, command = tokens[3:tokens.index('--')], tokens[tokens.index('--') + 1:]
                 self.assertEqual(command[:4], ['npm', 'run', 'github:test:e2e', '--'])
                 cli_arguments = command[4:]
                 self.assertEqual(cli_arguments, ['--project=tables', '--shard=' + tables_shard])
