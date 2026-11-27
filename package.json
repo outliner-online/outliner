@@ -5,7 +5,7 @@
     },
     "dependencies": {
         "axe-playwright": "^2.2.2",
-        "libpg-query": "18.2.4"
+        "libpg-query": "18.2.5"
     },
     "devDependencies": {
         "@dprint/dockerfile": "0.8.0",
