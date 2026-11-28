@@ -58,15 +58,14 @@ describe("server debug image cache export", () => {
         expect(steps.indexOf(cacheExport)).toBeLessThan(steps.indexOf(offlineSmoke));
     });
 
-    test.each(["failure", "cancelled"])(
-        "a prompt error or bounded delay with outcome %s remains visible and reaches both smokes",
-        (outcome) => {
+    test.each(["prompt cache exporter error", "cache exporter step timeout"])(
+        "%s remains visible and reaches both smokes",
+        () => {
             expect(cacheExport["continue-on-error"]).toBe(true);
             expect(cacheExport["timeout-minutes"]).toBeLessThan(job["timeout-minutes"]);
             expect(diagnostic.if).toBe("steps.debug-cache-export.outcome != 'success'");
             expect(diagnostic.env.CACHE_EXPORT_OUTCOME).toBe("${{ steps.debug-cache-export.outcome }}");
             expect(diagnostic.run).toContain("::warning::Optional server debug image cache export did not complete");
-            expect(["failure", "cancelled"]).toContain(outcome);
             expect(nativeSmoke.if).toBeUndefined();
             expect(offlineSmoke.if).toBeUndefined();
         },
