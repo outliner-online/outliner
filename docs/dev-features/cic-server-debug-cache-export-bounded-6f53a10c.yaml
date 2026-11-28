@@ -1,0 +1,15 @@
+id: ENV-6f53a10c
+title: Bounded optional server debug image cache export
+title-ja: サーバーデバッグイメージの任意キャッシュ書き出しの時間制限
+status: implemented
+category: continuous-integration
+description: >-
+  Loads the server debug image before attempting a separately bounded GitHub
+  Actions cache export, so cache-service errors and timeouts remain visible but
+  cannot skip the existing blocking smoke checks of the newly built image.
+changes:
+  - The authoritative debug build retains healthy cache reuse and loads the image without coupling success to cache export.
+  - The optional cache export has a five-minute bound and emits a workflow warning when it does not complete.
+  - Genuine build, load, native-module, Firebase, SQLite-binding, or SQL-engine failures remain blocking.
+tests:
+  - scripts/tests/env-server-debug-cache-export-bounded-6f53a10c.spec.ts

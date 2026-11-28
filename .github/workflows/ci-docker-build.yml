@@ -163,7 +163,30 @@ jobs:
           load: true
           tags: yjs-ws-server:ci-debug
           cache-from: type=gha,scope=server-debug-image
+
+      # Exporting the cache is only an optimization. Keep it separate from the
+      # authoritative build/load above so a cache-service failure cannot skip
+      # the checks of the image that this job just loaded.
+      - name: Export server debug image cache
+        id: debug-cache-export
+        uses: docker/build-push-action@v7
+        timeout-minutes: 5
+        continue-on-error: true
+        with:
+          context: .
+          file: ./server/Dockerfile.debug
+          push: false
+          load: false
+          tags: yjs-ws-server:ci-debug-cache-export
+          cache-from: type=gha,scope=server-debug-image
           cache-to: type=gha,mode=max,scope=server-debug-image
+
+      - name: Report incomplete server debug image cache export
+        if: steps.debug-cache-export.outcome != 'success'
+        env:
+          CACHE_EXPORT_OUTCOME: ${{ steps.debug-cache-export.outcome }}
+        run: |
+          echo "::warning::Optional server debug image cache export did not complete (outcome: $CACHE_EXPORT_OUTCOME); continuing with smoke checks of the newly loaded image."
 
       - name: Verify native modules load in the built image
         run: |
