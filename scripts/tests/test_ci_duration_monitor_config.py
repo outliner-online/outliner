@@ -29,7 +29,9 @@ class RepositoryConfigTest(unittest.TestCase):
     def test_reusable_ci_jobs_and_browser_families_remain_distinct(self):
         workflow = ".github/workflows/ci.yml"
         for job, expected in [
-            ("unit-test / unit-test", ["unit-tests"]),
+            ("unit-test / unit shard 1 of 2", ["unit-tests"]),
+            ("unit-test / unit shard 2 of 2", ["unit-tests"]),
+            ("unit-test / unit-test", []),
             ("server-test / server-test", ["server-tests"]),
             ("server-test / project-directory-test", ["project-directory-tests"]),
             ("e2e-test / e2e-test (new-2-1)", ["e2e-chromium"]),
@@ -43,6 +45,8 @@ class RepositoryConfigTest(unittest.TestCase):
             with self.subTest(job=job):
                 self.assertEqual(self.family_keys(workflow, job), expected)
         self.assertEqual(self.family_keys(".github/workflows/ci-test-e2e.yml", "e2e-test (basic)"), ["e2e-chromium"])
+        self.assertEqual(self.family_keys(".github/workflows/ci-test-unit.yml", "unit shard 1 of 2"), ["unit-tests"])
+        self.assertEqual(self.family_keys(".github/workflows/ci-test-unit.yml", "unit-test"), [])
 
     def test_build_named_test_image_is_not_a_test_command(self):
         workflow = next(item for item in self.workflows if item["path"].endswith("/ci-test-container-build.yml"))

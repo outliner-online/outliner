@@ -6,8 +6,8 @@
                 {
                     "key": "unit-tests",
                     "name": "Unit tests",
-                    "job_pattern": "^(?:unit-test / )?unit-test$",
-                    "test_step_pattern": "^Run unit tests$",
+                    "job_pattern": "^(?:unit-test / )?unit shard [12] of 2$",
+                    "test_step_pattern": "^Run unit test shard$",
                     "source_paths": [
                         ".github/workflows/ci-test-unit.yml",
                         "client/package.json",
@@ -114,8 +114,8 @@
                 {
                     "key": "unit-tests",
                     "name": "Unit tests",
-                    "job_pattern": "^(?:unit-test / )?unit-test$",
-                    "test_step_pattern": "^Run unit tests$",
+                    "job_pattern": "^(?:unit-test / )?unit shard [12] of 2$",
+                    "test_step_pattern": "^Run unit test shard$",
                     "source_paths": [
                         ".github/workflows/ci-test-unit.yml",
                         "client/package.json",
