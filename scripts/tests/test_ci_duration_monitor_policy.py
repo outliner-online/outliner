@@ -36,16 +36,14 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(len(self.github.issues), 1)
         self.assertEqual(self.report()['admission'][0]['classification'], 'qualifies-new')
 
-    def test_owner_intervals_under_separated_contract_qualify_before_existing_duplicates(self):
+    def test_historical_owner_intervals_are_not_relabelled_as_current_shards(self):
         workflows = self.repository_sources()
         workflow = next(w for w in workflows if w.path.endswith('/ci.yml'))
         records = json.loads((ROOT / 'scripts/tests/fixtures/ci-duration/owner-test-steps.json').read_text())
         self.github.runs, self.github.jobs = [], {}
-        # These exact API intervals are applied to the reviewed current separated
-        # execution contract. Historical server wrapper timing is not retroactively
-        # certified as pure test time: live provenance still requires that contract.
-        # The historical new-4 execution is now an aggregate check; retain that
-        # sample as diagnostic rather than treating the aggregate as a test shard.
+        # These historical API intervals stay bound to their original execution
+        # contracts. The old unit aggregate, server wrapper, and new-4 aggregate
+        # are diagnostic rather than being relabelled as current native shards.
         for row in records:
             run = copy.deepcopy(row['run'])
             run.update(repository={'full_name':REPOSITORY}, head_repository={'full_name':REPOSITORY})
@@ -60,29 +58,75 @@ class PolicyTests(unittest.TestCase):
         admitted = {a['family']: a for a in report['admission'] if a['qualifying_job_ids']}
         # The fixture predates the sharded server entrypoint. Its old server and
         # aggregate E2E evidence must not be certified against the new workflow.
-        self.assertEqual(set(admitted), {'unit-tests'})
-        self.assertEqual(report['admission_summary']['qualifying_candidates'],1)
-        self.assertEqual(report['admission_summary']['qualifying_families_new'],1)
+        self.assertEqual(set(admitted), set())
+        self.assertEqual(report['admission_summary']['qualifying_candidates'],0)
+        self.assertEqual(report['admission_summary']['qualifying_families_new'],0)
         measured = {s['job_id']:s['qualifying_test_step_seconds'] for o in report['observations'] for s in o['samples'] if s['diagnostic_reason'] is None}
-        self.assertEqual(measured, {136731411619:721})
-        observations = [o for o in monitor.collect(self.github,(workflow,),NOW-timedelta(days=2),monitor.CurrentSource(self.github,monitor._call,REPOSITORY))[0] if o.samples]
-        for row in records:
-            observation = next(o for o in observations if o.family.key==row['family'])
-            sample = next(s for s in observation.samples if s.job_id==row['job']['id'])
-            key = monitor._key(REPOSITORY,observation)
-            body = key+'\n\nOwner-reviewed Objective and Requirements stay exactly as queued.\n'+sample.marker
-            self.github.issues.append({'number':row['existing_issue'],'state':'open','closed_at':None,'body':body,'labels':[{'name':monitor.MANAGED_LABEL},{'name':monitor.READY_LABEL}]})
-            self.github.comments[row['existing_issue']] = [{'body':key}]
-        original_bodies = [i['body'] for i in self.github.issues]
-        self.github.calls.clear()
-        for _ in range(2):
-            with patch.object(monitor,'logger'):
-                report=monitor.run_monitor(self.github,(workflow,),REPOSITORY,'ignored',now=now,lookback_hours=48,publish=True)
-            self.assertEqual({a['classification'] for a in report['admission'] if a['qualifying_job_ids']},{'qualifies-existing'})
-            self.assertEqual({a['action'] for a in report['actions']},{'unchanged'})
+        self.assertEqual(measured, {})
         self.assertEqual(self.github.mutations,[])
-        self.assertEqual([i['body'] for i in self.github.issues],original_bodies)
         self.assertFalse(any('/logs' in path or '/artifacts' in path for _,path,_ in self.github.calls))
+
+    def test_native_unit_shards_cover_both_entries_and_dry_run_existing_reconciliation(self):
+        workflows = self.repository_sources()
+
+        def step(name, start, end):
+            return {'name':name, 'status':'completed', 'conclusion':'success',
+                    'started_at':stamp(start), 'completed_at':stamp(end)}
+
+        for workflow_path, prefix in [
+            ('.github/workflows/ci.yml', 'unit-test / '),
+            ('.github/workflows/ci-test-unit.yml', ''),
+        ]:
+            with self.subTest(workflow=workflow_path):
+                workflow = next(w for w in workflows if w.path == workflow_path)
+                run = copy.deepcopy(GitHub().runs[0])
+                run.update(path=workflow_path, head_sha='b' * 40,
+                           repository={'full_name':REPOSITORY}, head_repository={'full_name':REPOSITORY})
+                qualifying = job(101, 1350, name=f'{prefix}unit shard 1 of 2')
+                qualifying['steps'] = [step('Setup Test Environment', -1350, -700),
+                                       step('Run unit test shard', -700, 0)]
+                below = job(102, 1249, name=f'{prefix}unit shard 2 of 2')
+                below['steps'] = [step('Setup Test Environment', -1249, -599),
+                                  step('Run unit test shard', -599, 0)]
+                baseline = job(103, 900, name=f'{prefix}unit coverage baseline')
+                baseline['steps'] = [step('Run native unit coverage baseline', -900, 0)]
+                aggregate = job(104, 900, name=f'{prefix}unit-test')
+                aggregate['steps'] = [step('Verify complete selection, merge coverage, and run base tests', -900, 0)]
+                self.github.runs = [run]
+                self.github.jobs = {(10, 1): [qualifying, below, baseline, aggregate]}
+                self.github.issues, self.github.comments, self.github.calls = [], {}, []
+
+                source = monitor.CurrentSource(self.github, monitor._call, REPOSITORY)
+                observations, _ = monitor.collect(self.github, (workflow,), NOW - timedelta(hours=1), source)
+                unit = next(o for o in observations if o.family.key == 'unit-tests')
+                samples = {sample.job_id: sample for sample in unit.samples}
+                self.assertEqual(samples[101].qualifying_test_step_seconds, 700)
+                self.assertEqual(samples[102].diagnostic_reason, 'separated test execution is below 600 seconds')
+                self.assertNotIn(103, samples)
+                self.assertNotIn(104, samples)
+
+                key = monitor._key(REPOSITORY, unit)
+                body = key + '\n\nOwner-reviewed Objective and Requirements stay exactly as queued.\n' + samples[101].marker
+                self.github.issues = [{'number':6058, 'state':'open', 'closed_at':None, 'body':body,
+                                       'labels':[{'name':monitor.MANAGED_LABEL},{'name':monitor.READY_LABEL}]}]
+                self.github.comments = {6058:[{'body':key}]}
+                self.github.calls.clear()
+                with tempfile.TemporaryDirectory() as directory, \
+                     patch.dict('os.environ', {'GITHUB_TOKEN':'test-only-token'}), \
+                     patch.object(monitor, 'logger'):
+                    result = monitor.main([
+                        '--repository', REPOSITORY,
+                        '--config', str(ROOT / '.github/ci-duration-monitor.json'),
+                        '--output-dir', directory,
+                        '--source-ref', 'b' * 40,
+                        '--lookback-hours', '1',
+                    ], client_factory=lambda _token, _repository:self.github, now=NOW)
+                    report = json.loads((Path(directory) / 'report.json').read_text())
+                self.assertEqual(result, 0)
+                admission = next(item for item in report['admission'] if item['family'] == 'unit-tests')
+                self.assertEqual(admission['classification'], 'qualifies-existing')
+                self.assertEqual(report['actions'][0]['action'], 'unchanged')
+                self.assertEqual(self.github.mutations, [])
 
     def test_old_mixed_server_boundary_is_not_retroactively_certified(self):
         workflows=self.repository_sources();workflow=next(w for w in workflows if w.path.endswith('/ci.yml'))
